@@ -1,0 +1,1834 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Proxy Pool Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+      :root {
+        --bg: #f5f8f1;
+        --panel: #ffffff;
+        --ink: #102a21;
+        --accent: #0f766e;
+        --accent-2: #15803d;
+        --muted: #5b6f68;
+      }
+      body {
+        font-family: "Space Grotesk", sans-serif;
+        color: var(--ink);
+        background: radial-gradient(circle at 20% 0%, #d9f99d 0%, transparent 40%), radial-gradient(circle at 80% 10%, #99f6e4 0%, transparent 42%), var(--bg);
+      }
+      .glass {
+        background: color-mix(in oklab, var(--panel) 88%, white);
+        border: 1px solid rgba(16, 42, 33, 0.08);
+        box-shadow: 0 12px 32px rgba(16, 42, 33, 0.08);
+      }
+      .pulse-in {
+        animation: rise 0.5s ease both;
+      }
+      @keyframes rise {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app" class="min-h-screen">
+      <main class="mx-auto max-w-7xl px-4 py-8 md:px-8">
+        <header class="glass pulse-in rounded-2xl p-6">
+          <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p class="text-sm tracking-widest text-teal-700">PROXY OBSERVATORY</p>
+              <h1 class="mt-2 text-3xl font-bold">高性能代理池控制台</h1>
+              <p class="mt-2 text-sm text-slate-600">Collector + Tester + Subscription Export</p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button @click="onOpenImportFiles" :disabled="isActionRunning('importFiles')" class="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('importFiles', '导入节点文件', '导入中...') }}</button>
+              <button @click="onRunTest" :disabled="isActionRunning('runTest')" class="rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('runTest', '立即测速', '测速中...') }}</button>
+              <button @click="onRunUnlockCheck" :disabled="isActionRunning('runUnlockCheck')" class="rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('runUnlockCheck', '检测ChatGPT解锁', '检测中...') }}</button>
+              <button @click="onEnrichGeo" :disabled="isActionRunning('enrichGeo')" class="rounded-xl bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('enrichGeo', '补全IP位置', '补全中...') }}</button>
+              <button @click="onRunIpPurity" :disabled="isActionRunning('runIpPurity')" class="rounded-xl bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('runIpPurity', '检测IP纯净度', '检测中...') }}</button>
+              <button @click="onDeleteUnavailable" :disabled="isActionRunning('deleteUnavailable')" class="rounded-xl bg-rose-700 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('deleteUnavailable', '删除不可用节点', '删除中...') }}</button>
+              <button @click="onCopySubscription" :disabled="isActionRunning('copySubscription')" class="rounded-xl border border-teal-700 px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('copySubscription', '复制订阅', '复制中...') }}</button>
+              <a href="/api/subscription?only_available=true" target="_blank" class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold hover:bg-slate-50">导出链接</a>
+            </div>
+          </div>
+          <div class="mt-3 grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-12">
+            <div class="md:col-span-7">
+              <p class="text-xs font-semibold text-slate-700">测速失败回退前置代理(序号)</p>
+              <input
+                v-model.trim="testFallback.front_proxy_refs"
+                list="proxy-key-options"
+                type="text"
+                placeholder="示例: #1,#8,#12"
+                class="mt-1 w-full rounded border border-slate-300 px-2 py-1 font-mono text-xs"
+              />
+            </div>
+            <div class="md:col-span-3">
+              <p class="text-xs font-semibold text-slate-700">最多尝试数量</p>
+              <input
+                v-model.number="testFallback.max_attempts"
+                type="number"
+                min="0"
+                max="100"
+                class="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs"
+              />
+            </div>
+            <div class="flex items-end md:col-span-2">
+              <button @click="onSaveTestFallback" :disabled="isActionRunning('saveTestFallback')" class="w-full rounded border border-cyan-300 px-2 py-2 text-xs text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveTestFallback', '保存测速回退配置', '保存中...') }}</button>
+            </div>
+            <div class="md:col-span-2">
+              <p class="text-xs font-semibold text-slate-700">测速并发</p>
+              <input v-model.number="taskConcurrency.tester" type="number" min="1" max="500" class="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs" />
+            </div>
+            <div class="md:col-span-2">
+              <p class="text-xs font-semibold text-slate-700">解锁并发</p>
+              <input v-model.number="taskConcurrency.openai" type="number" min="1" max="500" class="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs" />
+            </div>
+            <div class="md:col-span-2">
+              <p class="text-xs font-semibold text-slate-700">Geo并发</p>
+              <input v-model.number="taskConcurrency.geoip" type="number" min="1" max="500" class="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs" />
+            </div>
+            <div class="md:col-span-2">
+              <p class="text-xs font-semibold text-slate-700">纯净度并发</p>
+              <input v-model.number="taskConcurrency.ip_purity" type="number" min="1" max="500" class="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs" />
+            </div>
+            <div class="flex items-end md:col-span-2">
+              <button @click="onSaveTaskConcurrency" :disabled="isActionRunning('saveTaskConcurrency')" class="w-full rounded border border-emerald-300 px-2 py-2 text-xs text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveTaskConcurrency', '保存并发设置', '保存中...') }}</button>
+            </div>
+            <p class="md:col-span-12 text-[11px] text-slate-500">直连失败时，会按序号顺序尝试这些前置代理做链式连通测试；成功会给节点标记“可连通前置”。</p>
+          </div>
+          <input
+            ref="fileInput"
+            type="file"
+            class="hidden"
+            multiple
+            accept=".txt,.yaml,.yml,.conf,.json,.log"
+            @change="onImportFilesSelected"
+          />
+          <p v-if="message" class="mt-4 text-sm" :class="messageError ? 'text-rose-700' : 'text-emerald-700'">{{ message }}</p>
+          <div v-if="taskState.active" class="mt-4 rounded-xl border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-900">
+            <div class="flex items-center justify-between">
+              <span>{{ taskState.label }}：{{ taskState.message }}</span>
+              <span>{{ taskState.completed }}/{{ taskState.total || '-' }}</span>
+            </div>
+            <div class="mt-2 h-2 w-full rounded bg-cyan-100">
+              <div class="h-2 rounded bg-cyan-600 transition-all duration-300" :style="{ width: (taskState.progress || 0) + '%' }"></div>
+            </div>
+            <div class="mt-2 text-xs">成功 {{ taskState.success }} / 失败 {{ taskState.failed }} / 进度 {{ taskState.progress }}%</div>
+          </div>
+        </header>
+
+        <section class="mt-6 grid gap-4 md:grid-cols-4">
+          <article class="glass pulse-in rounded-2xl p-5" v-for="card in statCards" :key="card.title">
+            <p class="text-xs uppercase tracking-widest text-slate-500">{{ card.title }}</p>
+            <p class="mt-2 text-3xl font-bold">{{ card.value }}</p>
+            <p class="mt-1 text-xs text-slate-500">{{ card.desc }}</p>
+          </article>
+        </section>
+
+        <section class="glass mt-6 rounded-2xl p-5 pulse-in">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-lg font-bold">订阅管理</h2>
+            <div class="flex flex-wrap gap-2">
+              <button @click="onRefreshAllSubscriptions" :disabled="isActionRunning('refreshAllSubscriptions')" class="rounded-lg border border-teal-700 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('refreshAllSubscriptions', '刷新全部启用订阅', '刷新中...') }}</button>
+              <button @click="onDeleteUnavailableSubscriptions" :disabled="isActionRunning('deleteUnavailableSubscriptions')" class="rounded-lg border border-rose-300 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('deleteUnavailableSubscriptions', '删除不可用订阅', '删除中...') }}</button>
+              <button @click="onLoadSubscriptions" :disabled="isActionRunning('loadSubscriptions')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('loadSubscriptions', '刷新列表', '刷新中...') }}</button>
+            </div>
+          </div>
+          <div class="grid gap-2 md:grid-cols-3">
+            <input v-model.trim="subscriptionForm.name" type="text" placeholder="订阅名称" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+            <input v-model.trim="subscriptionForm.url" type="text" placeholder="订阅链接 URL" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+            <button @click="onCreateSubscription" :disabled="isActionRunning('createSubscription')" class="rounded border border-cyan-700 px-3 py-2 text-sm font-semibold text-cyan-800 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('createSubscription', '保存订阅', '保存中...') }}</button>
+          </div>
+          <div class="mt-2 grid gap-2 md:grid-cols-4">
+            <input v-model.trim="subscriptionUpdateProxyRef" list="proxy-key-options" type="text" placeholder="全局更新代理序号(可选 如 #12)" class="rounded border border-slate-300 px-3 py-2 font-mono text-sm md:col-span-3" />
+            <button @click="onSaveSubscriptionUpdateProxy" :disabled="isActionRunning('saveSubUpdateProxy')" class="rounded border border-cyan-300 px-3 py-2 text-sm font-semibold text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveSubUpdateProxy', '保存全局更新代理', '保存中...') }}</button>
+          </div>
+          <p class="mt-2 text-xs text-slate-500">节点来源将自动标记为 `subscription#ID:名称|URL`，可在节点表来源列过滤。</p>
+          <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+            <div class="flex items-center gap-2">
+              <span>每页</span>
+              <select v-model.number="pagination.subscriptions.perPage" @change="onPaginationPageSizeChange('subscriptions')" class="rounded border border-slate-300 bg-white px-2 py-1">
+                <option v-for="n in pageSizeOptions" :key="'sub-size-' + n" :value="n">{{ n }}</option>
+              </select>
+            </div>
+            <div class="flex items-center gap-2">
+              <button @click="goPrevPage('subscriptions')" :disabled="!canPrevPage('subscriptions')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">上一页</button>
+              <span>{{ pageIndicator('subscriptions') }}</span>
+              <button @click="goNextPage('subscriptions')" :disabled="!canNextPage('subscriptions')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">下一页</button>
+            </div>
+          </div>
+          <div class="mt-3 overflow-x-auto">
+            <table class="min-w-full border-separate border-spacing-y-2 text-xs">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="px-2 py-2">ID</th>
+                  <th class="px-2 py-2">名称</th>
+                  <th class="px-2 py-2">链接</th>
+                  <th class="px-2 py-2">启用</th>
+                  <th class="px-2 py-2">上次状态</th>
+                  <th class="px-2 py-2">统计</th>
+                  <th class="px-2 py-2">上次刷新</th>
+                  <th class="px-2 py-2">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in paginatedSubscriptions" :key="item.id" class="bg-white/70">
+                  <td class="px-2 py-2 font-mono text-slate-600">{{ item.id }}</td>
+                  <td class="px-2 py-2">
+                    <input
+                      :value="item.name || ''"
+                      @change="onRenameSubscription(item, $event.target.value)"
+                      type="text"
+                      class="w-36 rounded border border-slate-300 px-2 py-1"
+                    />
+                  </td>
+                  <td class="px-2 py-2 font-mono text-slate-500">{{ shortSubscriptionUrl(item.url) }}</td>
+                  <td class="px-2 py-2">
+                    <button @click="onToggleSubscription(item)" :disabled="isActionRunning(`toggleSub-${item.id}`)" class="rounded border px-2 py-1" :class="item.enabled ? 'border-emerald-300 text-emerald-700 hover:bg-emerald-50' : 'border-slate-300 text-slate-600 hover:bg-slate-50'">
+                      {{ buttonLabel(`toggleSub-${item.id}`, item.enabled ? '已启用' : '已停用', '处理中...') }}
+                    </button>
+                  </td>
+                  <td class="px-2 py-2">
+                    <span class="rounded-full px-2 py-1 text-[11px] font-semibold" :class="item.last_status === 'success' ? 'bg-emerald-100 text-emerald-700' : (item.last_status === 'failed' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600')">
+                      {{ item.last_status || '-' }}
+                    </span>
+                    <div v-if="item.last_error" class="mt-1 text-[11px] text-rose-600">{{ item.last_error }}</div>
+                  </td>
+                  <td class="px-2 py-2 text-slate-600">
+                    parsed={{ item.last_parsed || 0 }},
+                    ins={{ item.last_inserted || 0 }},
+                    upd={{ item.last_updated || 0 }},
+                    dedup={{ item.last_deduped || 0 }},
+                    invalid={{ item.last_invalid || 0 }}
+                  </td>
+                  <td class="px-2 py-2 text-slate-500">{{ formatTime(item.last_fetched_at) }}</td>
+                  <td class="px-2 py-2">
+                    <div class="flex gap-1">
+                      <button @click="onRefreshSubscription(item.id)" :disabled="isActionRunning(`refreshSub-${item.id}`)" class="rounded border border-cyan-300 px-2 py-1 text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`refreshSub-${item.id}`, '刷新', '刷新中...') }}</button>
+                      <button @click="onDeleteSubscription(item.id)" :disabled="isActionRunning(`deleteSub-${item.id}`)" class="rounded border border-rose-300 px-2 py-1 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`deleteSub-${item.id}`, '删除', '删除中...') }}</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="glass mt-6 rounded-2xl p-5 pulse-in">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-lg font-bold">sing-box 后端</h2>
+            <div class="flex flex-wrap gap-2">
+              <button @click="onLoadBackendStatus" :disabled="isActionRunning('loadBackendStatus')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('loadBackendStatus', '刷新状态', '刷新中...') }}</button>
+              <button @click="onBackendStart" :disabled="isActionRunning('backendStart')" class="rounded-lg bg-teal-700 px-3 py-2 text-sm text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('backendStart', '启动', '启动中...') }}</button>
+              <button @click="onBackendStop" :disabled="isActionRunning('backendStop')" class="rounded-lg bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('backendStop', '停止', '停止中...') }}</button>
+              <button @click="onBackendRestart" :disabled="isActionRunning('backendRestart')" class="rounded-lg bg-green-700 px-3 py-2 text-sm text-white hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('backendRestart', '重启', '重启中...') }}</button>
+            </div>
+          </div>
+          <div class="mb-3 text-sm text-slate-600">
+            <span>后端: <b>{{ backendStatus.backend || '-' }}</b></span>
+            <span class="ml-3">运行: <b>{{ backendStatus.running ? 'YES' : 'NO' }}</b></span>
+            <span class="ml-3">PID: <b>{{ formatBackendPid(backendStatus.pid) }}</b></span>
+            <span class="ml-3">路由条数: <b>{{ backendStatus.routes_count || 0 }}</b></span>
+            <span class="ml-3">自动重启上限: <b>{{ backendStatus.auto_restart_max ?? 0 }}</b></span>
+            <span class="ml-3">已尝试: <b>{{ backendStatus.auto_restart_attempts ?? 0 }}</b></span>
+          </div>
+
+          <h3 class="mb-2 text-sm font-semibold text-slate-700">链式代理管理</h3>
+          <p class="mb-3 text-xs text-slate-500">链路顺序：前置代理 → 中间代理 → 落地代理。单跳时只填写落地代理。</p>
+          <p class="mb-3 text-xs text-slate-500">这里只使用节点序号配置链路，不展示 key。可输入 `12` 或 `#12`。</p>
+          <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p class="mb-2 text-xs font-semibold text-slate-700">默认代理(序号)</p>
+            <div class="grid gap-2 md:grid-cols-6">
+              <input v-model.trim="routeDefaults.front_proxy_key" list="proxy-key-options" type="text" placeholder="默认前置 如 #12" class="rounded border border-slate-300 px-2 py-1 font-mono text-xs md:col-span-1" />
+              <input v-model.trim="routeDefaults.middle_proxy_key" list="proxy-key-options" type="text" placeholder="默认中间 如 #15" class="rounded border border-slate-300 px-2 py-1 font-mono text-xs md:col-span-1" />
+              <input v-model.trim="routeDefaults.exit_proxy_key" list="proxy-key-options" type="text" placeholder="默认落地 如 #20" class="rounded border border-slate-300 px-2 py-1 font-mono text-xs md:col-span-1" />
+              <button @click="onApplyDefaultsToEmptyRoutes" :disabled="isActionRunning('applyDefaultsEmpty')" class="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60 md:col-span-1">{{ buttonLabel('applyDefaultsEmpty', '应用到空白行', '应用中...') }}</button>
+              <button @click="onApplyDefaultsToAllRoutes" :disabled="isActionRunning('applyDefaultsAll')" class="rounded border border-teal-300 px-2 py-1 text-xs text-teal-700 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60 md:col-span-1">{{ buttonLabel('applyDefaultsAll', '应用到全部行', '应用中...') }}</button>
+              <button @click="onClearRouteDefaults" :disabled="isActionRunning('clearRouteDefaults')" class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 md:col-span-1">{{ buttonLabel('clearRouteDefaults', '清空默认', '清空中...') }}</button>
+            </div>
+          </div>
+          <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p class="mb-2 text-xs font-semibold text-slate-700">按地区批量填充链路列</p>
+            <p class="mb-2 text-[11px] text-slate-500">会按当前序号顺序（已按延迟排序）填入同一 `国家:城市` 的代理，可填充到现有链路或直接生成新链路。</p>
+            <div class="grid gap-2 md:grid-cols-6">
+              <select v-model="routeGeoFill.geo_location" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2">
+                <option value="">选择地区(国家:城市)</option>
+                <option v-for="g in geoLocationOptions" :key="'route-geo-' + g" :value="g">{{ g }}</option>
+              </select>
+              <select v-model="routeGeoFill.target_column" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1">
+                <option value="front_proxy_key">前置代理列</option>
+                <option value="middle_proxy_key">中间代理列</option>
+                <option value="exit_proxy_key">后置(落地)列</option>
+              </select>
+              <button @click="onFillRouteColumnByGeo" :disabled="isActionRunning('fillRouteByGeo')" class="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60 md:col-span-1">{{ buttonLabel('fillRouteByGeo', '填入现有链路', '填充中...') }}</button>
+              <button @click="onGenerateRoutesByGeo" :disabled="isActionRunning('genRouteByGeo')" class="rounded border border-teal-300 px-2 py-1 text-xs text-teal-700 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60 md:col-span-2">{{ buttonLabel('genRouteByGeo', '按地区生成新链路', '生成中...') }}</button>
+            </div>
+          </div>
+          <datalist id="proxy-key-options">
+            <option
+              v-for="item in allProxies"
+              :key="item.normalized_key"
+              :value="'#' + getSerial(item.normalized_key)"
+            >
+              #{{ getSerial(item.normalized_key) }} {{ item.protocol }} {{ item.host }}:{{ item.port }}
+            </option>
+          </datalist>
+          <div class="overflow-x-auto">
+            <table class="min-w-full border-separate border-spacing-y-2 text-xs">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="px-2 py-2">入站端口</th>
+                  <th class="px-2 py-2">入站类型</th>
+                  <th class="px-2 py-2">监听地址</th>
+                  <th class="px-2 py-2">前置代理(序号)</th>
+                  <th class="px-2 py-2">中间代理(序号)</th>
+                  <th class="px-2 py-2">落地代理(序号)</th>
+                  <th class="px-2 py-2">延迟检测</th>
+                  <th class="px-2 py-2">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in paginatedRouteEntries" :key="row.idx" class="bg-white/70">
+                  <td class="px-2 py-2">
+                    <input v-model.number="row.item.inbound_port" type="number" min="1" max="65535" class="w-24 rounded border border-slate-300 px-2 py-1" />
+                  </td>
+                  <td class="px-2 py-2">
+                    <select v-model="row.item.inbound_type" class="rounded border border-slate-300 px-2 py-1">
+                      <option value="http">http</option>
+                      <option value="socks">socks</option>
+                    </select>
+                  </td>
+                  <td class="px-2 py-2">
+                    <input v-model="row.item.listen" type="text" class="w-32 rounded border border-slate-300 px-2 py-1" />
+                  </td>
+                  <td class="px-2 py-2">
+                    <input v-model.trim="row.item.front_proxy_key" list="proxy-key-options" type="text" placeholder="如 #12" class="w-52 rounded border border-slate-300 px-2 py-1 font-mono" />
+                  </td>
+                  <td class="px-2 py-2">
+                    <input v-model.trim="row.item.middle_proxy_key" list="proxy-key-options" type="text" placeholder="如 #15" class="w-52 rounded border border-slate-300 px-2 py-1 font-mono" />
+                  </td>
+                  <td class="px-2 py-2">
+                    <input v-model.trim="row.item.exit_proxy_key" list="proxy-key-options" type="text" placeholder="如 #20" class="w-52 rounded border border-slate-300 px-2 py-1 font-mono" />
+                  </td>
+                  <td class="px-2 py-2 text-slate-600">{{ formatRouteLatency(row.idx) }}</td>
+                  <td class="px-2 py-2">
+                    <button @click="onRemoveRouteEntry(row.idx)" :disabled="isActionRunning(`removeRouteEntry-${row.idx}`)" class="rounded border border-rose-300 px-2 py-1 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`removeRouteEntry-${row.idx}`, '删除', '删除中...') }}</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+            <div class="flex items-center gap-2">
+              <span>每页</span>
+              <select v-model.number="pagination.routes.perPage" @change="onPaginationPageSizeChange('routes')" class="rounded border border-slate-300 bg-white px-2 py-1">
+                <option v-for="n in pageSizeOptions" :key="'route-size-' + n" :value="n">{{ n }}</option>
+              </select>
+            </div>
+            <div class="flex items-center gap-2">
+              <button @click="goPrevPage('routes')" :disabled="!canPrevPage('routes')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">上一页</button>
+              <span>{{ pageIndicator('routes') }}</span>
+              <button @click="goNextPage('routes')" :disabled="!canNextPage('routes')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">下一页</button>
+            </div>
+          </div>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button @click="onAddRouteEntry" :disabled="isActionRunning('addRouteEntry')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('addRouteEntry', '新增链路', '处理中...') }}</button>
+            <button @click="onSaveRouteEntries" :disabled="isActionRunning('saveRouteEntries')" class="rounded-lg border border-teal-700 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveRouteEntries', '保存链路并热重启', '保存中...') }}</button>
+            <button @click="onCheckRouteLatency" :disabled="isActionRunning('checkRouteLatency')" class="rounded-lg border border-cyan-700 px-3 py-2 text-sm font-semibold text-cyan-800 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('checkRouteLatency', '检测链路延迟', '检测中...') }}</button>
+          </div>
+
+          <details class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <summary class="cursor-pointer text-xs font-semibold text-slate-700">高级模式：JSON 直接编辑</summary>
+            <p class="mt-2 text-xs text-slate-500">格式支持旧版 `proxy_key` 与新版 `front/middle/exit_proxy_key`。</p>
+            <textarea v-model="routesJson" class="mt-2 h-36 w-full rounded-lg border border-slate-300 bg-white p-3 font-mono text-xs"></textarea>
+            <div class="mt-2 flex gap-2">
+              <button @click="onApplyRoutesJsonToEntries" :disabled="isActionRunning('applyRoutesJsonToEntries')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('applyRoutesJsonToEntries', '应用JSON到表单', '应用中...') }}</button>
+              <button @click="onSaveRoutes" :disabled="isActionRunning('saveRoutes')" class="rounded-lg border border-teal-700 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveRoutes', '按JSON保存并热重启', '保存中...') }}</button>
+            </div>
+          </details>
+
+          <h3 class="mt-4 mb-2 text-sm font-semibold text-slate-700">进程记录</h3>
+          <div class="overflow-x-auto">
+            <table class="min-w-full border-separate border-spacing-y-2 text-xs">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="px-2 py-2">时间</th>
+                  <th class="px-2 py-2">动作</th>
+                  <th class="px-2 py-2">结果</th>
+                  <th class="px-2 py-2">PID</th>
+                  <th class="px-2 py-2">配置文件</th>
+                  <th class="px-2 py-2">详情</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in paginatedBackendEvents" :key="item.id" class="bg-white/70">
+                  <td class="px-2 py-2 text-slate-500">{{ formatTime(item.created_at) }}</td>
+                  <td class="px-2 py-2 font-semibold">{{ item.action || '-' }}</td>
+                  <td class="px-2 py-2 text-slate-600">{{ item.result || '-' }}</td>
+                  <td class="px-2 py-2 font-mono text-slate-700">{{ formatBackendPid(item.pid) }}</td>
+                  <td class="px-2 py-2 font-mono text-slate-500">{{ shortPath(item.config_file) }}</td>
+                  <td class="px-2 py-2 text-slate-500">{{ item.detail || '-' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+            <div class="flex items-center gap-2">
+              <span>每页</span>
+              <select v-model.number="pagination.backendEvents.perPage" @change="onPaginationPageSizeChange('backendEvents')" class="rounded border border-slate-300 bg-white px-2 py-1">
+                <option v-for="n in pageSizeOptions" :key="'event-size-' + n" :value="n">{{ n }}</option>
+              </select>
+            </div>
+            <div class="flex items-center gap-2">
+              <button @click="goPrevPage('backendEvents')" :disabled="!canPrevPage('backendEvents')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">上一页</button>
+              <span>{{ pageIndicator('backendEvents') }}</span>
+              <button @click="goNextPage('backendEvents')" :disabled="!canNextPage('backendEvents')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">下一页</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="glass mt-6 rounded-2xl p-5 pulse-in">
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h2 class="text-lg font-bold">代理节点</h2>
+            <div class="flex items-center gap-2">
+              <select v-model="filterProtocol" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <option value="">全部协议</option>
+                <option v-for="p in protocolOptions" :key="p" :value="p">{{ p }}</option>
+              </select>
+              <select v-model="filterAvailable" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <option value="">全部状态</option>
+                <option value="true">可用</option>
+                <option value="false">不可用</option>
+              </select>
+              <select v-model="filterGeo" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <option value="">IP位置: 全部</option>
+                <option value="has">IP位置: 已补全</option>
+                <option value="none">IP位置: 未补全</option>
+              </select>
+              <select v-model="filterGeoLocation" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <option value="">国家:城市 全部</option>
+                <option v-for="g in geoLocationOptions" :key="g" :value="g">{{ g }}</option>
+              </select>
+              <select v-model="filterOpenai" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <option value="">ChatGPT: 全部</option>
+                <option value="unlocked">ChatGPT: 已解锁</option>
+                <option value="blocked">ChatGPT: 未解锁</option>
+                <option value="unchecked">ChatGPT: 未检测</option>
+              </select>
+              <select v-model="filterFallbackFront" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <option value="">可连通前置: 全部</option>
+                <option value="has">可连通前置: 有标记</option>
+                <option value="none">可连通前置: 无标记</option>
+              </select>
+              <input
+                v-model.trim="filterSource"
+                type="text"
+                placeholder="来源过滤(关键字)"
+                class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              />
+              <button @click="onLoadDataClick" :disabled="isActionRunning('loadData')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('loadData', '刷新', '刷新中...') }}</button>
+            </div>
+          </div>
+          <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div class="mb-2 flex items-center justify-between">
+              <p class="text-xs font-semibold text-slate-700">列管理（可隐藏/拖动排序）</p>
+              <button @click="resetProxyColumns" class="rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100">重置默认</button>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <label
+                v-for="(col, idx) in proxyColumnsOrdered"
+                :key="'mgr-' + col.key"
+                class="flex cursor-move items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                draggable="true"
+                @dragstart="onProxyColumnDragStart(idx)"
+                @dragover.prevent
+                @drop="onProxyColumnDrop(idx)"
+              >
+                <span class="text-slate-400">::</span>
+                <input type="checkbox" v-model="proxyColumnConfigs[col.key].visible" @change="persistProxyColumns" />
+                <span>{{ col.label }}</span>
+              </label>
+            </div>
+          </div>
+          <div class="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+            <div class="flex items-center gap-2">
+              <span>每页</span>
+              <select v-model.number="pagination.proxies.perPage" @change="onPaginationPageSizeChange('proxies')" class="rounded border border-slate-300 bg-white px-2 py-1">
+                <option v-for="n in pageSizeOptions" :key="'proxy-size-' + n" :value="n">{{ n }}</option>
+              </select>
+            </div>
+            <div class="flex items-center gap-2">
+              <button @click="goPrevPage('proxies')" :disabled="!canPrevPage('proxies')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">上一页</button>
+              <span>{{ pageIndicator('proxies') }}</span>
+              <button @click="goNextPage('proxies')" :disabled="!canNextPage('proxies')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">下一页</button>
+            </div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full border-separate border-spacing-y-2 text-sm">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th v-for="col in visibleProxyColumns" :key="'th-' + col.key" class="px-3 py-2">{{ col.label }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in paginatedProxies" :key="item.normalized_key" class="rounded-xl bg-white/70">
+                  <td v-for="col in visibleProxyColumns" :key="'td-' + item.normalized_key + '-' + col.key" class="px-3 py-2">
+                    <template v-if="col.key === 'serial'">
+                      <span class="font-mono text-slate-500">#{{ getSerial(item.normalized_key) }}</span>
+                    </template>
+                    <template v-else-if="col.key === 'protocol'">
+                      <span class="font-semibold">{{ item.protocol }}</span>
+                    </template>
+                    <template v-else-if="col.key === 'address'">
+                      <span>{{ item.host }}:{{ item.port }}</span>
+                    </template>
+                    <template v-else-if="col.key === 'latency'">
+                      <span>{{ item.latency_ms ? item.latency_ms + ' ms' : '-' }}</span>
+                    </template>
+                    <template v-else-if="col.key === 'status'">
+                      <span class="rounded-full px-2 py-1 text-xs font-semibold"
+                        :class="item.available ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'">
+                        {{ item.available ? 'UP' : 'DOWN' }}
+                      </span>
+                    </template>
+                    <template v-else-if="col.key === 'checked_at'">
+                      <span class="text-slate-500">{{ formatTime(item.last_checked_at) }}</span>
+                    </template>
+                    <template v-else-if="col.key === 'geo'">
+                      <span class="text-slate-500">{{ formatGeo(item) }}</span>
+                    </template>
+                    <template v-else-if="col.key === 'purity'">
+                      <span class="text-slate-500">{{ formatIpPurity(item) }}</span>
+                    </template>
+                    <template v-else-if="col.key === 'unlock'">
+                      <span class="text-slate-500">{{ formatUnlock(item) }}</span>
+                    </template>
+                    <template v-else-if="col.key === 'fallback_front'">
+                      <span class="text-slate-500">{{ formatFallbackFront(item) }}</span>
+                    </template>
+                    <template v-else-if="col.key === 'source'">
+                      <span class="text-slate-500">{{ shortSource(item.source) }}</span>
+                    </template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const { createApp } = Vue;
+      createApp({
+        data() {
+          return {
+            stats: {},
+            proxies: [],
+            allProxies: [],
+            proxySerialMap: {},
+            message: "",
+            messageError: false,
+            filterProtocol: "",
+            filterAvailable: "",
+            filterGeo: "",
+            filterGeoLocation: "",
+            filterOpenai: "",
+            filterFallbackFront: "",
+            filterSource: "",
+            loading: false,
+            backendStatus: {},
+            backendEvents: [],
+            buttonState: {},
+            pageSizeOptions: [10, 50, 100],
+            pagination: {
+              subscriptions: { page: 1, perPage: 10 },
+              routes: { page: 1, perPage: 10 },
+              backendEvents: { page: 1, perPage: 10 },
+              proxies: { page: 1, perPage: 50 },
+            },
+            routesJson: "[]",
+            routeEntries: [],
+            routeDefaults: {
+              front_proxy_key: "",
+              middle_proxy_key: "",
+              exit_proxy_key: "",
+            },
+            routeGeoFill: {
+              geo_location: "",
+              target_column: "exit_proxy_key",
+            },
+            routeLatencyMap: {},
+            testFallback: {
+              front_proxy_refs: "",
+              max_attempts: 3,
+            },
+            taskConcurrency: {
+              tester: 60,
+              openai: 30,
+              geoip: 30,
+              ip_purity: 30,
+            },
+            proxyColumnConfigs: {
+              serial: { label: "序号", visible: true },
+              protocol: { label: "协议", visible: true },
+              address: { label: "地址", visible: true },
+              latency: { label: "延迟", visible: true },
+              status: { label: "状态", visible: true },
+              checked_at: { label: "最后检测", visible: true },
+              geo: { label: "IP位置", visible: true },
+              purity: { label: "IP纯净度", visible: true },
+              unlock: { label: "ChatGPT解锁", visible: true },
+              fallback_front: { label: "可连通前置", visible: true },
+              source: { label: "来源", visible: true },
+            },
+            proxyColumnOrder: ["serial", "protocol", "address", "latency", "status", "checked_at", "geo", "purity", "unlock", "fallback_front", "source"],
+            proxyColumnDragIndex: -1,
+            subscriptions: [],
+            subscriptionForm: {
+              name: "",
+              url: "",
+            },
+            subscriptionUpdateProxyRef: "",
+            taskState: {
+              active: false,
+              taskId: "",
+              label: "",
+              message: "",
+              total: 0,
+              completed: 0,
+              success: 0,
+              failed: 0,
+              progress: 0,
+            },
+          };
+        },
+        computed: {
+          protocolOptions() {
+            return Object.keys(this.stats.by_protocol || {});
+          },
+          geoLocationOptions() {
+            const uniq = new Set();
+            (this.allProxies || []).forEach((item) => {
+              const country = String(item.country || "").trim();
+              const city = String(item.city || "").trim();
+              if (!country && !city) return;
+              uniq.add(`${country || "-"}:${city || "-"}`);
+            });
+            return Array.from(uniq).sort((a, b) => a.localeCompare(b, "zh-CN"));
+          },
+          statCards() {
+            return [
+              { title: "Total", value: this.stats.total ?? 0, desc: "总节点" },
+              { title: "Available", value: this.stats.available ?? 0, desc: "可用节点" },
+              { title: "Rate", value: (this.stats.availability_rate ?? 0) + "%", desc: "可用率" },
+              { title: "Avg RTT", value: this.stats.avg_latency_ms ? this.stats.avg_latency_ms + " ms" : "-", desc: "平均延迟" },
+            ];
+          },
+          proxyColumnsOrdered() {
+            return (this.proxyColumnOrder || [])
+              .filter((key) => this.proxyColumnConfigs[key])
+              .map((key) => ({ key, label: this.proxyColumnConfigs[key].label }));
+          },
+          visibleProxyColumns() {
+            return this.proxyColumnsOrdered.filter((item) => this.proxyColumnConfigs[item.key]?.visible !== false);
+          },
+          paginatedSubscriptions() {
+            return this.paginateItems(this.subscriptions || [], "subscriptions");
+          },
+          paginatedRouteEntries() {
+            const list = this.routeEntries || [];
+            const sliced = this.paginateItems(list, "routes");
+            const start = this.getPageStartIndex("routes");
+            return sliced.map((item, idx) => ({ item, idx: start + idx }));
+          },
+          paginatedBackendEvents() {
+            return this.paginateItems(this.backendEvents || [], "backendEvents");
+          },
+          paginatedProxies() {
+            return this.paginateItems(this.proxies || [], "proxies");
+          },
+        },
+        methods: {
+          isActionRunning(key) {
+            return !!this.buttonState[String(key || "")];
+          },
+          buttonLabel(key, idleText, runningText = "执行中...") {
+            return this.isActionRunning(key) ? runningText : idleText;
+          },
+          async runWithButtonState(key, fn, minVisibleMs = 220) {
+            const stateKey = String(key || "");
+            if (!stateKey) {
+              return await fn();
+            }
+            if (this.buttonState[stateKey]) {
+              return;
+            }
+            this.buttonState[stateKey] = true;
+            const started = Date.now();
+            try {
+              return await fn();
+            } finally {
+              const left = Number(minVisibleMs || 0) - (Date.now() - started);
+              if (left > 0) {
+                await new Promise((resolve) => setTimeout(resolve, left));
+              }
+              this.buttonState[stateKey] = false;
+            }
+          },
+          onOpenImportFiles() { this.openImportFiles(); },
+          async onRunTest() { await this.runWithButtonState("runTest", async () => this.runTest()); },
+          async onSaveTestFallback() { await this.runWithButtonState("saveTestFallback", async () => this.saveTestFallback()); },
+          async onSaveTaskConcurrency() { await this.runWithButtonState("saveTaskConcurrency", async () => this.saveTaskConcurrency()); },
+          async onRunUnlockCheck() { await this.runWithButtonState("runUnlockCheck", async () => this.runUnlockCheck()); },
+          async onEnrichGeo() { await this.runWithButtonState("enrichGeo", async () => this.enrichGeo()); },
+          async onRunIpPurity() { await this.runWithButtonState("runIpPurity", async () => this.runIpPurity()); },
+          async onDeleteUnavailable() { await this.runWithButtonState("deleteUnavailable", async () => this.deleteUnavailable()); },
+          async onCopySubscription() { await this.runWithButtonState("copySubscription", async () => this.copySubscription()); },
+          async onLoadSubscriptions() { await this.runWithButtonState("loadSubscriptions", async () => this.loadSubscriptions()); },
+          async onCreateSubscription() { await this.runWithButtonState("createSubscription", async () => this.createSubscription()); },
+          async onSaveSubscriptionUpdateProxy() { await this.runWithButtonState("saveSubUpdateProxy", async () => this.saveSubscriptionUpdateProxy()); },
+          async onRefreshAllSubscriptions() { await this.runWithButtonState("refreshAllSubscriptions", async () => this.refreshAllSubscriptions()); },
+          async onDeleteUnavailableSubscriptions() { await this.runWithButtonState("deleteUnavailableSubscriptions", async () => this.deleteUnavailableSubscriptions()); },
+          async onLoadBackendStatus() { await this.runWithButtonState("loadBackendStatus", async () => this.loadBackendStatus()); },
+          async onBackendStart() { await this.runWithButtonState("backendStart", async () => this.backendStart()); },
+          async onBackendStop() { await this.runWithButtonState("backendStop", async () => this.backendStop()); },
+          async onBackendRestart() { await this.runWithButtonState("backendRestart", async () => this.backendRestart()); },
+          async onAddRouteEntry() { await this.runWithButtonState("addRouteEntry", async () => this.addRouteEntry()); },
+          async onRemoveRouteEntry(idx) { await this.runWithButtonState(`removeRouteEntry-${idx}`, async () => this.removeRouteEntry(idx)); },
+          async onApplyDefaultsToEmptyRoutes() { await this.runWithButtonState("applyDefaultsEmpty", async () => this.applyDefaultsToRoutes(false)); },
+          async onApplyDefaultsToAllRoutes() { await this.runWithButtonState("applyDefaultsAll", async () => this.applyDefaultsToRoutes(true)); },
+          async onClearRouteDefaults() { await this.runWithButtonState("clearRouteDefaults", async () => this.clearRouteDefaults()); },
+          async onFillRouteColumnByGeo() { await this.runWithButtonState("fillRouteByGeo", async () => this.fillRouteColumnByGeo()); },
+          async onGenerateRoutesByGeo() { await this.runWithButtonState("genRouteByGeo", async () => this.generateRoutesByGeo()); },
+          async onSaveRouteEntries() { await this.runWithButtonState("saveRouteEntries", async () => this.saveRouteEntries()); },
+          async onCheckRouteLatency() { await this.runWithButtonState("checkRouteLatency", async () => this.checkRouteLatency()); },
+          async onApplyRoutesJsonToEntries() { await this.runWithButtonState("applyRoutesJsonToEntries", async () => this.applyRoutesJsonToEntries()); },
+          async onSaveRoutes() { await this.runWithButtonState("saveRoutes", async () => this.saveRoutes()); },
+          async onLoadDataClick() { await this.runWithButtonState("loadData", async () => this.loadData()); },
+          _sanitizePerPage(value) {
+            const n = Number(value);
+            return this.pageSizeOptions.includes(n) ? n : 10;
+          },
+          getPageState(section) {
+            const state = this.pagination?.[section];
+            if (!state) return { page: 1, perPage: 10 };
+            state.page = Math.max(1, Math.trunc(Number(state.page || 1)));
+            state.perPage = this._sanitizePerPage(state.perPage);
+            return state;
+          },
+          getSectionItems(section) {
+            if (section === "subscriptions") return this.subscriptions || [];
+            if (section === "routes") return this.routeEntries || [];
+            if (section === "backendEvents") return this.backendEvents || [];
+            if (section === "proxies") return this.proxies || [];
+            return [];
+          },
+          getTotalPages(section) {
+            const total = this.getSectionItems(section).length;
+            const { perPage } = this.getPageState(section);
+            return Math.max(1, Math.ceil(total / Math.max(1, perPage)));
+          },
+          getPageStartIndex(section) {
+            const { page, perPage } = this.getPageState(section);
+            return (Math.max(1, page) - 1) * Math.max(1, perPage);
+          },
+          paginateItems(items, section) {
+            const list = Array.isArray(items) ? items : [];
+            const state = this.getPageState(section);
+            const totalPages = Math.max(1, Math.ceil(list.length / Math.max(1, state.perPage)));
+            if (state.page > totalPages) {
+              state.page = totalPages;
+            }
+            const start = (state.page - 1) * state.perPage;
+            return list.slice(start, start + state.perPage);
+          },
+          canPrevPage(section) {
+            return this.getPageState(section).page > 1;
+          },
+          canNextPage(section) {
+            const state = this.getPageState(section);
+            return state.page < this.getTotalPages(section);
+          },
+          goPrevPage(section) {
+            const state = this.getPageState(section);
+            if (state.page > 1) state.page -= 1;
+          },
+          goNextPage(section) {
+            const state = this.getPageState(section);
+            const total = this.getTotalPages(section);
+            if (state.page < total) state.page += 1;
+          },
+          onPaginationPageSizeChange(section) {
+            const state = this.getPageState(section);
+            state.perPage = this._sanitizePerPage(state.perPage);
+            state.page = 1;
+          },
+          pageIndicator(section) {
+            const state = this.getPageState(section);
+            const totalPages = this.getTotalPages(section);
+            const total = this.getSectionItems(section).length;
+            return `${state.page}/${totalPages} (${total})`;
+          },
+          resetPage(section) {
+            const state = this.getPageState(section);
+            state.page = 1;
+          },
+          clampAllPages() {
+            for (const section of ["subscriptions", "routes", "backendEvents", "proxies"]) {
+              const state = this.getPageState(section);
+              const totalPages = this.getTotalPages(section);
+              if (state.page > totalPages) state.page = totalPages;
+            }
+          },
+          loadProxyColumns() {
+            try {
+              const raw = localStorage.getItem("proxypool.proxyColumns.v1");
+              if (!raw) return;
+              const data = JSON.parse(raw);
+              if (!data || typeof data !== "object") return;
+              const cfg = data.configs || {};
+              const order = Array.isArray(data.order) ? data.order : [];
+              for (const key of Object.keys(this.proxyColumnConfigs)) {
+                if (cfg[key] && typeof cfg[key] === "object") {
+                  this.proxyColumnConfigs[key].visible = cfg[key].visible !== false;
+                }
+              }
+              const filteredOrder = order.filter((key) => this.proxyColumnConfigs[key]);
+              const missing = Object.keys(this.proxyColumnConfigs).filter((key) => !filteredOrder.includes(key));
+              this.proxyColumnOrder = [...filteredOrder, ...missing];
+            } catch {}
+          },
+          persistProxyColumns() {
+            try {
+              const configs = {};
+              for (const [key, val] of Object.entries(this.proxyColumnConfigs || {})) {
+                configs[key] = { visible: val?.visible !== false };
+              }
+              localStorage.setItem(
+                "proxypool.proxyColumns.v1",
+                JSON.stringify({
+                  order: this.proxyColumnOrder,
+                  configs,
+                })
+              );
+            } catch {}
+          },
+          resetProxyColumns() {
+            this.proxyColumnConfigs = {
+              serial: { label: "序号", visible: true },
+              protocol: { label: "协议", visible: true },
+              address: { label: "地址", visible: true },
+              latency: { label: "延迟", visible: true },
+              status: { label: "状态", visible: true },
+              checked_at: { label: "最后检测", visible: true },
+              geo: { label: "IP位置", visible: true },
+              purity: { label: "IP纯净度", visible: true },
+              unlock: { label: "ChatGPT解锁", visible: true },
+              fallback_front: { label: "可连通前置", visible: true },
+              source: { label: "来源", visible: true },
+            };
+            this.proxyColumnOrder = ["serial", "protocol", "address", "latency", "status", "checked_at", "geo", "purity", "unlock", "fallback_front", "source"];
+            this.persistProxyColumns();
+            this.setMessage("列配置已重置");
+          },
+          onProxyColumnDragStart(index) {
+            this.proxyColumnDragIndex = Number(index);
+          },
+          onProxyColumnDrop(index) {
+            const from = Number(this.proxyColumnDragIndex);
+            const to = Number(index);
+            if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from === to) {
+              this.proxyColumnDragIndex = -1;
+              return;
+            }
+            const order = [...this.proxyColumnOrder];
+            const [moved] = order.splice(from, 1);
+            order.splice(to, 0, moved);
+            this.proxyColumnOrder = order;
+            this.proxyColumnDragIndex = -1;
+            this.persistProxyColumns();
+          },
+          setMessage(text, isError = false) {
+            this.message = text;
+            this.messageError = isError;
+          },
+          openImportFiles() {
+            const el = this.$refs.fileInput;
+            if (!el) {
+              throw new Error("文件输入控件不可用");
+            }
+            el.value = "";
+            el.click();
+          },
+          async onImportFilesSelected(event) {
+            const files = Array.from(event?.target?.files || []);
+            if (!files.length) return;
+            await this.runWithButtonState("importFiles", async () => this.importFiles(files));
+          },
+          async importFiles(files) {
+            try {
+              const items = [];
+              for (const file of files) {
+                const content = await file.text();
+                items.push({
+                  filename: file.name || "upload.txt",
+                  content: content || "",
+                });
+              }
+              const resp = await fetch("/api/collector/import-texts", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ items }),
+              });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "导入失败");
+              }
+              this.setMessage(
+                `文件导入完成: parsed=${data.total_parsed}, inserted=${data.total_inserted}, updated=${data.total_updated}, deduped=${data.total_deduped}, invalid=${data.total_invalid}`
+              );
+              await this.loadData();
+              await this.loadProxyCatalog();
+            } catch (err) {
+              this.setMessage("文件导入失败: " + err, true);
+            }
+          },
+          async loadSubscriptions() {
+            try {
+              const resp = await fetch("/api/subscriptions?limit=1000");
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "加载订阅失败");
+              }
+              this.subscriptions = data.items || [];
+              this.resetPage("subscriptions");
+            } catch (err) {
+              this.setMessage("加载订阅失败: " + err, true);
+            }
+          },
+          async loadSubscriptionUpdateProxy() {
+            try {
+              const resp = await fetch("/api/subscription-update-proxy");
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "加载全局更新代理失败");
+              }
+              this.subscriptionUpdateProxyRef = this.toDisplayProxyRef(data.update_proxy_key || "");
+            } catch (err) {
+              this.setMessage("加载全局更新代理失败: " + err, true);
+            }
+          },
+          async saveSubscriptionUpdateProxy() {
+            try {
+              const raw = String(this.subscriptionUpdateProxyRef || "").trim();
+              const key = raw ? this.resolveProxyRef(raw) : "";
+              const resp = await fetch("/api/subscription-update-proxy", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ update_proxy_key: key }),
+              });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "保存失败");
+              }
+              this.subscriptionUpdateProxyRef = this.toDisplayProxyRef(data.update_proxy_key || "");
+              this.setMessage("全局订阅更新代理已保存");
+            } catch (err) {
+              this.setMessage("保存全局更新代理失败: " + err, true);
+            }
+          },
+          async createSubscription() {
+            const name = String(this.subscriptionForm.name || "").trim();
+            const url = String(this.subscriptionForm.url || "").trim();
+            if (!url) {
+              throw new Error("订阅链接不能为空");
+            }
+            try {
+              const resp = await fetch("/api/subscriptions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: name || "subscription", url, enabled: true }),
+              });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "保存失败");
+              }
+              this.subscriptionForm.name = "";
+              this.subscriptionForm.url = "";
+              this.setMessage("订阅已保存");
+              await this.loadSubscriptions();
+            } catch (err) {
+              this.setMessage("保存订阅失败: " + err, true);
+            }
+          },
+          async onToggleSubscription(item) {
+            await this.runWithButtonState(`toggleSub-${item.id}`, async () => {
+              try {
+                const resp = await fetch(`/api/subscriptions/${item.id}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ enabled: !item.enabled }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                  throw new Error(data.detail || "更新失败");
+                }
+                this.setMessage(`订阅 ${data.item.enabled ? "已启用" : "已停用"}`);
+                await this.loadSubscriptions();
+              } catch (err) {
+                this.setMessage("切换订阅状态失败: " + err, true);
+              }
+            });
+          },
+          async onRenameSubscription(item, nextName) {
+            const name = String(nextName || "").trim();
+            if (!name || name === String(item.name || "").trim()) return;
+            await this.runWithButtonState(`renameSub-${item.id}`, async () => {
+              try {
+                const resp = await fetch(`/api/subscriptions/${item.id}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ name }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                  throw new Error(data.detail || "更新失败");
+                }
+                this.setMessage("订阅名称已更新");
+                await this.loadSubscriptions();
+              } catch (err) {
+                this.setMessage("更新订阅名称失败: " + err, true);
+              }
+            });
+          },
+          async onRefreshSubscription(subscriptionId) {
+            await this.runWithButtonState(`refreshSub-${subscriptionId}`, async () => {
+              try {
+                const resp = await fetch(`/api/subscriptions/${subscriptionId}/refresh`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ timeout_sec: 12 }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                  throw new Error(data.detail || "刷新失败");
+                }
+                const rpt = data.report || {};
+                this.setMessage(
+                  `订阅刷新完成: parsed=${rpt.total_parsed || 0}, inserted=${rpt.total_inserted || 0}, updated=${rpt.total_updated || 0}, invalid=${rpt.total_invalid || 0}`
+                );
+                await this.loadSubscriptions();
+                await this.loadData();
+                await this.loadProxyCatalog();
+              } catch (err) {
+                this.setMessage("刷新订阅失败: " + err, true);
+              }
+            });
+          },
+          async refreshAllSubscriptions() {
+            try {
+              const resp = await fetch("/api/subscriptions/refresh-enabled?timeout_sec=12", {
+                method: "POST",
+              });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "批量刷新失败");
+              }
+              this.setMessage(`批量刷新完成: ${data.count || 0} 条订阅`);
+              await this.loadSubscriptions();
+              await this.loadData();
+              await this.loadProxyCatalog();
+            } catch (err) {
+              this.setMessage("批量刷新订阅失败: " + err, true);
+            }
+          },
+          async deleteUnavailableSubscriptions() {
+            try {
+              const resp = await fetch("/api/subscriptions/delete-unavailable", {
+                method: "POST",
+              });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "删除失败");
+              }
+              this.setMessage(`已删除不可用订阅: ${data.deleted || 0}`);
+              await this.loadSubscriptions();
+            } catch (err) {
+              this.setMessage("删除不可用订阅失败: " + err, true);
+            }
+          },
+          async onDeleteSubscription(subscriptionId) {
+            await this.runWithButtonState(`deleteSub-${subscriptionId}`, async () => {
+              try {
+                const resp = await fetch(`/api/subscriptions/${subscriptionId}`, { method: "DELETE" });
+                const data = await resp.json();
+                if (!resp.ok) {
+                  throw new Error(data.detail || "删除失败");
+                }
+                this.setMessage(`已删除订阅: ${data.deleted || 0}`);
+                await this.loadSubscriptions();
+              } catch (err) {
+                this.setMessage("删除订阅失败: " + err, true);
+              }
+            });
+          },
+          async loadData() {
+            try {
+              const statsResp = await fetch("/api/stats");
+              this.stats = await statsResp.json();
+
+              const params = new URLSearchParams({ limit: "5000" });
+              if (this.filterProtocol) params.set("protocol", this.filterProtocol);
+              if (this.filterAvailable !== "") params.set("available", this.filterAvailable);
+              if (this.filterGeoLocation) {
+                params.set("geo_filter", "has");
+                params.set("geo_location", this.filterGeoLocation);
+              } else if (this.filterGeo) {
+                params.set("geo_filter", this.filterGeo);
+              }
+              if (this.filterOpenai) params.set("openai_filter", this.filterOpenai);
+              if (this.filterFallbackFront) params.set("fallback_front_filter", this.filterFallbackFront);
+              if (this.filterSource) params.set("source", this.filterSource);
+              params.set("sort_by", "latency");
+              params.set("sort_order", "asc");
+              const proxyResp = await fetch("/api/proxies?" + params.toString());
+              const proxyData = await proxyResp.json();
+              this.proxies = proxyData.items || [];
+              this.resetPage("proxies");
+            } catch (err) {
+              this.setMessage("加载数据失败: " + err, true);
+            }
+          },
+          async loadProxyCatalog() {
+            try {
+              const resp = await fetch("/api/proxies?limit=5000&sort_by=latency&sort_order=asc");
+              const data = await resp.json();
+              const items = data.items || [];
+              this.allProxies = items;
+              const stableMap = {};
+              this.allProxies.forEach((item, idx) => {
+                stableMap[item.normalized_key] = idx + 1;
+              });
+              this.proxySerialMap = stableMap;
+              if ((this.routeEntries || []).length > 0) {
+                this.routeEntries = this.routeEntries.map((item) => this.normalizeRouteItem(item));
+              }
+            } catch (err) {
+              this.setMessage("加载代理序号映射失败: " + err, true);
+            }
+          },
+          async loadBackendStatus() {
+            try {
+              const resp = await fetch("/api/backend/status");
+              const data = await resp.json();
+              this.backendStatus = data;
+              this.routesJson = JSON.stringify(data.routes || [], null, 2);
+              this.routeEntries = (data.routes || []).map((item) => this.normalizeRouteItem(item));
+              this.resetPage("routes");
+              this.routeLatencyMap = {};
+              if (data.running && (data.routes_count || 0) > 0) {
+                await this.checkRouteLatency();
+              }
+              await this.loadBackendEvents();
+            } catch (err) {
+              this.setMessage("加载后端状态失败: " + err, true);
+            }
+          },
+          async loadBackendEvents() {
+            try {
+              const resp = await fetch("/api/backend/process-events?limit=500");
+              const data = await resp.json();
+              this.backendEvents = data.items || [];
+              this.resetPage("backendEvents");
+            } catch (err) {
+              this.setMessage("加载进程记录失败: " + err, true);
+            }
+          },
+          async backendStart() {
+            try {
+              const resp = await fetch("/api/backend/start", { method: "POST" });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "启动失败");
+              this.backendStatus = data;
+              this.setMessage("sing-box 后端已启动");
+              await this.checkRouteLatency();
+              await this.loadBackendEvents();
+            } catch (err) {
+              this.setMessage("启动失败: " + err, true);
+            }
+          },
+          async backendStop() {
+            try {
+              const resp = await fetch("/api/backend/stop", { method: "POST" });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "停止失败");
+              this.backendStatus = data;
+              this.setMessage("sing-box 后端已停止");
+              await this.loadBackendEvents();
+            } catch (err) {
+              this.setMessage("停止失败: " + err, true);
+            }
+          },
+          async backendRestart() {
+            try {
+              const resp = await fetch("/api/backend/restart", { method: "POST" });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "重启失败");
+              this.backendStatus = data;
+              this.setMessage("sing-box 后端已重启");
+              await this.checkRouteLatency();
+              await this.loadBackendEvents();
+            } catch (err) {
+              this.setMessage("重启失败: " + err, true);
+            }
+          },
+          async saveRoutes() {
+            try {
+              const routes = JSON.parse(this.routesJson || "[]");
+              if (!Array.isArray(routes)) {
+                throw new Error("routes 必须是数组");
+              }
+              const normalizedRoutes = routes.map((item) => {
+                const front = this.resolveProxyRef(item.front_proxy_key || "");
+                const middle = this.resolveProxyRef(item.middle_proxy_key || "");
+                const exit = this.resolveProxyRef(item.exit_proxy_key || item.proxy_key || "");
+                return {
+                  ...item,
+                  front_proxy_key: front,
+                  middle_proxy_key: middle,
+                  exit_proxy_key: exit,
+                  proxy_key: exit,
+                };
+              });
+              const resp = await fetch("/api/backend/routes", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ routes: normalizedRoutes, auto_restart: true }),
+              });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "保存失败");
+              this.backendStatus = data;
+              this.routeEntries = (data.routes || []).map((item) => this.normalizeRouteItem(item));
+              this.resetPage("routes");
+              this.setMessage("路由已保存");
+              await this.checkRouteLatency();
+            } catch (err) {
+              this.setMessage("保存路由失败: " + err, true);
+            }
+          },
+          formatRouteLatency(routeIndex) {
+            const key = String(routeIndex);
+            const item = this.routeLatencyMap[key];
+            if (!item) return "-";
+            if (item.available && Number.isFinite(item.latency_ms)) return `${item.latency_ms} ms`;
+            if (item.error) return `DOWN (${item.error})`;
+            return "DOWN";
+          },
+          async checkRouteLatency() {
+            try {
+              const resp = await fetch("/api/backend/latency?timeout_sec=12");
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "检测失败");
+              }
+              const map = {};
+              (data.items || []).forEach((item) => {
+                const idx = Number(item.route_index);
+                if (Number.isFinite(idx) && idx >= 0) {
+                  map[String(idx)] = item;
+                }
+              });
+              this.routeLatencyMap = map;
+              this.setMessage("链路延迟检测完成");
+            } catch (err) {
+              this.setMessage("链路延迟检测失败: " + err, true);
+            }
+          },
+          normalizeRouteItem(item = {}) {
+            const frontRaw = (item.front_proxy_key || "").trim();
+            const middleRaw = (item.middle_proxy_key || "").trim();
+            const exitRaw = (item.exit_proxy_key || item.proxy_key || "").trim();
+            return {
+              inbound_port: Number(item.inbound_port || 1081),
+              inbound_type: item.inbound_type || "http",
+              listen: item.listen || "127.0.0.1",
+              front_proxy_key: this.toDisplayProxyRef(frontRaw),
+              middle_proxy_key: this.toDisplayProxyRef(middleRaw),
+              exit_proxy_key: this.toDisplayProxyRef(exitRaw),
+            };
+          },
+          toDisplayProxyRef(raw) {
+            const text = String(raw || "").trim();
+            if (!text) return "";
+            const m = text.match(/^#?(\d+)$/);
+            if (m) return `#${Number(m[1])}`;
+            const serial = this.getSerial(text);
+            if (serial !== "-") return `#${serial}`;
+            return "";
+          },
+          resolveProxyRef(raw) {
+            const text = String(raw || "").trim();
+            if (!text) return "";
+            const m = text.match(/^#?(\d+)$/);
+            if (!m) return text;
+            const serial = Number(m[1]);
+            if (!Number.isInteger(serial) || serial <= 0 || serial > this.allProxies.length) {
+              throw new Error(`无效代理序号: ${text}`);
+            }
+            const key = this.allProxies[serial - 1]?.normalized_key;
+            if (!key) {
+              throw new Error(`序号未找到代理: ${text}`);
+            }
+            return String(key);
+          },
+          normalizeSerialRef(raw) {
+            const text = String(raw || "").trim();
+            if (!text) return "";
+            const m = text.match(/^#?(\d+)$/);
+            if (!m) return text;
+            return `#${Number(m[1])}`;
+          },
+          persistRouteDefaults() {
+            try {
+              const payload = {
+                front_proxy_key: this.normalizeSerialRef(this.routeDefaults.front_proxy_key),
+                middle_proxy_key: this.normalizeSerialRef(this.routeDefaults.middle_proxy_key),
+                exit_proxy_key: this.normalizeSerialRef(this.routeDefaults.exit_proxy_key),
+              };
+              this.routeDefaults = payload;
+              localStorage.setItem("proxypool.routeDefaults.v1", JSON.stringify(payload));
+            } catch {}
+          },
+          loadRouteDefaults() {
+            try {
+              const raw = localStorage.getItem("proxypool.routeDefaults.v1");
+              if (!raw) return;
+              const data = JSON.parse(raw);
+              this.routeDefaults = {
+                front_proxy_key: this.normalizeSerialRef(data?.front_proxy_key),
+                middle_proxy_key: this.normalizeSerialRef(data?.middle_proxy_key),
+                exit_proxy_key: this.normalizeSerialRef(data?.exit_proxy_key),
+              };
+            } catch {}
+          },
+          loadTestFallback() {
+            try {
+              const raw = localStorage.getItem("proxypool.testFallback.v1");
+              if (!raw) return;
+              const data = JSON.parse(raw) || {};
+              const refs = String(data.front_proxy_refs || "").trim();
+              const maxAttempts = Number(data.max_attempts || 0);
+              this.testFallback = {
+                front_proxy_refs: refs,
+                max_attempts: Number.isFinite(maxAttempts) ? Math.max(0, Math.min(100, Math.trunc(maxAttempts))) : 0,
+              };
+            } catch {}
+          },
+          sanitizeTaskConcurrencyValue(value, fallback = 30) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return Math.max(1, Math.min(500, Math.trunc(Number(fallback) || 30)));
+            return Math.max(1, Math.min(500, Math.trunc(n)));
+          },
+          normalizeTaskConcurrency(data = {}) {
+            return {
+              tester: this.sanitizeTaskConcurrencyValue(data.tester, 60),
+              openai: this.sanitizeTaskConcurrencyValue(data.openai, 30),
+              geoip: this.sanitizeTaskConcurrencyValue(data.geoip, 30),
+              ip_purity: this.sanitizeTaskConcurrencyValue(data.ip_purity, 30),
+            };
+          },
+          loadTaskConcurrency() {
+            try {
+              const raw = localStorage.getItem("proxypool.taskConcurrency.v1");
+              if (!raw) {
+                this.taskConcurrency = this.normalizeTaskConcurrency(this.taskConcurrency);
+                return;
+              }
+              const data = JSON.parse(raw) || {};
+              this.taskConcurrency = this.normalizeTaskConcurrency(data);
+            } catch {
+              this.taskConcurrency = this.normalizeTaskConcurrency(this.taskConcurrency);
+            }
+          },
+          async saveTaskConcurrency() {
+            const payload = this.normalizeTaskConcurrency(this.taskConcurrency);
+            this.taskConcurrency = payload;
+            try {
+              localStorage.setItem("proxypool.taskConcurrency.v1", JSON.stringify(payload));
+            } catch {}
+            this.setMessage(
+              `并发设置已保存: 测速${payload.tester}, 解锁${payload.openai}, Geo${payload.geoip}, 纯净度${payload.ip_purity}`
+            );
+          },
+          async saveTestFallback() {
+            try {
+              const payload = {
+                front_proxy_refs: String(this.testFallback.front_proxy_refs || "").trim(),
+                max_attempts: Math.max(0, Math.min(100, Math.trunc(Number(this.testFallback.max_attempts || 0)))),
+              };
+              const refs = this.resolveFallbackFrontProxyKeys(payload.front_proxy_refs);
+              this.testFallback = payload;
+              try {
+                localStorage.setItem("proxypool.testFallback.v1", JSON.stringify(payload));
+              } catch {}
+              this.setMessage(`测速回退配置已保存: 前置代理${refs.length}个, 最多尝试${payload.max_attempts}次`);
+            } catch (err) {
+              this.setMessage("保存测速回退配置失败: " + err, true);
+            }
+          },
+          resolveFallbackFrontProxyKeys(rawText) {
+            const text = String(rawText || "").trim();
+            if (!text) return [];
+            const parts = text.split(/[,\s\n\r;|]+/g).map((item) => item.trim()).filter(Boolean);
+            const keys = [];
+            const seen = new Set();
+            for (const token of parts) {
+              const key = this.resolveProxyRef(token);
+              if (!key || seen.has(key)) continue;
+              seen.add(key);
+              keys.push(key);
+            }
+            return keys;
+          },
+          applyDefaultsToRoutes(applyAll = false) {
+            this.persistRouteDefaults();
+            const defaults = {
+              front_proxy_key: this.routeDefaults.front_proxy_key,
+              middle_proxy_key: this.routeDefaults.middle_proxy_key,
+              exit_proxy_key: this.routeDefaults.exit_proxy_key,
+            };
+            this.routeEntries = (this.routeEntries || []).map((item) => {
+              const normalized = this.normalizeRouteItem(item);
+              return {
+                ...normalized,
+                front_proxy_key: (applyAll || !normalized.front_proxy_key) ? defaults.front_proxy_key : normalized.front_proxy_key,
+                middle_proxy_key: (applyAll || !normalized.middle_proxy_key) ? defaults.middle_proxy_key : normalized.middle_proxy_key,
+                exit_proxy_key: (applyAll || !normalized.exit_proxy_key) ? defaults.exit_proxy_key : normalized.exit_proxy_key,
+              };
+            });
+            this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
+            this.clampAllPages();
+            this.setMessage(applyAll ? "默认代理已应用到全部链路" : "默认代理已应用到空白链路");
+          },
+          clearRouteDefaults() {
+            this.routeDefaults = { front_proxy_key: "", middle_proxy_key: "", exit_proxy_key: "" };
+            try {
+              localStorage.removeItem("proxypool.routeDefaults.v1");
+            } catch {}
+            this.setMessage("默认代理已清空");
+          },
+          nextAvailableInboundPort() {
+            const used = new Set((this.routeEntries || []).map((r) => Number(r.inbound_port || 0)).filter((p) => Number.isInteger(p) && p > 0));
+            let port = 1081;
+            while (used.has(port)) port += 1;
+            return port;
+          },
+          getProxyRefsByGeoLocation(geoLocation) {
+            const target = String(geoLocation || "").trim();
+            if (!target) return [];
+            const refs = [];
+            for (const item of this.allProxies || []) {
+              if (this.formatGeo(item) !== target) continue;
+              const serial = this.getSerial(item.normalized_key);
+              if (serial === "-") continue;
+              refs.push(`#${serial}`);
+            }
+            return refs;
+          },
+          fillRouteColumnByGeo() {
+            const geo = String(this.routeGeoFill.geo_location || "").trim();
+            const field = String(this.routeGeoFill.target_column || "").trim();
+            if (!geo) {
+              this.setMessage("请先选择地区(国家:城市)", true);
+              return;
+            }
+            if (!["front_proxy_key", "middle_proxy_key", "exit_proxy_key"].includes(field)) {
+              this.setMessage("目标链路列无效", true);
+              return;
+            }
+            const refs = this.getProxyRefsByGeoLocation(geo);
+            if (!refs.length) {
+              this.setMessage(`未找到地区 ${geo} 的代理`, true);
+              return;
+            }
+            if (!(this.routeEntries || []).length) {
+              this.setMessage("当前没有链路，请先新增链路或使用“按地区生成新链路”", true);
+              return;
+            }
+            let applied = 0;
+            this.routeEntries = (this.routeEntries || []).map((item, idx) => {
+              const normalized = this.normalizeRouteItem(item);
+              if (idx >= refs.length) return normalized;
+              applied += 1;
+              return { ...normalized, [field]: refs[idx] };
+            });
+            this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
+            this.clampAllPages();
+            this.setMessage(`已按地区 ${geo} 顺序填充 ${applied} 条到${this.routeColumnLabel(field)}`);
+          },
+          generateRoutesByGeo() {
+            const geo = String(this.routeGeoFill.geo_location || "").trim();
+            const field = String(this.routeGeoFill.target_column || "").trim();
+            if (!geo) {
+              this.setMessage("请先选择地区(国家:城市)", true);
+              return;
+            }
+            if (!["front_proxy_key", "middle_proxy_key", "exit_proxy_key"].includes(field)) {
+              this.setMessage("目标链路列无效", true);
+              return;
+            }
+            const refs = this.getProxyRefsByGeoLocation(geo);
+            if (!refs.length) {
+              this.setMessage(`未找到地区 ${geo} 的代理`, true);
+              return;
+            }
+
+            this.persistRouteDefaults();
+            for (const ref of refs) {
+              const entry = {
+                inbound_port: this.nextAvailableInboundPort(),
+                inbound_type: "http",
+                listen: "127.0.0.1",
+                front_proxy_key: this.routeDefaults.front_proxy_key || "",
+                middle_proxy_key: this.routeDefaults.middle_proxy_key || "",
+                exit_proxy_key: this.routeDefaults.exit_proxy_key || "",
+              };
+              entry[field] = ref;
+              this.routeEntries.push(entry);
+            }
+            this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
+            this.clampAllPages();
+            this.setMessage(`已从地区 ${geo} 生成 ${refs.length} 条新链路到${this.routeColumnLabel(field)}`);
+          },
+          routeColumnLabel(field) {
+            if (field === "front_proxy_key") return "前置代理列";
+            if (field === "middle_proxy_key") return "中间代理列";
+            return "后置(落地)列";
+          },
+          getSerial(normalizedKey) {
+            const n = this.proxySerialMap[String(normalizedKey || "")];
+            return n || "-";
+          },
+          routePayloadFromEntries() {
+            this.persistRouteDefaults();
+            return (this.routeEntries || []).map((item) => {
+              const normalized = this.normalizeRouteItem(item);
+              const frontRaw = normalized.front_proxy_key || this.routeDefaults.front_proxy_key || "";
+              const middleRaw = normalized.middle_proxy_key || this.routeDefaults.middle_proxy_key || "";
+              const exitRaw = normalized.exit_proxy_key || this.routeDefaults.exit_proxy_key || "";
+              const frontKey = this.resolveProxyRef(frontRaw);
+              const middleKey = this.resolveProxyRef(middleRaw);
+              const exitKey = this.resolveProxyRef(exitRaw);
+              return {
+                inbound_port: Number(normalized.inbound_port || 0),
+                inbound_type: normalized.inbound_type || "http",
+                listen: normalized.listen || "127.0.0.1",
+                front_proxy_key: frontKey,
+                middle_proxy_key: middleKey,
+                exit_proxy_key: exitKey,
+                proxy_key: exitKey,
+              };
+            });
+          },
+          addRouteEntry() {
+            this.persistRouteDefaults();
+            const usedPorts = new Set((this.routeEntries || []).map((r) => Number(r.inbound_port || 0)));
+            let port = 1081;
+            while (usedPorts.has(port)) port += 1;
+            this.routeEntries.push({
+              inbound_port: port,
+              inbound_type: "http",
+              listen: "127.0.0.1",
+              front_proxy_key: this.routeDefaults.front_proxy_key || "",
+              middle_proxy_key: this.routeDefaults.middle_proxy_key || "",
+              exit_proxy_key: this.routeDefaults.exit_proxy_key || "",
+            });
+            this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
+            this.clampAllPages();
+          },
+          removeRouteEntry(idx) {
+            this.routeEntries.splice(idx, 1);
+            this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
+            this.clampAllPages();
+          },
+          applyRoutesJsonToEntries() {
+            try {
+              const routes = JSON.parse(this.routesJson || "[]");
+              if (!Array.isArray(routes)) {
+                throw new Error("JSON 顶层必须是数组");
+              }
+              this.routeEntries = routes.map((item) => this.normalizeRouteItem(item));
+              this.resetPage("routes");
+              this.setMessage("JSON 已应用到链路表单");
+            } catch (err) {
+              this.setMessage("应用JSON失败: " + err, true);
+            }
+          },
+          async saveRouteEntries() {
+            try {
+              const routes = this.routePayloadFromEntries();
+              const resp = await fetch("/api/backend/routes", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ routes, auto_restart: true }),
+              });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "保存失败");
+              }
+              this.backendStatus = data;
+              this.routeEntries = (data.routes || []).map((item) => this.normalizeRouteItem(item));
+              this.resetPage("routes");
+              this.routesJson = JSON.stringify(data.routes || [], null, 2);
+              this.setMessage("链式路由已保存并热重启");
+              await this.checkRouteLatency();
+            } catch (err) {
+              this.setMessage("保存链式路由失败: " + err, true);
+            }
+          },
+          async runTest() {
+            try {
+              const fallbackKeys = this.resolveFallbackFrontProxyKeys(this.testFallback.front_proxy_refs);
+              const maxAttempts = Math.max(0, Math.min(100, Math.trunc(Number(this.testFallback.max_attempts || 0))));
+              const concurrency = this.sanitizeTaskConcurrencyValue(this.taskConcurrency.tester, 60);
+              await this.startProgressTask(
+                "/api/tasks/tester/start",
+                {
+                  limit: 0,
+                  concurrency,
+                  only_unchecked: false,
+                  fallback_front_proxy_keys: fallbackKeys,
+                  fallback_front_max_attempts: maxAttempts,
+                },
+                "测速任务"
+              );
+            } catch (err) {
+              this.setMessage("测速失败: " + err, true);
+            }
+          },
+          async enrichGeo() {
+            try {
+              const concurrency = this.sanitizeTaskConcurrencyValue(this.taskConcurrency.geoip, 30);
+              await this.startProgressTask(
+                "/api/tasks/geoip/start",
+                { limit: 300, concurrency },
+                "IP位置补全任务"
+              );
+            } catch (err) {
+              this.setMessage("补全失败: " + err, true);
+            }
+          },
+          async runIpPurity() {
+            try {
+              const concurrency = this.sanitizeTaskConcurrencyValue(this.taskConcurrency.ip_purity, 30);
+              await this.startProgressTask(
+                "/api/tasks/ip-purity/start",
+                { limit: 0, concurrency },
+                "IP纯净度检测任务"
+              );
+            } catch (err) {
+              this.setMessage("IP纯净度检测失败: " + err, true);
+            }
+          },
+          async runUnlockCheck() {
+            try {
+              const concurrency = this.sanitizeTaskConcurrencyValue(this.taskConcurrency.openai, 30);
+              await this.startProgressTask(
+                "/api/tasks/openai-check/start",
+                { limit: 300, concurrency, only_unchecked: false, only_available: true },
+                "ChatGPT解锁检测任务"
+              );
+            } catch (err) {
+              this.setMessage("检测失败: " + err, true);
+            }
+          },
+          async deleteUnavailable() {
+            try {
+              const resp = await fetch("/api/proxies/delete-unavailable", { method: "POST" });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "删除失败");
+              }
+              this.setMessage(`删除不可用节点完成: deleted=${data.deleted || 0}`);
+              await this.loadData();
+              await this.loadProxyCatalog();
+            } catch (err) {
+              this.setMessage("删除不可用节点失败: " + err, true);
+            }
+          },
+          async startProgressTask(url, payload, label) {
+            this.taskState = {
+              active: true,
+              taskId: "",
+              label,
+              message: "任务创建中",
+              total: 0,
+              completed: 0,
+              success: 0,
+              failed: 0,
+              progress: 0,
+            };
+            try {
+              const startResp = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+              const startData = await startResp.json();
+              if (!startResp.ok) {
+                throw new Error(startData.detail || "任务创建失败");
+              }
+              const taskId = startData.task_id;
+              this.taskState.taskId = taskId;
+              await this.pollTask(taskId);
+            } catch (err) {
+              this.taskState.active = false;
+              throw err;
+            }
+          },
+          async pollTask(taskId) {
+            const timeoutMs = 6 * 60 * 60 * 1000;
+            const startedAt = Date.now();
+            let transientErrors = 0;
+            while (Date.now() - startedAt < timeoutMs) {
+              try {
+                const resp = await fetch(`/api/tasks/${taskId}`);
+                const data = await resp.json();
+                if (!resp.ok) {
+                  throw new Error(data.detail || "任务查询失败");
+                }
+                transientErrors = 0;
+                this.taskState.message = data.message || data.status || "-";
+                this.taskState.total = data.total || 0;
+                this.taskState.completed = data.completed || 0;
+                this.taskState.success = data.success || 0;
+                this.taskState.failed = data.failed || 0;
+                this.taskState.progress = data.progress || 0;
+                if (data.status === "success") {
+                  this.taskState.active = false;
+                  this.setMessage(`${this.taskState.label}完成: 成功=${this.taskState.success}, 失败=${this.taskState.failed}`);
+                  await this.loadData();
+                  return;
+                }
+                if (data.status === "failed") {
+                  this.taskState.active = false;
+                  this.setMessage(`${this.taskState.label}失败: ${data.error || "unknown error"}`, true);
+                  return;
+                }
+              } catch (err) {
+                transientErrors += 1;
+                this.taskState.message = `查询中断，重试(${transientErrors})`;
+                if (transientErrors >= 20) {
+                  this.taskState.active = false;
+                  throw err;
+                }
+              }
+              await new Promise((resolve) => setTimeout(resolve, 800));
+            }
+            this.taskState.active = false;
+            this.setMessage(`${this.taskState.label}超时(>6小时)`, true);
+          },
+          async copySubscription() {
+            try {
+              const text = await (await fetch("/api/subscription?only_available=true")).text();
+              await navigator.clipboard.writeText(text);
+              this.setMessage("订阅已复制到剪贴板");
+            } catch (err) {
+              this.setMessage("复制失败: " + err, true);
+            }
+          },
+          formatTime(ts) {
+            if (!ts) return "-";
+            try {
+              return new Date(ts).toLocaleString();
+            } catch {
+              return ts;
+            }
+          },
+          formatBackendPid(pid) {
+            const n = Number(pid);
+            if (!Number.isFinite(n)) return "-1";
+            if (n <= -1) return "-1";
+            if (n === 0) return "0";
+            return String(Math.trunc(n));
+          },
+          shortPath(path) {
+            const text = String(path || "").trim();
+            if (!text) return "-";
+            const parts = text.split("/");
+            if (parts.length <= 3) return text;
+            return "..." + parts.slice(-3).join("/");
+          },
+          shortSubscriptionUrl(url) {
+            const text = String(url || "").trim();
+            if (!text) return "-";
+            if (text.length <= 64) return text;
+            return text.slice(0, 61) + "...";
+          },
+          shortSource(src) {
+            const text = String(src || "").trim();
+            if (!text) return "-";
+            if (text.startsWith("subscription#")) {
+              return text.split("|", 1)[0];
+            }
+            if (text.startsWith("upload:")) {
+              return text;
+            }
+            return text.split("/").slice(-1)[0];
+          },
+          formatGeo(item) {
+            const c = item.country || "";
+            const city = item.city || "";
+            if (!c && !city) return "-";
+            return `${c || "-"}:${city || "-"}`;
+          },
+          formatIpPurity(item) {
+            const level = String(item.ip_purity_level || "").trim();
+            const score = item.ip_purity_score;
+            const hasScore = Number.isFinite(Number(score));
+            if (level === "家宽" || level === "非家宽" || level === "未知") return level;
+            if (level && hasScore) return `${level} (${Number(score).toFixed(2)}%)`;
+            if (level) return level;
+            if (hasScore) return `${Number(score).toFixed(2)}%`;
+            return "-";
+          },
+          formatUnlock(item) {
+            if (item.openai_unlocked === true) return "已解锁";
+            if (item.openai_unlocked === false) return "未解锁";
+            return "未检测";
+          },
+          formatFallbackFront(item) {
+            const arr = Array.isArray(item?.fallback_front_keys) ? item.fallback_front_keys : [];
+            if (!arr.length) return "-";
+            const labels = [];
+            for (const key of arr) {
+              const serial = this.getSerial(key);
+              if (serial === "-") continue;
+              labels.push(`#${serial}`);
+            }
+            return labels.length ? labels.join(",") : "-";
+          },
+        },
+        async mounted() {
+          this.loadProxyColumns();
+          this.loadRouteDefaults();
+          this.loadTestFallback();
+          this.loadTaskConcurrency();
+          await this.loadData();
+          await this.loadProxyCatalog();
+          await this.loadSubscriptions();
+          await this.loadSubscriptionUpdateProxy();
+          await this.loadBackendStatus();
+        },
+      }).mount("#app");
+    </script>
+  </body>
+</html>

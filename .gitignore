@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+.cache/
+.mypy_cache/
+
+# local runtime/state
+data/
+*.log
+*.pid
+
+# local binary/runtime downloads
+bin/sing-box
+
+# local import/export artifacts
+output/
+
+# editor/system
+.idea/
+.vscode/
+.DS_Store

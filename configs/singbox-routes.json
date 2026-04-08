@@ -1,0 +1,11 @@
+[
+  {
+    "inbound_port": 19991,
+    "proxy_key": "9d78143699c0950a6756165d1f1398905ae50500",
+    "front_proxy_key": "adc0e645009decd0e4b8c1e28abbe6ea87ae3a77",
+    "middle_proxy_key": "",
+    "exit_proxy_key": "9d78143699c0950a6756165d1f1398905ae50500",
+    "inbound_type": "http",
+    "listen": "127.0.0.1"
+  }
+]
