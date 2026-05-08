@@ -1,7 +1,12 @@
+import base64
+import json
+import re
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from proxypool.models import ProxyNode
 from proxypool.storage.sqlite import SQLiteProxyStorage
@@ -48,15 +53,29 @@ class TestSQLiteProxyStorage(unittest.TestCase):
             self.assertEqual(stats["available"], 1)
 
             storage.update_geo(first_key, resolved_ip="1.1.1.1", country="US", city="LA")
-            storage.update_ip_purity(first_key, score=0.88, level="Low")
+            storage.update_ip_purity(first_key, score=0.88, level="家宽")
             with_geo = storage.list_proxies_filtered(limit=10, geo_filter="has")
             self.assertEqual(len(with_geo), 1)
+            us_country = storage.list_proxies_filtered(limit=10, geo_country="US")
+            self.assertEqual(len(us_country), 1)
+            self.assertEqual(str(us_country[0]["country"]), "US")
+            unknown_country = storage.list_proxies_filtered(limit=10, geo_country="-")
+            self.assertEqual(len(unknown_country), 1)
+            self.assertEqual(str(unknown_country[0]["country"]), "")
             us_la = storage.list_proxies_filtered(limit=10, geo_location="US:LA")
             self.assertEqual(len(us_la), 1)
             us_keyword = storage.list_proxies_filtered(limit=10, geo_location="US")
             self.assertEqual(len(us_keyword), 1)
-            self.assertEqual(str(us_keyword[0]["ip_purity_level"]), "Low")
+            self.assertEqual(str(us_keyword[0]["ip_purity_level"]), "家宽")
             self.assertAlmostEqual(float(us_keyword[0]["ip_purity_score"] or 0), 0.88, places=2)
+            purity_checked = storage.list_proxies_filtered(limit=10, ip_purity_filter="checked")
+            self.assertEqual(len(purity_checked), 1)
+            purity_unchecked = storage.list_proxies_filtered(limit=10, ip_purity_filter="unchecked")
+            self.assertEqual(len(purity_unchecked), 1)
+            purity_home = storage.list_proxies_filtered(limit=10, ip_purity_filter="residential")
+            self.assertEqual(len(purity_home), 1)
+            purity_dc = storage.list_proxies_filtered(limit=10, ip_purity_filter="non_residential")
+            self.assertEqual(len(purity_dc), 0)
 
             unlocked = storage.list_proxies_filtered(limit=10, openai_filter="unlocked")
             self.assertEqual(len(unlocked), 1)
@@ -65,6 +84,8 @@ class TestSQLiteProxyStorage(unittest.TestCase):
 
             source_rows = storage.list_proxies_filtered(limit=10, source_keyword="test")
             self.assertEqual(len(source_rows), 2)
+            unknown_source_rows = storage.list_proxies_filtered(limit=10, source_keyword="-")
+            self.assertEqual(len(unknown_source_rows), 0)
 
             deleted = storage.delete_unavailable()
             self.assertEqual(deleted, 1)
@@ -185,6 +206,123 @@ class TestSQLiteProxyStorage(unittest.TestCase):
             self.assertEqual(len(none_rows), 1)
             self.assertEqual(has_rows[0]["normalized_key"], n1.normalized_key())
 
+    def test_get_candidates_for_test_supports_only_unavailable_and_min_age(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "db.sqlite3"
+            storage = SQLiteProxyStorage(db)
+            old_down = ProxyNode(protocol="trojan", host="down-old.example.com", port=443, raw_link="trojan://old", extra={"password": "p"})
+            recent_down = ProxyNode(protocol="trojan", host="down-recent.example.com", port=443, raw_link="trojan://recent", extra={"password": "p"})
+            up_node = ProxyNode(protocol="trojan", host="up.example.com", port=443, raw_link="trojan://up", extra={"password": "p"})
+            storage.upsert_proxy(old_down)
+            storage.upsert_proxy(recent_down)
+            storage.upsert_proxy(up_node)
+            storage.update_test_result(old_down.normalized_key(), available=False, latency_ms=None, error="down")
+            storage.update_test_result(recent_down.normalized_key(), available=False, latency_ms=None, error="down")
+            storage.update_test_result(up_node.normalized_key(), available=True, latency_ms=20)
+
+            now = datetime.now(timezone.utc)
+            with storage._connect() as conn:
+                conn.execute(
+                    "UPDATE proxies SET last_checked_at = ? WHERE normalized_key = ?",
+                    ((now - timedelta(days=2)).isoformat(), old_down.normalized_key()),
+                )
+                conn.execute(
+                    "UPDATE proxies SET last_checked_at = ? WHERE normalized_key = ?",
+                    ((now - timedelta(hours=2)).isoformat(), recent_down.normalized_key()),
+                )
+                conn.execute(
+                    "UPDATE proxies SET last_checked_at = ? WHERE normalized_key = ?",
+                    ((now - timedelta(days=2)).isoformat(), up_node.normalized_key()),
+                )
+                conn.commit()
+
+            rows = storage.get_candidates_for_test(
+                limit=0,
+                only_unavailable=True,
+                min_last_checked_age_hours=24,
+            )
+            self.assertEqual([str(r["host"]) for r in rows], ["down-old.example.com"])
+
+    def test_subscription_export_alias_format_in_fragment(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "db.sqlite3"
+            storage = SQLiteProxyStorage(db)
+
+            relay = ProxyNode(protocol="trojan", host="relay.example.com", port=443, raw_link="trojan://pass2@relay.example.com:443#old2", extra={"password": "pass2"})
+            target = ProxyNode(protocol="trojan", host="target.example.com", port=443, raw_link="trojan://pass1@target.example.com:443#old1", extra={"password": "pass1"})
+            storage.upsert_proxy(relay, source="upload:test.txt")
+            storage.upsert_proxy(target, source="upload:test.txt")
+
+            storage.update_geo(relay.normalized_key(), resolved_ip="1.1.1.2", country="日本", city="东京")
+            storage.update_geo(target.normalized_key(), resolved_ip="1.1.1.1", country="新加坡", city="新加坡")
+            storage.update_ip_purity(relay.normalized_key(), score=0.1, level="非家宽")
+            storage.update_ip_purity(target.normalized_key(), score=0.9, level="家宽")
+            storage.update_test_result(
+                relay.normalized_key(),
+                available=True,
+                latency_ms=20,
+                openai_unlocked=False,
+                openai_status="403 region blocked",
+            )
+            storage.update_test_result(
+                target.normalized_key(),
+                available=True,
+                latency_ms=10,
+                openai_unlocked=True,
+                openai_status="401 unauthorized",
+                fallback_front_keys=[relay.normalized_key()],
+            )
+
+            links = storage.get_subscription_links(only_available=True, limit=10)
+            self.assertEqual(len(links), 2)
+            frag_1 = unquote(urlsplit(links[0]).fragment)
+            frag_2 = unquote(urlsplit(links[1]).fragment)
+            self.assertIn("1_新加坡:新加坡_链式(2)_家宽_已解锁GPT_", frag_1)
+            self.assertIn("2_日本:东京_直连_非家宽_未解锁GPT_", frag_2)
+            self.assertRegex(frag_1, r"_\d{14}$")
+            self.assertRegex(frag_2, r"_\d{14}$")
+
+    def test_subscription_export_alias_rewrites_vmess_ps(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "db.sqlite3"
+            storage = SQLiteProxyStorage(db)
+            vmess_payload = {
+                "v": "2",
+                "ps": "old-name",
+                "add": "vm.example.com",
+                "port": "443",
+                "id": "11111111-1111-1111-1111-111111111111",
+                "aid": "0",
+                "net": "ws",
+                "type": "none",
+                "host": "",
+                "path": "/",
+                "tls": "tls",
+            }
+            raw = "vmess://" + base64.urlsafe_b64encode(
+                json.dumps(vmess_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            ).decode("utf-8").rstrip("=")
+            node = ProxyNode(
+                protocol="vmess",
+                host="vm.example.com",
+                port=443,
+                raw_link=raw,
+                extra={"uuid": "11111111-1111-1111-1111-111111111111"},
+            )
+            storage.upsert_proxy(node, source="upload:test.txt")
+            storage.update_geo(node.normalized_key(), resolved_ip="1.2.3.4", country="美国", city="洛杉矶")
+            storage.update_ip_purity(node.normalized_key(), score=0.5, level="未知")
+            storage.update_test_result(node.normalized_key(), available=True, latency_ms=10)
+
+            links = storage.get_subscription_links(only_available=True, limit=10)
+            self.assertEqual(len(links), 1)
+            self.assertTrue(links[0].startswith("vmess://"))
+            encoded = links[0][len("vmess://") :]
+            pad = "=" * ((4 - len(encoded) % 4) % 4)
+            parsed = json.loads(base64.urlsafe_b64decode((encoded + pad).encode("utf-8")).decode("utf-8"))
+            self.assertTrue(str(parsed.get("ps") or "").startswith("1_美国:洛杉矶_直连_未知_未检测GPT_"))
+            self.assertRegex(str(parsed.get("ps") or ""), r"_\d{14}$")
+
     def test_global_subscription_update_proxy_setting(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"
@@ -194,6 +332,17 @@ class TestSQLiteProxyStorage(unittest.TestCase):
             self.assertEqual(storage.get_subscription_update_proxy_key(), "abc123")
             storage.set_subscription_update_proxy_key("")
             self.assertEqual(storage.get_subscription_update_proxy_key(), "")
+
+    def test_backend_default_port_range_setting(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "db.sqlite3"
+            storage = SQLiteProxyStorage(db)
+            self.assertEqual(storage.get_backend_default_port_range(), {"start": 1081, "end": 1180})
+            saved = storage.set_backend_default_port_range(20000, 20100)
+            self.assertEqual(saved, {"start": 20000, "end": 20100})
+            self.assertEqual(storage.get_backend_default_port_range(), {"start": 20000, "end": 20100})
+            with self.assertRaises(ValueError):
+                storage.set_backend_default_port_range(30000, 20000)
 
     def test_concurrent_write_updates_are_consistent(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -53,7 +53,7 @@ def parse_source_content(content: str, source_name: str = "") -> tuple[list[Prox
             for match in matches:
                 try:
                     nodes.append(parse_proxy_link(match))
-                except ParseError:
+                except (ParseError, ValueError):
                     invalid.append(match)
             continue
 
@@ -79,14 +79,19 @@ def parse_proxy_link(raw_link: str) -> ProxyNode:
     if scheme not in _SUPPORTED_SCHEMES:
         raise ParseError(f"unsupported scheme: {scheme}")
 
-    if scheme == "vmess":
-        return _parse_vmess(text)
-    if scheme == "ss":
-        return _parse_ss(text)
-    if scheme == "ssr":
-        return _parse_ssr(text)
+    try:
+        if scheme == "vmess":
+            return _parse_vmess(text)
+        if scheme == "ss":
+            return _parse_ss(text)
+        if scheme == "ssr":
+            return _parse_ssr(text)
 
-    return _parse_url_like(text, scheme)
+        return _parse_url_like(text, scheme)
+    except ParseError:
+        raise
+    except ValueError as exc:
+        raise ParseError(str(exc)) from exc
 
 
 def _parse_vmess(link: str) -> ProxyNode:

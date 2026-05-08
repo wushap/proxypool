@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, quote, urlencode, urlsplit, urlunsplit
 
 from proxypool.models import ProxyNode
 
@@ -207,8 +209,10 @@ class SQLiteProxyStorage:
         available: bool | None = None,
         source_keyword: str | None = None,
         geo_filter: str | None = None,
+        geo_country: str | None = None,
         geo_location: str | None = None,
         openai_filter: str | None = None,
+        ip_purity_filter: str | None = None,
         fallback_front_filter: str | None = None,
         sort_by: str = "latency",
         sort_order: str = "asc",
@@ -223,12 +227,23 @@ class SQLiteProxyStorage:
             where.append("available = ?")
             params.append(1 if available else 0)
         if source_keyword:
-            where.append("source LIKE ?")
-            params.append(f"%{source_keyword.strip()}%")
+            source_text = str(source_keyword).strip()
+            if source_text == "-":
+                where.append("source = ''")
+            else:
+                where.append("source LIKE ?")
+                params.append(f"%{source_text}%")
         if geo_filter == "has":
             where.append("(country <> '' OR city <> '')")
         elif geo_filter == "none":
             where.append("(country = '' AND city = '')")
+        if geo_country:
+            country_text = str(geo_country).strip()
+            if country_text == "-":
+                where.append("country = ''")
+            else:
+                where.append("country = ?")
+                params.append(country_text)
         if geo_location:
             text = str(geo_location).strip()
             if ":" in text:
@@ -254,6 +269,16 @@ class SQLiteProxyStorage:
             where.append("openai_unlocked = 0")
         elif openai_filter == "unchecked":
             where.append("openai_unlocked IS NULL")
+        if ip_purity_filter == "checked":
+            where.append("ip_purity_checked_at IS NOT NULL")
+        elif ip_purity_filter == "unchecked":
+            where.append("ip_purity_checked_at IS NULL")
+        elif ip_purity_filter == "residential":
+            where.append("ip_purity_level = '家宽'")
+        elif ip_purity_filter == "non_residential":
+            where.append("ip_purity_level = '非家宽'")
+        elif ip_purity_filter == "unknown":
+            where.append("ip_purity_level = '未知'")
         if fallback_front_filter == "has":
             where.append("fallback_front_keys_json <> '[]'")
         elif fallback_front_filter == "none":
@@ -291,6 +316,8 @@ class SQLiteProxyStorage:
         limit: int = 200,
         only_unchecked: bool = False,
         only_available: bool = False,
+        only_unavailable: bool = False,
+        min_last_checked_age_hours: int = 0,
         protocols: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         where: list[str] = []
@@ -300,6 +327,15 @@ class SQLiteProxyStorage:
             where.append("last_checked_at IS NULL")
         if only_available:
             where.append("available = 1")
+        if only_unavailable:
+            where.append("available = 0")
+        if not only_unchecked:
+            min_age_hours = max(0, int(min_last_checked_age_hours or 0))
+            if min_age_hours > 0:
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=min_age_hours)).isoformat()
+                where.append("last_checked_at IS NOT NULL")
+                where.append("last_checked_at <= ?")
+                params.append(cutoff)
         if protocols:
             placeholders = ",".join("?" for _ in protocols)
             where.append(f"protocol IN ({placeholders})")
@@ -644,6 +680,32 @@ class SQLiteProxyStorage:
     def set_subscription_update_proxy_key(self, normalized_key: str) -> None:
         self.set_app_setting("subscription_update_proxy_key", str(normalized_key or "").strip()[:64])
 
+    def get_backend_default_port_range(self) -> dict[str, int]:
+        start_raw = self.get_app_setting("backend_default_port_start", "1081")
+        end_raw = self.get_app_setting("backend_default_port_end", "1180")
+        try:
+            start = int(start_raw)
+        except Exception:
+            start = 1081
+        try:
+            end = int(end_raw)
+        except Exception:
+            end = 1180
+        start = max(1, min(65535, start))
+        end = max(1, min(65535, end))
+        if start > end:
+            start, end = end, start
+        return {"start": start, "end": end}
+
+    def set_backend_default_port_range(self, start: int, end: int) -> dict[str, int]:
+        safe_start = max(1, min(65535, int(start)))
+        safe_end = max(1, min(65535, int(end)))
+        if safe_start > safe_end:
+            raise ValueError("invalid port range: start must be <= end")
+        self.set_app_setting("backend_default_port_start", str(safe_start))
+        self.set_app_setting("backend_default_port_end", str(safe_end))
+        return {"start": safe_start, "end": safe_end}
+
     def get_subscription(self, subscription_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -832,14 +894,32 @@ class SQLiteProxyStorage:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT raw_link FROM proxies
+                SELECT
+                    normalized_key,
+                    raw_link,
+                    country,
+                    city,
+                    fallback_front_keys_json,
+                    ip_purity_level,
+                    openai_unlocked,
+                    created_at
+                FROM proxies
                 {where_clause}
                 ORDER BY latency_ms ASC, updated_at DESC
                 LIMIT ?
                 """,
                 params,
             ).fetchall()
-        return [str(row["raw_link"]) for row in rows]
+
+        records = [dict(row) for row in rows]
+        serial_map: dict[str, int] = {
+            str(item.get("normalized_key") or ""): idx + 1 for idx, item in enumerate(records)
+        }
+        links: list[str] = []
+        for idx, item in enumerate(records, start=1):
+            alias = _build_export_alias(item, serial=idx, serial_map=serial_map)
+            links.append(_rewrite_share_alias(str(item.get("raw_link") or ""), alias))
+        return links
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
@@ -872,3 +952,145 @@ class SQLiteProxyStorage:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _build_export_alias(row: dict[str, Any], serial: int, serial_map: dict[str, int]) -> str:
+    country = str(row.get("country") or "").strip() or "未知"
+    city = str(row.get("city") or "").strip() or "未知"
+    geo = f"{country}:{city}"
+
+    fallback_keys = _parse_fallback_keys(row.get("fallback_front_keys_json"))
+    chain_serials = [str(serial_map[key]) for key in fallback_keys if key in serial_map]
+    if chain_serials:
+        route = f"链式({'.'.join(chain_serials)})"
+    elif fallback_keys:
+        route = "链式(?)"
+    else:
+        route = "直连"
+
+    purity_raw = str(row.get("ip_purity_level") or "").strip()
+    if purity_raw == "家宽":
+        purity = "家宽"
+    elif purity_raw == "非家宽":
+        purity = "非家宽"
+    else:
+        purity = "未知"
+
+    unlocked = row.get("openai_unlocked")
+    if unlocked is None:
+        gpt = "未检测GPT"
+    elif bool(unlocked):
+        gpt = "已解锁GPT"
+    else:
+        gpt = "未解锁GPT"
+
+    imported = _format_import_time(row.get("created_at"))
+    return f"{int(serial)}_{geo}_{route}_{purity}_{gpt}_{imported}"
+
+
+def _parse_fallback_keys(value: Any) -> list[str]:
+    text = str(value or "[]")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    keys: list[str] = []
+    seen: set[str] = set()
+    for item in parsed:
+        key = str(item or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+    return keys
+
+
+def _format_import_time(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "00000000000000"
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return dt.astimezone().strftime("%Y%m%d%H%M%S")
+    except Exception:
+        digits = "".join(ch for ch in text if ch.isdigit())
+        if len(digits) >= 14:
+            return digits[:14]
+        return "00000000000000"
+
+
+def _rewrite_share_alias(raw_link: str, alias: str) -> str:
+    link = str(raw_link or "").strip()
+    if not link:
+        return link
+    if link.startswith("vmess://"):
+        return _rewrite_vmess_alias(link, alias)
+    if link.startswith("ssr://"):
+        return _rewrite_ssr_alias(link, alias)
+    if "://" in link:
+        return _rewrite_url_fragment_alias(link, alias)
+    return link
+
+
+def _rewrite_url_fragment_alias(link: str, alias: str) -> str:
+    encoded = quote(alias, safe="")
+    try:
+        split = urlsplit(link)
+        return urlunsplit(split._replace(fragment=encoded))
+    except Exception:
+        if "#" in link:
+            return link.split("#", 1)[0] + "#" + encoded
+        return link + "#" + encoded
+
+
+def _rewrite_vmess_alias(link: str, alias: str) -> str:
+    payload = link[len("vmess://") :]
+    text = _safe_b64_decode_to_text(payload)
+    if not text:
+        return _rewrite_url_fragment_alias(link, alias)
+    try:
+        data = json.loads(text)
+    except Exception:
+        return _rewrite_url_fragment_alias(link, alias)
+    if not isinstance(data, dict):
+        return _rewrite_url_fragment_alias(link, alias)
+    data["ps"] = alias
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).decode("utf-8").rstrip("=")
+    return "vmess://" + encoded
+
+
+def _rewrite_ssr_alias(link: str, alias: str) -> str:
+    payload = link[len("ssr://") :]
+    text = _safe_b64_decode_to_text(payload)
+    if not text:
+        return _rewrite_url_fragment_alias(link, alias)
+    if "/?" in text:
+        base, query = text.split("/?", 1)
+        params = parse_qs(query, keep_blank_values=True)
+    else:
+        base = text
+        params = {}
+    remarks = base64.urlsafe_b64encode(alias.encode("utf-8")).decode("utf-8").rstrip("=")
+    params["remarks"] = [remarks]
+    rebuilt = f"{base}/?{urlencode(params, doseq=True)}"
+    encoded = base64.urlsafe_b64encode(rebuilt.encode("utf-8")).decode("utf-8").rstrip("=")
+    return "ssr://" + encoded
+
+
+def _safe_b64_decode_to_text(payload: str) -> str:
+    text = str(payload or "").strip()
+    if not text:
+        return ""
+    padded = text + "=" * ((4 - len(text) % 4) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(padded.encode("utf-8"))
+    except Exception:
+        return ""
+    try:
+        return raw.decode("utf-8")
+    except Exception:
+        return ""

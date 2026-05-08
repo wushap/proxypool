@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from proxypool.storage.sqlite import SQLiteProxyStorage
+from proxypool.tasks.manager import TaskCancelled
 from proxypool.tester.singbox import ProbeResult, SingboxProber
 
 
@@ -32,22 +33,59 @@ class TesterService:
         self.storage = storage
         self.prober = prober or SingboxProber()
 
+    async def run_one(
+        self,
+        normalized_key: str,
+        fallback_front_proxy_keys: list[str] | None = None,
+        fallback_front_max_attempts: int = 0,
+    ) -> ProbeResult:
+        key = str(normalized_key or "").strip()
+        if not key:
+            raise ValueError("normalized_key is empty")
+        node = self.storage.get_proxy_by_key(key)
+        if not node:
+            raise LookupError("proxy not found")
+
+        fallback_nodes: list[dict] = []
+        fallback_limit = max(0, int(fallback_front_max_attempts or 0))
+        if fallback_limit > 0:
+            fallback_nodes = self.storage.get_proxies_by_keys(_clean_proxy_keys(fallback_front_proxy_keys))[:fallback_limit]
+
+        result, fallback_success_keys = await self._probe_node_once(node=node, fallback_nodes=fallback_nodes)
+        self.storage.update_test_result(
+            normalized_key=result.normalized_key,
+            available=result.available,
+            latency_ms=result.latency_ms,
+            openai_unlocked=result.openai_unlocked,
+            openai_status=result.openai_status,
+            fallback_front_keys=fallback_success_keys,
+            error=result.error,
+        )
+        return result
+
     async def run_batch(
         self,
         limit: int = 0,
         concurrency: int = 50,
         only_unchecked: bool = False,
         only_available: bool = False,
+        only_unavailable: bool = False,
+        min_last_checked_age_hours: int = 0,
         protocols: list[str] | None = None,
         fallback_front_proxy_keys: list[str] | None = None,
         fallback_front_max_attempts: int = 0,
         max_fail_count: int = 20,
         progress_cb: Callable[[dict], None] | None = None,
+        stop_cb: Callable[[], bool] | None = None,
     ) -> BatchTestReport:
+        if stop_cb and stop_cb():
+            raise TaskCancelled("cancel requested")
         candidates = self.storage.get_candidates_for_test(
             limit=limit,
             only_unchecked=only_unchecked,
             only_available=only_available,
+            only_unavailable=only_unavailable,
+            min_last_checked_age_hours=min_last_checked_age_hours,
             protocols=protocols,
         )
         report = BatchTestReport(requested=len(candidates))
@@ -141,11 +179,19 @@ class TesterService:
 
             probe_tasks = [asyncio.create_task(_probe_one(node)) for node in candidates]
             for fut in asyncio.as_completed(probe_tasks):
+                if stop_cb and stop_cb():
+                    for task in probe_tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*probe_tasks, return_exceptions=True)
+                    raise TaskCancelled("cancel requested")
                 result, fallback_success_keys = await fut
                 _handle_result(result, fallback_success_keys)
         else:
             # Fallback for non-async prober implementations.
             for node in candidates:
+                if stop_cb and stop_cb():
+                    raise TaskCancelled("cancel requested")
                 try:
                     result = self.prober.probe(node)
                 except Exception as exc:  # pragma: no cover - runtime guard
@@ -172,6 +218,40 @@ class TesterService:
             )
         return report
 
+    async def _probe_node_once(self, node: dict, fallback_nodes: list[dict] | None = None) -> tuple[ProbeResult, list[str]]:
+        async_probe = getattr(self.prober, "probe_async", None)
+        async_chain_probe = getattr(self.prober, "probe_with_front_proxy_async", None)
+        fallback_success_keys: list[str] = []
+        try:
+            if callable(async_probe):
+                result = await async_probe(node)
+                if (
+                    not result.available
+                    and fallback_nodes
+                    and callable(async_chain_probe)
+                ):
+                    chain_results: list[ProbeResult] = []
+                    for front in fallback_nodes:
+                        front_key = str(front.get("normalized_key") or "")
+                        node_key = str(node.get("normalized_key") or "")
+                        if not front_key or front_key == node_key:
+                            continue
+                        chain_result = await async_chain_probe(node, front)
+                        if chain_result.available:
+                            fallback_success_keys.append(front_key)
+                            chain_results.append(chain_result)
+                    if chain_results:
+                        result = _select_preferred_success(chain_results)
+            else:
+                result = self.prober.probe(node)
+        except Exception as exc:  # pragma: no cover - runtime guard
+            result = ProbeResult(
+                normalized_key=str(node.get("normalized_key") or ""),
+                available=False,
+                error=f"probe exception: {exc}",
+            )
+        return result, fallback_success_keys
+
     async def run_openai_check_batch(
         self,
         limit: int = 200,
@@ -179,7 +259,10 @@ class TesterService:
         only_available: bool = True,
         protocols: list[str] | None = None,
         progress_cb: Callable[[dict], None] | None = None,
+        stop_cb: Callable[[], bool] | None = None,
     ) -> BatchOpenAIReport:
+        if stop_cb and stop_cb():
+            raise TaskCancelled("cancel requested")
         candidates = self.storage.get_candidates_for_test(
             limit=limit,
             only_unchecked=False,
@@ -265,9 +348,17 @@ class TesterService:
 
             tasks = [asyncio.create_task(_probe_one(node)) for node in candidates]
             for fut in asyncio.as_completed(tasks):
+                if stop_cb and stop_cb():
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise TaskCancelled("cancel requested")
                 _handle_result(await fut)
         else:
             for node in candidates:
+                if stop_cb and stop_cb():
+                    raise TaskCancelled("cancel requested")
                 try:
                     result = self.prober.probe(node)
                 except Exception as exc:  # pragma: no cover - runtime guard

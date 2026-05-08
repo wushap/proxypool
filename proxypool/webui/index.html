@@ -9,6 +9,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <script src="https://unpkg.com/element-plus/dist/index.full.min.js"></script>
     <style>
       :root {
         --bg: #f5f8f1;
@@ -82,6 +84,29 @@
             <div class="flex items-end md:col-span-2">
               <button @click="onSaveTestFallback" :disabled="isActionRunning('saveTestFallback')" class="w-full rounded border border-cyan-300 px-2 py-2 text-xs text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveTestFallback', '保存测速回退配置', '保存中...') }}</button>
             </div>
+            <div class="md:col-span-3">
+              <p class="text-xs font-semibold text-slate-700">测速状态筛选</p>
+              <select v-model="testRunFilter.status" class="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs">
+                <option value="all">全部</option>
+                <option value="down">仅不可用(Down)</option>
+                <option value="up">仅可用(Up)</option>
+                <option value="unchecked">仅未测速</option>
+              </select>
+            </div>
+            <div class="md:col-span-3">
+              <p class="text-xs font-semibold text-slate-700">最小复测间隔(天)</p>
+              <input
+                v-model.number="testRunFilter.min_retest_days"
+                type="number"
+                min="0"
+                max="365"
+                step="0.5"
+                class="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs"
+              />
+            </div>
+            <div class="flex items-end md:col-span-2">
+              <button @click="onSaveTestRunFilter" :disabled="isActionRunning('saveTestRunFilter')" class="w-full rounded border border-indigo-300 px-2 py-2 text-xs text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveTestRunFilter', '保存测速筛选', '保存中...') }}</button>
+            </div>
             <div class="md:col-span-2">
               <p class="text-xs font-semibold text-slate-700">测速并发</p>
               <input v-model.number="taskConcurrency.tester" type="number" min="1" max="500" class="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs" />
@@ -101,7 +126,7 @@
             <div class="flex items-end md:col-span-2">
               <button @click="onSaveTaskConcurrency" :disabled="isActionRunning('saveTaskConcurrency')" class="w-full rounded border border-emerald-300 px-2 py-2 text-xs text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveTaskConcurrency', '保存并发设置', '保存中...') }}</button>
             </div>
-            <p class="md:col-span-12 text-[11px] text-slate-500">直连失败时，会按序号顺序尝试这些前置代理做链式连通测试；成功会给节点标记“可连通前置”。</p>
+            <p class="md:col-span-12 text-[11px] text-slate-500">直连失败时，会按序号顺序尝试这些前置代理做链式连通测试；成功会给节点标记“可连通前置”。测速筛选会在任务启动时生效。</p>
           </div>
           <input
             ref="fileInput"
@@ -112,15 +137,58 @@
             @change="onImportFilesSelected"
           />
           <p v-if="message" class="mt-4 text-sm" :class="messageError ? 'text-rose-700' : 'text-emerald-700'">{{ message }}</p>
-          <div v-if="taskState.active" class="mt-4 rounded-xl border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-900">
-            <div class="flex items-center justify-between">
-              <span>{{ taskState.label }}：{{ taskState.message }}</span>
-              <span>{{ taskState.completed }}/{{ taskState.total || '-' }}</span>
+          <div class="mt-4 rounded-xl border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-900">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="font-semibold">任务中心</span>
+              <button
+                @click="onRefreshTasks"
+                :disabled="isActionRunning('refreshTasks')"
+                class="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-800 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {{ buttonLabel('refreshTasks', '刷新任务', '刷新中...') }}
+              </button>
             </div>
-            <div class="mt-2 h-2 w-full rounded bg-cyan-100">
-              <div class="h-2 rounded bg-cyan-600 transition-all duration-300" :style="{ width: (taskState.progress || 0) + '%' }"></div>
+            <div v-if="!taskItems.length" class="mt-2 text-xs text-cyan-700">暂无任务</div>
+            <div v-else class="mt-2 space-y-2">
+              <div
+                v-for="task in taskItems"
+                :key="task.task_id"
+                class="rounded border border-cyan-100 bg-white/70 p-2 text-xs"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-medium">{{ taskLabel(task.kind) }}</span>
+                  <div class="flex items-center gap-2">
+                    <span :class="taskStatusClass(task.status)">{{ taskStatusText(task.status) }}</span>
+                    <button
+                      v-if="isTaskStoppable(task)"
+                      @click="onStopTask(task)"
+                      :disabled="isActionRunning('stopTask-' + task.task_id)"
+                      class="rounded border border-rose-300 px-2 py-0.5 text-[11px] text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {{ buttonLabel('stopTask-' + task.task_id, '停止', '停止中...') }}
+                    </button>
+                    <button
+                      v-if="isTaskDeletable(task)"
+                      @click="onDeleteTask(task)"
+                      :disabled="isActionRunning('deleteTask-' + task.task_id)"
+                      class="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {{ buttonLabel('deleteTask-' + task.task_id, '删除', '删除中...') }}
+                    </button>
+                  </div>
+                </div>
+                <div class="mt-1 h-1.5 w-full rounded bg-cyan-100">
+                  <div class="h-1.5 rounded bg-cyan-600 transition-all duration-300" :style="{ width: (task.progress || 0) + '%' }"></div>
+                </div>
+                <div class="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] text-slate-700">
+                  <span>ID {{ shortTaskId(task.task_id) }}</span>
+                  <span>{{ task.completed || 0 }}/{{ task.total || '-' }}</span>
+                  <span>成功 {{ task.success || 0 }} / 失败 {{ task.failed || 0 }}</span>
+                  <span>{{ task.message || '-' }}</span>
+                  <span>{{ formatTime(task.updated_at) }}</span>
+                </div>
+              </div>
             </div>
-            <div class="mt-2 text-xs">成功 {{ taskState.success }} / 失败 {{ taskState.failed }} / 进度 {{ taskState.progress }}%</div>
           </div>
         </header>
 
@@ -132,7 +200,44 @@
           </article>
         </section>
 
-        <section class="glass mt-6 rounded-2xl p-5 pulse-in">
+        <section class="glass mt-6 rounded-2xl p-4 pulse-in">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-semibold text-slate-700">页面显示</span>
+            <button
+              @click="toggleSectionVisibility('subscriptions')"
+              class="rounded border px-3 py-1 text-xs"
+              :class="sectionVisibility.subscriptions ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100'"
+            >
+              订阅管理 {{ sectionVisibility.subscriptions ? '隐藏' : '显示' }}
+            </button>
+            <button
+              @click="toggleSectionVisibility('backend')"
+              class="rounded border px-3 py-1 text-xs"
+              :class="sectionVisibility.backend ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100'"
+            >
+              sing-box后端 {{ sectionVisibility.backend ? '隐藏' : '显示' }}
+            </button>
+            <button
+              @click="toggleSectionVisibility('proxies')"
+              class="rounded border px-3 py-1 text-xs"
+              :class="sectionVisibility.proxies ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100'"
+            >
+              代理节点 {{ sectionVisibility.proxies ? '隐藏' : '显示' }}
+            </button>
+          </div>
+        </section>
+
+        <datalist id="proxy-key-options">
+          <option
+            v-for="item in allProxies"
+            :key="item.normalized_key"
+            :value="'#' + getSerial(item.normalized_key)"
+          >
+            #{{ getSerial(item.normalized_key) }} {{ item.protocol }} {{ item.host }}:{{ item.port }}
+          </option>
+        </datalist>
+
+        <section v-if="sectionVisibility.subscriptions" class="glass mt-6 rounded-2xl p-5 pulse-in">
           <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 class="text-lg font-bold">订阅管理</h2>
             <div class="flex flex-wrap gap-2">
@@ -221,7 +326,7 @@
           </div>
         </section>
 
-        <section class="glass mt-6 rounded-2xl p-5 pulse-in">
+        <section v-if="sectionVisibility.backend" class="glass mt-6 rounded-2xl p-5 pulse-in">
           <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 class="text-lg font-bold">sing-box 后端</h2>
             <div class="flex flex-wrap gap-2">
@@ -239,6 +344,16 @@
             <span class="ml-3">自动重启上限: <b>{{ backendStatus.auto_restart_max ?? 0 }}</b></span>
             <span class="ml-3">已尝试: <b>{{ backendStatus.auto_restart_attempts ?? 0 }}</b></span>
           </div>
+          <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p class="mb-2 text-xs font-semibold text-slate-700">默认入站端口范围</p>
+            <p class="mb-2 text-[11px] text-slate-500">新增链路/按地区生成链路时，将在该范围内自动分配未占用端口。</p>
+            <div class="grid gap-2 md:grid-cols-6">
+              <input v-model.number="backendPortRange.start" type="number" min="1" max="65535" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1" placeholder="起始端口" />
+              <input v-model.number="backendPortRange.end" type="number" min="1" max="65535" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1" placeholder="结束端口" />
+              <button @click="onSaveBackendPortRange" :disabled="isActionRunning('saveBackendPortRange')" class="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60 md:col-span-1">{{ buttonLabel('saveBackendPortRange', '保存范围', '保存中...') }}</button>
+              <div class="text-xs text-slate-500 md:col-span-3 flex items-center">当前: {{ backendPortRange.start }} - {{ backendPortRange.end }}</div>
+            </div>
+          </div>
 
           <h3 class="mb-2 text-sm font-semibold text-slate-700">链式代理管理</h3>
           <p class="mb-3 text-xs text-slate-500">链路顺序：前置代理 → 中间代理 → 落地代理。单跳时只填写落地代理。</p>
@@ -255,12 +370,22 @@
             </div>
           </div>
           <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <p class="mb-2 text-xs font-semibold text-slate-700">按地区批量填充链路列</p>
-            <p class="mb-2 text-[11px] text-slate-500">会按当前序号顺序（已按延迟排序）填入同一 `国家:城市` 的代理，可填充到现有链路或直接生成新链路。</p>
+            <p class="mb-2 text-xs font-semibold text-slate-700">按地区/按ChatGPT解锁批量填充链路列</p>
+            <p class="mb-2 text-[11px] text-slate-500">会按当前序号顺序（已按延迟排序）筛选代理，可按 `国家:城市` 或 ChatGPT 解锁状态填充到现有链路，或直接生成新链路。</p>
             <div class="grid gap-2 md:grid-cols-6">
-              <select v-model="routeGeoFill.geo_location" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2">
+              <select v-model="routeGeoFill.mode" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1">
+                <option value="geo">按地区</option>
+                <option value="openai">按ChatGPT解锁</option>
+              </select>
+              <select v-if="routeGeoFill.mode === 'geo'" v-model="routeGeoFill.geo_location" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2">
                 <option value="">选择地区(国家:城市)</option>
                 <option v-for="g in geoLocationOptions" :key="'route-geo-' + g" :value="g">{{ g }}</option>
+              </select>
+              <select v-else v-model="routeGeoFill.openai_status" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2">
+                <option value="">选择ChatGPT解锁状态</option>
+                <option value="unlocked">已解锁</option>
+                <option value="blocked">未解锁</option>
+                <option value="unchecked">未检测</option>
               </select>
               <select v-model="routeGeoFill.target_column" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1">
                 <option value="front_proxy_key">前置代理列</option>
@@ -271,15 +396,6 @@
               <button @click="onGenerateRoutesByGeo" :disabled="isActionRunning('genRouteByGeo')" class="rounded border border-teal-300 px-2 py-1 text-xs text-teal-700 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60 md:col-span-2">{{ buttonLabel('genRouteByGeo', '按地区生成新链路', '生成中...') }}</button>
             </div>
           </div>
-          <datalist id="proxy-key-options">
-            <option
-              v-for="item in allProxies"
-              :key="item.normalized_key"
-              :value="'#' + getSerial(item.normalized_key)"
-            >
-              #{{ getSerial(item.normalized_key) }} {{ item.protocol }} {{ item.host }}:{{ item.port }}
-            </option>
-          </datalist>
           <div class="overflow-x-auto">
             <table class="min-w-full border-separate border-spacing-y-2 text-xs">
               <thead>
@@ -394,68 +510,9 @@
           </div>
         </section>
 
-        <section class="glass mt-6 rounded-2xl p-5 pulse-in">
+        <section v-if="sectionVisibility.proxies" class="glass mt-6 rounded-2xl p-5 pulse-in">
           <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 class="text-lg font-bold">代理节点</h2>
-            <div class="flex items-center gap-2">
-              <select v-model="filterProtocol" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                <option value="">全部协议</option>
-                <option v-for="p in protocolOptions" :key="p" :value="p">{{ p }}</option>
-              </select>
-              <select v-model="filterAvailable" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                <option value="">全部状态</option>
-                <option value="true">可用</option>
-                <option value="false">不可用</option>
-              </select>
-              <select v-model="filterGeo" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                <option value="">IP位置: 全部</option>
-                <option value="has">IP位置: 已补全</option>
-                <option value="none">IP位置: 未补全</option>
-              </select>
-              <select v-model="filterGeoLocation" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                <option value="">国家:城市 全部</option>
-                <option v-for="g in geoLocationOptions" :key="g" :value="g">{{ g }}</option>
-              </select>
-              <select v-model="filterOpenai" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                <option value="">ChatGPT: 全部</option>
-                <option value="unlocked">ChatGPT: 已解锁</option>
-                <option value="blocked">ChatGPT: 未解锁</option>
-                <option value="unchecked">ChatGPT: 未检测</option>
-              </select>
-              <select v-model="filterFallbackFront" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
-                <option value="">可连通前置: 全部</option>
-                <option value="has">可连通前置: 有标记</option>
-                <option value="none">可连通前置: 无标记</option>
-              </select>
-              <input
-                v-model.trim="filterSource"
-                type="text"
-                placeholder="来源过滤(关键字)"
-                class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-              />
-              <button @click="onLoadDataClick" :disabled="isActionRunning('loadData')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('loadData', '刷新', '刷新中...') }}</button>
-            </div>
-          </div>
-          <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <div class="mb-2 flex items-center justify-between">
-              <p class="text-xs font-semibold text-slate-700">列管理（可隐藏/拖动排序）</p>
-              <button @click="resetProxyColumns" class="rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100">重置默认</button>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <label
-                v-for="(col, idx) in proxyColumnsOrdered"
-                :key="'mgr-' + col.key"
-                class="flex cursor-move items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs"
-                draggable="true"
-                @dragstart="onProxyColumnDragStart(idx)"
-                @dragover.prevent
-                @drop="onProxyColumnDrop(idx)"
-              >
-                <span class="text-slate-400">::</span>
-                <input type="checkbox" v-model="proxyColumnConfigs[col.key].visible" @change="persistProxyColumns" />
-                <span>{{ col.label }}</span>
-              </label>
-            </div>
           </div>
           <div class="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
             <div class="flex items-center gap-2">
@@ -463,13 +520,101 @@
               <select v-model.number="pagination.proxies.perPage" @change="onPaginationPageSizeChange('proxies')" class="rounded border border-slate-300 bg-white px-2 py-1">
                 <option v-for="n in pageSizeOptions" :key="'proxy-size-' + n" :value="n">{{ n }}</option>
               </select>
+              <el-button size="small" plain @click="proxyConfigDialogVisible = true">配置筛选/列</el-button>
             </div>
             <div class="flex items-center gap-2">
+              <button @click="clearProxyFilters" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100">清空筛选</button>
+              <button @click="resetProxyColumns" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100">重置列</button>
+              <button @click="onLoadDataClick" :disabled="isActionRunning('loadData')" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('loadData', '刷新', '刷新中...') }}</button>
               <button @click="goPrevPage('proxies')" :disabled="!canPrevPage('proxies')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">上一页</button>
               <span>{{ pageIndicator('proxies') }}</span>
               <button @click="goNextPage('proxies')" :disabled="!canNextPage('proxies')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">下一页</button>
             </div>
           </div>
+          <el-dialog v-model="proxyConfigDialogVisible" title="表格配置（筛选 + 列管理 + 列名）" width="min(1100px, 95vw)" append-to-body>
+            <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p class="text-xs font-semibold text-slate-700">筛选条件、列顺序、列显示与列名都在此统一配置</p>
+              <div class="flex flex-wrap items-center gap-2">
+                <el-button size="small" @click="clearProxyFilters">清空筛选</el-button>
+                <el-button size="small" @click="resetProxyColumns">重置列配置</el-button>
+              </div>
+            </div>
+            <el-table :data="proxyColumnConfigRows" size="small" border stripe max-height="56vh">
+              <el-table-column label="顺序" width="132">
+                <template #default="{ row }">
+                  <div class="flex items-center gap-1">
+                    <el-button size="small" text :disabled="row.idx === 0" @click="moveProxyColumn(row.key, -1)">上移</el-button>
+                    <el-button size="small" text :disabled="row.idx >= proxyColumnConfigRows.length - 1" @click="moveProxyColumn(row.key, 1)">下移</el-button>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="key" label="字段" width="120" />
+              <el-table-column label="显示" width="100">
+                <template #default="{ row }">
+                  <el-switch v-model="proxyColumnConfigs[row.key].visible" @change="persistProxyColumns" />
+                </template>
+              </el-table-column>
+              <el-table-column label="列名" width="220">
+                <template #default="{ row }">
+                  <el-input v-model="proxyColumnConfigs[row.key].label" size="small" @change="persistProxyColumns" />
+                </template>
+              </el-table-column>
+              <el-table-column label="筛选">
+                <template #default="{ row }">
+                  <template v-if="row.key === 'protocol'">
+                    <el-select v-model="proxyFilters.protocol" clearable :placeholder="`协议: 全部 (${allProxyCount})`" size="small" style="width: 220px">
+                      <el-option v-for="opt in protocolFilterOptions" :key="'flt-protocol-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
+                    </el-select>
+                  </template>
+                  <template v-else-if="row.key === 'status'">
+                    <el-select v-model="proxyFilters.available" clearable :placeholder="`状态: 全部 (${allProxyCount})`" size="small" style="width: 220px">
+                      <el-option v-for="opt in statusFilterOptions" :key="'flt-status-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
+                    </el-select>
+                  </template>
+                  <template v-else-if="row.key === 'geo'">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <el-select v-model="proxyFilters.geo" clearable :placeholder="`IP位置: 全部 (${allProxyCount})`" size="small" style="width: 220px">
+                        <el-option v-for="opt in geoFilterOptions" :key="'flt-geo-flag-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
+                      </el-select>
+                      <el-select v-model="proxyFilters.geo_country" clearable :placeholder="`国家: 全部 (${allProxyCount})`" size="small" style="width: 220px" @change="onGeoCountryChanged">
+                        <el-option v-for="opt in geoCountryOptions" :key="'flt-geo-country-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
+                      </el-select>
+                      <el-select v-model="proxyFilters.geo_location" clearable :placeholder="`国家:城市 全部 (${geoLocationFilterOptions.length})`" size="small" style="width: 260px">
+                        <el-option v-for="opt in geoLocationFilterOptions" :key="'flt-geo-location-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
+                      </el-select>
+                    </div>
+                  </template>
+                  <template v-else-if="row.key === 'purity'">
+                    <el-select v-model="proxyFilters.ip_purity" clearable :placeholder="`IP纯净度: 全部 (${allProxyCount})`" size="small" style="width: 240px">
+                      <el-option v-for="opt in ipPurityFilterOptions" :key="'flt-purity-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
+                    </el-select>
+                  </template>
+                  <template v-else-if="row.key === 'unlock'">
+                    <el-select v-model="proxyFilters.openai" clearable :placeholder="`ChatGPT: 全部 (${allProxyCount})`" size="small" style="width: 240px">
+                      <el-option v-for="opt in openaiFilterOptions" :key="'flt-openai-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
+                    </el-select>
+                  </template>
+                  <template v-else-if="row.key === 'fallback_front'">
+                    <el-select v-model="proxyFilters.fallback_front" clearable :placeholder="`可连通前置: 全部 (${allProxyCount})`" size="small" style="width: 240px">
+                      <el-option v-for="opt in fallbackFrontFilterOptions" :key="'flt-fallback-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
+                    </el-select>
+                  </template>
+                  <template v-else-if="row.key === 'source'">
+                    <el-select v-model="proxyFilters.source" clearable filterable allow-create default-first-option :placeholder="`来源: 全部 (${allProxyCount})`" size="small" style="width: 320px">
+                      <el-option v-for="opt in sourceFilterOptions" :key="'flt-source-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
+                    </el-select>
+                  </template>
+                  <span v-else class="text-slate-400">-</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <template #footer>
+              <div class="flex items-center justify-end gap-2">
+                <el-button @click="proxyConfigDialogVisible = false">取消</el-button>
+                <el-button type="primary" :loading="isActionRunning('loadData')" @click="applyProxyConfig">应用并刷新</el-button>
+              </div>
+            </template>
+          </el-dialog>
           <div class="overflow-x-auto">
             <table class="min-w-full border-separate border-spacing-y-2 text-sm">
               <thead>
@@ -516,6 +661,15 @@
                     <template v-else-if="col.key === 'source'">
                       <span class="text-slate-500">{{ shortSource(item.source) }}</span>
                     </template>
+                    <template v-else-if="col.key === 'action'">
+                      <button
+                        @click="onTestSingleProxy(item)"
+                        :disabled="isActionRunning(`testProxy-${item.normalized_key}`)"
+                        class="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {{ buttonLabel(`testProxy-${item.normalized_key}`, '测试', '测试中...') }}
+                      </button>
+                    </template>
                   </td>
                 </tr>
               </tbody>
@@ -527,7 +681,40 @@
 
     <script>
       const { createApp } = Vue;
-      createApp({
+      const DEFAULT_PROXY_COLUMN_CONFIGS = {
+        serial: { label: "序号", visible: true },
+        protocol: { label: "协议", visible: true },
+        address: { label: "地址", visible: true },
+        latency: { label: "延迟", visible: true },
+        status: { label: "状态", visible: true },
+        checked_at: { label: "最后检测", visible: true },
+        geo: { label: "IP位置", visible: true },
+        purity: { label: "IP纯净度", visible: true },
+        unlock: { label: "ChatGPT解锁", visible: true },
+        fallback_front: { label: "可连通前置", visible: true },
+        source: { label: "来源", visible: true },
+        action: { label: "操作", visible: true },
+      };
+      const DEFAULT_PROXY_COLUMN_ORDER = ["serial", "protocol", "address", "latency", "status", "checked_at", "geo", "purity", "unlock", "fallback_front", "source", "action"];
+      const DEFAULT_PROXY_FILTERS = {
+        protocol: "",
+        available: "",
+        geo: "",
+        geo_country: "",
+        geo_location: "",
+        openai: "",
+        ip_purity: "",
+        fallback_front: "",
+        source: "",
+      };
+      function cloneProxyColumnConfigs() {
+        const out = {};
+        for (const [key, val] of Object.entries(DEFAULT_PROXY_COLUMN_CONFIGS)) {
+          out[key] = { label: String(val.label || ""), visible: val.visible !== false };
+        }
+        return out;
+      }
+      const app = createApp({
         data() {
           return {
             stats: {},
@@ -536,13 +723,7 @@
             proxySerialMap: {},
             message: "",
             messageError: false,
-            filterProtocol: "",
-            filterAvailable: "",
-            filterGeo: "",
-            filterGeoLocation: "",
-            filterOpenai: "",
-            filterFallbackFront: "",
-            filterSource: "",
+            proxyFilters: { ...DEFAULT_PROXY_FILTERS },
             loading: false,
             backendStatus: {},
             backendEvents: [],
@@ -562,13 +743,23 @@
               exit_proxy_key: "",
             },
             routeGeoFill: {
+              mode: "geo",
               geo_location: "",
+              openai_status: "",
               target_column: "exit_proxy_key",
             },
             routeLatencyMap: {},
+            backendPortRange: {
+              start: 1081,
+              end: 1180,
+            },
             testFallback: {
               front_proxy_refs: "",
               max_attempts: 3,
+            },
+            testRunFilter: {
+              status: "all",
+              min_retest_days: 0,
             },
             taskConcurrency: {
               tester: 60,
@@ -576,20 +767,8 @@
               geoip: 30,
               ip_purity: 30,
             },
-            proxyColumnConfigs: {
-              serial: { label: "序号", visible: true },
-              protocol: { label: "协议", visible: true },
-              address: { label: "地址", visible: true },
-              latency: { label: "延迟", visible: true },
-              status: { label: "状态", visible: true },
-              checked_at: { label: "最后检测", visible: true },
-              geo: { label: "IP位置", visible: true },
-              purity: { label: "IP纯净度", visible: true },
-              unlock: { label: "ChatGPT解锁", visible: true },
-              fallback_front: { label: "可连通前置", visible: true },
-              source: { label: "来源", visible: true },
-            },
-            proxyColumnOrder: ["serial", "protocol", "address", "latency", "status", "checked_at", "geo", "purity", "unlock", "fallback_front", "source"],
+            proxyColumnConfigs: cloneProxyColumnConfigs(),
+            proxyColumnOrder: [...DEFAULT_PROXY_COLUMN_ORDER],
             proxyColumnDragIndex: -1,
             subscriptions: [],
             subscriptionForm: {
@@ -597,22 +776,75 @@
               url: "",
             },
             subscriptionUpdateProxyRef: "",
-            taskState: {
-              active: false,
-              taskId: "",
-              label: "",
-              message: "",
-              total: 0,
-              completed: 0,
-              success: 0,
-              failed: 0,
-              progress: 0,
+            sectionVisibility: {
+              subscriptions: true,
+              backend: true,
+              proxies: true,
             },
+            taskItems: [],
+            taskPollingTimer: null,
+            taskListLoading: false,
+            pendingTaskResultRefresh: false,
+            proxyConfigDialogVisible: false,
           };
         },
         computed: {
           protocolOptions() {
             return Object.keys(this.stats.by_protocol || {});
+          },
+          allProxyCount() {
+            return Array.isArray(this.allProxies) ? this.allProxies.length : 0;
+          },
+          protocolFilterOptions() {
+            const map = new Map();
+            (this.allProxies || []).forEach((item) => {
+              const key = String(item?.protocol || "").trim();
+              if (!key) return;
+              map.set(key, (map.get(key) || 0) + 1);
+            });
+            return Array.from(map.entries())
+              .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0], "zh-CN"))
+              .map(([value, count]) => ({ value, count, label: `${value} (${count})` }));
+          },
+          statusFilterOptions() {
+            let up = 0;
+            let down = 0;
+            (this.allProxies || []).forEach((item) => {
+              if (item?.available) up += 1;
+              else down += 1;
+            });
+            return [
+              { value: "true", count: up, label: `状态: 可用 (${up})` },
+              { value: "false", count: down, label: `状态: 不可用 (${down})` },
+            ];
+          },
+          geoFilterOptions() {
+            let has = 0;
+            let none = 0;
+            (this.allProxies || []).forEach((item) => {
+              const country = String(item?.country || "").trim();
+              const city = String(item?.city || "").trim();
+              if (country || city) has += 1;
+              else none += 1;
+            });
+            return [
+              { value: "has", count: has, label: `IP位置: 已补全 (${has})` },
+              { value: "none", count: none, label: `IP位置: 未补全 (${none})` },
+            ];
+          },
+          geoCountryOptions() {
+            const map = new Map();
+            (this.allProxies || []).forEach((item) => {
+              const country = String(item?.country || "").trim();
+              const key = country || "-";
+              map.set(key, (map.get(key) || 0) + 1);
+            });
+            return Array.from(map.entries())
+              .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0], "zh-CN"))
+              .map(([value, count]) => {
+                const name = value === "-" ? "未知国家" : value;
+                return { value, count, label: `${name} (${count})` };
+              });
           },
           geoLocationOptions() {
             const uniq = new Set();
@@ -623,6 +855,86 @@
               uniq.add(`${country || "-"}:${city || "-"}`);
             });
             return Array.from(uniq).sort((a, b) => a.localeCompare(b, "zh-CN"));
+          },
+          geoLocationFilterOptions() {
+            const selectedCountry = String(this.proxyFilters?.geo_country || "").trim();
+            const map = new Map();
+            (this.allProxies || []).forEach((item) => {
+              const country = String(item?.country || "").trim();
+              const city = String(item?.city || "").trim();
+              const countryKey = country || "-";
+              if (selectedCountry && selectedCountry !== countryKey) return;
+              if (!country && !city) return;
+              const loc = `${country || "-"}:${city || "-"}`;
+              map.set(loc, (map.get(loc) || 0) + 1);
+            });
+            return Array.from(map.entries())
+              .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0], "zh-CN"))
+              .map(([value, count]) => ({ value, count, label: `${value} (${count})` }));
+          },
+          openaiFilterOptions() {
+            let unlocked = 0;
+            let blocked = 0;
+            let unchecked = 0;
+            (this.allProxies || []).forEach((item) => {
+              if (item?.openai_unlocked === true) unlocked += 1;
+              else if (item?.openai_unlocked === false) blocked += 1;
+              else unchecked += 1;
+            });
+            return [
+              { value: "unlocked", count: unlocked, label: `ChatGPT: 已解锁 (${unlocked})` },
+              { value: "blocked", count: blocked, label: `ChatGPT: 未解锁 (${blocked})` },
+              { value: "unchecked", count: unchecked, label: `ChatGPT: 未检测 (${unchecked})` },
+            ];
+          },
+          ipPurityFilterOptions() {
+            let checked = 0;
+            let unchecked = 0;
+            let residential = 0;
+            let nonResidential = 0;
+            let unknown = 0;
+            (this.allProxies || []).forEach((item) => {
+              if (item?.ip_purity_checked_at) checked += 1;
+              else unchecked += 1;
+              const level = String(item?.ip_purity_level || "").trim();
+              if (level === "家宽") residential += 1;
+              else if (level === "非家宽") nonResidential += 1;
+              else if (level === "未知") unknown += 1;
+            });
+            return [
+              { value: "checked", count: checked, label: `IP纯净度: 已检测 (${checked})` },
+              { value: "unchecked", count: unchecked, label: `IP纯净度: 未检测 (${unchecked})` },
+              { value: "residential", count: residential, label: `IP纯净度: 家宽 (${residential})` },
+              { value: "non_residential", count: nonResidential, label: `IP纯净度: 非家宽 (${nonResidential})` },
+              { value: "unknown", count: unknown, label: `IP纯净度: 未知 (${unknown})` },
+            ];
+          },
+          fallbackFrontFilterOptions() {
+            let has = 0;
+            let none = 0;
+            (this.allProxies || []).forEach((item) => {
+              const arr = Array.isArray(item?.fallback_front_keys) ? item.fallback_front_keys : [];
+              if (arr.length > 0) has += 1;
+              else none += 1;
+            });
+            return [
+              { value: "has", count: has, label: `可连通前置: 有标记 (${has})` },
+              { value: "none", count: none, label: `可连通前置: 无标记 (${none})` },
+            ];
+          },
+          sourceFilterOptions() {
+            const map = new Map();
+            (this.allProxies || []).forEach((item) => {
+              const key = String(item?.source || "").trim() || "-";
+              map.set(key, (map.get(key) || 0) + 1);
+            });
+            return Array.from(map.entries())
+              .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0], "zh-CN"))
+              .map(([value, count]) => ({
+                value,
+                count,
+                label: `${value === "-" ? "未知来源" : value} (${count})`,
+              }));
           },
           statCards() {
             return [
@@ -635,7 +947,13 @@
           proxyColumnsOrdered() {
             return (this.proxyColumnOrder || [])
               .filter((key) => this.proxyColumnConfigs[key])
-              .map((key) => ({ key, label: this.proxyColumnConfigs[key].label }));
+              .map((key) => ({
+                key,
+                label: String(this.proxyColumnConfigs[key].label || DEFAULT_PROXY_COLUMN_CONFIGS[key]?.label || key),
+              }));
+          },
+          proxyColumnConfigRows() {
+            return this.proxyColumnsOrdered.map((item, idx) => ({ ...item, idx }));
           },
           visibleProxyColumns() {
             return this.proxyColumnsOrdered.filter((item) => this.proxyColumnConfigs[item.key]?.visible !== false);
@@ -686,18 +1004,23 @@
           onOpenImportFiles() { this.openImportFiles(); },
           async onRunTest() { await this.runWithButtonState("runTest", async () => this.runTest()); },
           async onSaveTestFallback() { await this.runWithButtonState("saveTestFallback", async () => this.saveTestFallback()); },
+          async onSaveTestRunFilter() { await this.runWithButtonState("saveTestRunFilter", async () => this.saveTestRunFilter()); },
           async onSaveTaskConcurrency() { await this.runWithButtonState("saveTaskConcurrency", async () => this.saveTaskConcurrency()); },
           async onRunUnlockCheck() { await this.runWithButtonState("runUnlockCheck", async () => this.runUnlockCheck()); },
           async onEnrichGeo() { await this.runWithButtonState("enrichGeo", async () => this.enrichGeo()); },
           async onRunIpPurity() { await this.runWithButtonState("runIpPurity", async () => this.runIpPurity()); },
           async onDeleteUnavailable() { await this.runWithButtonState("deleteUnavailable", async () => this.deleteUnavailable()); },
           async onCopySubscription() { await this.runWithButtonState("copySubscription", async () => this.copySubscription()); },
+          async onRefreshTasks() { await this.runWithButtonState("refreshTasks", async () => this.refreshTaskList({ force: true })); },
+          async onStopTask(task) { await this.runWithButtonState(`stopTask-${task.task_id}`, async () => this.stopTask(task)); },
+          async onDeleteTask(task) { await this.runWithButtonState(`deleteTask-${task.task_id}`, async () => this.deleteTask(task)); },
           async onLoadSubscriptions() { await this.runWithButtonState("loadSubscriptions", async () => this.loadSubscriptions()); },
           async onCreateSubscription() { await this.runWithButtonState("createSubscription", async () => this.createSubscription()); },
           async onSaveSubscriptionUpdateProxy() { await this.runWithButtonState("saveSubUpdateProxy", async () => this.saveSubscriptionUpdateProxy()); },
           async onRefreshAllSubscriptions() { await this.runWithButtonState("refreshAllSubscriptions", async () => this.refreshAllSubscriptions()); },
           async onDeleteUnavailableSubscriptions() { await this.runWithButtonState("deleteUnavailableSubscriptions", async () => this.deleteUnavailableSubscriptions()); },
           async onLoadBackendStatus() { await this.runWithButtonState("loadBackendStatus", async () => this.loadBackendStatus()); },
+          async onSaveBackendPortRange() { await this.runWithButtonState("saveBackendPortRange", async () => this.saveBackendPortRange()); },
           async onBackendStart() { await this.runWithButtonState("backendStart", async () => this.backendStart()); },
           async onBackendStop() { await this.runWithButtonState("backendStop", async () => this.backendStop()); },
           async onBackendRestart() { await this.runWithButtonState("backendRestart", async () => this.backendRestart()); },
@@ -713,6 +1036,11 @@
           async onApplyRoutesJsonToEntries() { await this.runWithButtonState("applyRoutesJsonToEntries", async () => this.applyRoutesJsonToEntries()); },
           async onSaveRoutes() { await this.runWithButtonState("saveRoutes", async () => this.saveRoutes()); },
           async onLoadDataClick() { await this.runWithButtonState("loadData", async () => this.loadData()); },
+          async onTestSingleProxy(item) { await this.runWithButtonState(`testProxy-${item.normalized_key}`, async () => this.testSingleProxy(item)); },
+          async applyProxyConfig() {
+            await this.onLoadDataClick();
+            this.proxyConfigDialogVisible = false;
+          },
           _sanitizePerPage(value) {
             const n = Number(value);
             return this.pageSizeOptions.includes(n) ? n : 10;
@@ -788,6 +1116,40 @@
               if (state.page > totalPages) state.page = totalPages;
             }
           },
+          normalizeFilterValue(value) {
+            if (value === null || value === undefined) return "";
+            return String(value).trim();
+          },
+          sectionDisplayName(key) {
+            if (key === "subscriptions") return "订阅管理";
+            if (key === "backend") return "sing-box后端";
+            if (key === "proxies") return "代理节点";
+            return String(key || "");
+          },
+          loadSectionVisibility() {
+            try {
+              const raw = localStorage.getItem("proxypool.sectionVisibility.v1");
+              if (!raw) return;
+              const data = JSON.parse(raw) || {};
+              for (const key of Object.keys(this.sectionVisibility)) {
+                if (typeof data[key] === "boolean") {
+                  this.sectionVisibility[key] = data[key];
+                }
+              }
+            } catch {}
+          },
+          persistSectionVisibility() {
+            try {
+              localStorage.setItem("proxypool.sectionVisibility.v1", JSON.stringify(this.sectionVisibility));
+            } catch {}
+          },
+          toggleSectionVisibility(key) {
+            const name = this.sectionDisplayName(key);
+            if (!(key in this.sectionVisibility)) return;
+            this.sectionVisibility[key] = !this.sectionVisibility[key];
+            this.persistSectionVisibility();
+            this.setMessage(`${name}${this.sectionVisibility[key] ? "已显示" : "已隐藏"}`);
+          },
           loadProxyColumns() {
             try {
               const raw = localStorage.getItem("proxypool.proxyColumns.v1");
@@ -799,6 +1161,9 @@
               for (const key of Object.keys(this.proxyColumnConfigs)) {
                 if (cfg[key] && typeof cfg[key] === "object") {
                   this.proxyColumnConfigs[key].visible = cfg[key].visible !== false;
+                  if (typeof cfg[key].label === "string" && cfg[key].label.trim()) {
+                    this.proxyColumnConfigs[key].label = cfg[key].label.trim().slice(0, 32);
+                  }
                 }
               }
               const filteredOrder = order.filter((key) => this.proxyColumnConfigs[key]);
@@ -810,7 +1175,11 @@
             try {
               const configs = {};
               for (const [key, val] of Object.entries(this.proxyColumnConfigs || {})) {
-                configs[key] = { visible: val?.visible !== false };
+                const label = String(val?.label || "").trim();
+                configs[key] = {
+                  visible: val?.visible !== false,
+                  label: label || String(DEFAULT_PROXY_COLUMN_CONFIGS[key]?.label || key),
+                };
               }
               localStorage.setItem(
                 "proxypool.proxyColumns.v1",
@@ -822,22 +1191,34 @@
             } catch {}
           },
           resetProxyColumns() {
-            this.proxyColumnConfigs = {
-              serial: { label: "序号", visible: true },
-              protocol: { label: "协议", visible: true },
-              address: { label: "地址", visible: true },
-              latency: { label: "延迟", visible: true },
-              status: { label: "状态", visible: true },
-              checked_at: { label: "最后检测", visible: true },
-              geo: { label: "IP位置", visible: true },
-              purity: { label: "IP纯净度", visible: true },
-              unlock: { label: "ChatGPT解锁", visible: true },
-              fallback_front: { label: "可连通前置", visible: true },
-              source: { label: "来源", visible: true },
-            };
-            this.proxyColumnOrder = ["serial", "protocol", "address", "latency", "status", "checked_at", "geo", "purity", "unlock", "fallback_front", "source"];
+            this.proxyColumnConfigs = cloneProxyColumnConfigs();
+            this.proxyColumnOrder = [...DEFAULT_PROXY_COLUMN_ORDER];
             this.persistProxyColumns();
             this.setMessage("列配置已重置");
+          },
+          clearProxyFilters() {
+            this.proxyFilters = { ...DEFAULT_PROXY_FILTERS };
+            this.setMessage("筛选条件已清空");
+          },
+          onGeoCountryChanged() {
+            const country = String(this.proxyFilters.geo_country || "").trim();
+            const location = String(this.proxyFilters.geo_location || "").trim();
+            if (!country || !location) return;
+            const locationCountry = location.split(":", 1)[0] || "";
+            if (locationCountry !== country) {
+              this.proxyFilters.geo_location = "";
+            }
+          },
+          moveProxyColumn(key, delta) {
+            const from = this.proxyColumnOrder.indexOf(String(key || ""));
+            if (from < 0) return;
+            const to = from + Number(delta || 0);
+            if (to < 0 || to >= this.proxyColumnOrder.length) return;
+            const order = [...this.proxyColumnOrder];
+            const [moved] = order.splice(from, 1);
+            order.splice(to, 0, moved);
+            this.proxyColumnOrder = order;
+            this.persistProxyColumns();
           },
           onProxyColumnDragStart(index) {
             this.proxyColumnDragIndex = Number(index);
@@ -1035,17 +1416,12 @@
           },
           async refreshAllSubscriptions() {
             try {
-              const resp = await fetch("/api/subscriptions/refresh-enabled?timeout_sec=12", {
-                method: "POST",
-              });
-              const data = await resp.json();
-              if (!resp.ok) {
-                throw new Error(data.detail || "批量刷新失败");
-              }
-              this.setMessage(`批量刷新完成: ${data.count || 0} 条订阅`);
+              await this.startProgressTask(
+                "/api/tasks/subscriptions-refresh/start?timeout_sec=12",
+                {},
+                "订阅刷新任务"
+              );
               await this.loadSubscriptions();
-              await this.loadData();
-              await this.loadProxyCatalog();
             } catch (err) {
               this.setMessage("批量刷新订阅失败: " + err, true);
             }
@@ -1086,17 +1462,31 @@
               this.stats = await statsResp.json();
 
               const params = new URLSearchParams({ limit: "5000" });
-              if (this.filterProtocol) params.set("protocol", this.filterProtocol);
-              if (this.filterAvailable !== "") params.set("available", this.filterAvailable);
-              if (this.filterGeoLocation) {
+              const protocol = this.normalizeFilterValue(this.proxyFilters.protocol);
+              const available = this.normalizeFilterValue(this.proxyFilters.available);
+              const geo = this.normalizeFilterValue(this.proxyFilters.geo);
+              const geoCountry = this.normalizeFilterValue(this.proxyFilters.geo_country);
+              const geoLocation = this.normalizeFilterValue(this.proxyFilters.geo_location);
+              const openai = this.normalizeFilterValue(this.proxyFilters.openai);
+              const ipPurity = this.normalizeFilterValue(this.proxyFilters.ip_purity);
+              const fallbackFront = this.normalizeFilterValue(this.proxyFilters.fallback_front);
+              const source = this.normalizeFilterValue(this.proxyFilters.source);
+
+              if (protocol) params.set("protocol", protocol);
+              if (available === "true" || available === "false") params.set("available", available);
+              if (geoCountry) params.set("geo_country", geoCountry);
+              if (geoLocation) {
                 params.set("geo_filter", "has");
-                params.set("geo_location", this.filterGeoLocation);
-              } else if (this.filterGeo) {
-                params.set("geo_filter", this.filterGeo);
+                params.set("geo_location", geoLocation);
+              } else if (geo === "has" || geo === "none") {
+                params.set("geo_filter", geo);
               }
-              if (this.filterOpenai) params.set("openai_filter", this.filterOpenai);
-              if (this.filterFallbackFront) params.set("fallback_front_filter", this.filterFallbackFront);
-              if (this.filterSource) params.set("source", this.filterSource);
+              if (["unlocked", "blocked", "unchecked"].includes(openai)) params.set("openai_filter", openai);
+              if (["checked", "unchecked", "residential", "non_residential", "unknown"].includes(ipPurity)) {
+                params.set("ip_purity_filter", ipPurity);
+              }
+              if (fallbackFront === "has" || fallbackFront === "none") params.set("fallback_front_filter", fallbackFront);
+              if (source) params.set("source", source);
               params.set("sort_by", "latency");
               params.set("sort_order", "asc");
               const proxyResp = await fetch("/api/proxies?" + params.toString());
@@ -1256,8 +1646,9 @@
             const frontRaw = (item.front_proxy_key || "").trim();
             const middleRaw = (item.middle_proxy_key || "").trim();
             const exitRaw = (item.exit_proxy_key || item.proxy_key || "").trim();
+            const defaultPort = this.normalizeBackendPortRange(this.backendPortRange || {}).start;
             return {
-              inbound_port: Number(item.inbound_port || 1081),
+              inbound_port: Number(item.inbound_port || defaultPort),
               inbound_type: item.inbound_type || "http",
               listen: item.listen || "127.0.0.1",
               front_proxy_key: this.toDisplayProxyRef(frontRaw),
@@ -1332,6 +1723,42 @@
               };
             } catch {}
           },
+          normalizeTestRunFilter(data = {}) {
+            const statusRaw = String(data.status || "all").trim();
+            const status = ["all", "down", "up", "unchecked"].includes(statusRaw) ? statusRaw : "all";
+            const n = Number(data.min_retest_days);
+            const minRetestDays = Number.isFinite(n) ? Math.max(0, Math.min(365, Math.round(n * 10) / 10)) : 0;
+            return {
+              status,
+              min_retest_days: minRetestDays,
+            };
+          },
+          loadTestRunFilter() {
+            try {
+              const raw = localStorage.getItem("proxypool.testRunFilter.v1");
+              if (!raw) {
+                this.testRunFilter = this.normalizeTestRunFilter(this.testRunFilter);
+                return;
+              }
+              this.testRunFilter = this.normalizeTestRunFilter(JSON.parse(raw) || {});
+            } catch {
+              this.testRunFilter = this.normalizeTestRunFilter(this.testRunFilter);
+            }
+          },
+          async saveTestRunFilter() {
+            const payload = this.normalizeTestRunFilter(this.testRunFilter);
+            this.testRunFilter = payload;
+            try {
+              localStorage.setItem("proxypool.testRunFilter.v1", JSON.stringify(payload));
+            } catch {}
+            const statusLabelMap = {
+              all: "全部",
+              down: "仅不可用",
+              up: "仅可用",
+              unchecked: "仅未测速",
+            };
+            this.setMessage(`测速筛选已保存: 状态=${statusLabelMap[payload.status] || "全部"}, 复测间隔>=${payload.min_retest_days}天`);
+          },
           sanitizeTaskConcurrencyValue(value, fallback = 30) {
             const n = Number(value);
             if (!Number.isFinite(n)) return Math.max(1, Math.min(500, Math.trunc(Number(fallback) || 30)));
@@ -1398,6 +1825,11 @@
             }
             return keys;
           },
+          applyRouteDefaultValue(currentValue, defaultValue, applyAll = false) {
+            if (!defaultValue) return currentValue;
+            if (applyAll) return defaultValue;
+            return currentValue ? currentValue : defaultValue;
+          },
           applyDefaultsToRoutes(applyAll = false) {
             this.persistRouteDefaults();
             const defaults = {
@@ -1409,9 +1841,9 @@
               const normalized = this.normalizeRouteItem(item);
               return {
                 ...normalized,
-                front_proxy_key: (applyAll || !normalized.front_proxy_key) ? defaults.front_proxy_key : normalized.front_proxy_key,
-                middle_proxy_key: (applyAll || !normalized.middle_proxy_key) ? defaults.middle_proxy_key : normalized.middle_proxy_key,
-                exit_proxy_key: (applyAll || !normalized.exit_proxy_key) ? defaults.exit_proxy_key : normalized.exit_proxy_key,
+                front_proxy_key: this.applyRouteDefaultValue(normalized.front_proxy_key, defaults.front_proxy_key, applyAll),
+                middle_proxy_key: this.applyRouteDefaultValue(normalized.middle_proxy_key, defaults.middle_proxy_key, applyAll),
+                exit_proxy_key: this.applyRouteDefaultValue(normalized.exit_proxy_key, defaults.exit_proxy_key, applyAll),
               };
             });
             this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
@@ -1425,11 +1857,59 @@
             } catch {}
             this.setMessage("默认代理已清空");
           },
+          normalizeBackendPortRange(data = {}) {
+            const rawStart = Number(data.start);
+            const rawEnd = Number(data.end);
+            let start = Number.isFinite(rawStart) ? Math.trunc(rawStart) : 1081;
+            let end = Number.isFinite(rawEnd) ? Math.trunc(rawEnd) : 1180;
+            start = Math.max(1, Math.min(65535, start));
+            end = Math.max(1, Math.min(65535, end));
+            if (start > end) {
+              const tmp = start;
+              start = end;
+              end = tmp;
+            }
+            return { start, end };
+          },
+          async loadBackendPortRange() {
+            try {
+              const resp = await fetch("/api/backend/default-port-range");
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "加载默认端口范围失败");
+              }
+              this.backendPortRange = this.normalizeBackendPortRange(data || {});
+            } catch (err) {
+              this.backendPortRange = this.normalizeBackendPortRange(this.backendPortRange || {});
+              this.setMessage("加载默认端口范围失败: " + err, true);
+            }
+          },
+          async saveBackendPortRange() {
+            try {
+              const payload = this.normalizeBackendPortRange(this.backendPortRange || {});
+              const resp = await fetch("/api/backend/default-port-range", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "保存默认端口范围失败");
+              }
+              this.backendPortRange = this.normalizeBackendPortRange(data || payload);
+              this.setMessage(`默认端口范围已保存: ${this.backendPortRange.start}-${this.backendPortRange.end}`);
+            } catch (err) {
+              this.setMessage("保存默认端口范围失败: " + err, true);
+            }
+          },
           nextAvailableInboundPort() {
+            const range = this.normalizeBackendPortRange(this.backendPortRange || {});
+            this.backendPortRange = range;
             const used = new Set((this.routeEntries || []).map((r) => Number(r.inbound_port || 0)).filter((p) => Number.isInteger(p) && p > 0));
-            let port = 1081;
-            while (used.has(port)) port += 1;
-            return port;
+            for (let port = range.start; port <= range.end; port += 1) {
+              if (!used.has(port)) return port;
+            }
+            throw new Error(`默认端口范围已耗尽(${range.start}-${range.end})，请扩大范围或删除已有链路`);
           },
           getProxyRefsByGeoLocation(geoLocation) {
             const target = String(geoLocation || "").trim();
@@ -1443,20 +1923,55 @@
             }
             return refs;
           },
+          getProxyRefsByOpenaiStatus(openaiStatus) {
+            const target = String(openaiStatus || "").trim();
+            if (!target) return [];
+            const refs = [];
+            for (const item of this.allProxies || []) {
+              const unlocked = item?.openai_unlocked;
+              const matched =
+                (target === "unlocked" && unlocked === true) ||
+                (target === "blocked" && unlocked === false) ||
+                (target === "unchecked" && (unlocked === null || unlocked === undefined));
+              if (!matched) continue;
+              const serial = this.getSerial(item.normalized_key);
+              if (serial === "-") continue;
+              refs.push(`#${serial}`);
+            }
+            return refs;
+          },
+          getProxyRefsByFillRule() {
+            const mode = String(this.routeGeoFill.mode || "geo").trim();
+            if (mode === "openai") {
+              return this.getProxyRefsByOpenaiStatus(this.routeGeoFill.openai_status);
+            }
+            return this.getProxyRefsByGeoLocation(this.routeGeoFill.geo_location);
+          },
+          getRouteFillRuleLabel() {
+            const mode = String(this.routeGeoFill.mode || "geo").trim();
+            if (mode === "openai") {
+              const openaiStatus = String(this.routeGeoFill.openai_status || "").trim();
+              if (openaiStatus === "unlocked") return "ChatGPT已解锁";
+              if (openaiStatus === "blocked") return "ChatGPT未解锁";
+              if (openaiStatus === "unchecked") return "ChatGPT未检测";
+              return "ChatGPT解锁状态";
+            }
+            return String(this.routeGeoFill.geo_location || "").trim();
+          },
           fillRouteColumnByGeo() {
-            const geo = String(this.routeGeoFill.geo_location || "").trim();
+            const label = this.getRouteFillRuleLabel();
             const field = String(this.routeGeoFill.target_column || "").trim();
-            if (!geo) {
-              this.setMessage("请先选择地区(国家:城市)", true);
+            if (!label) {
+              this.setMessage("请先选择填充条件", true);
               return;
             }
             if (!["front_proxy_key", "middle_proxy_key", "exit_proxy_key"].includes(field)) {
               this.setMessage("目标链路列无效", true);
               return;
             }
-            const refs = this.getProxyRefsByGeoLocation(geo);
+            const refs = this.getProxyRefsByFillRule();
             if (!refs.length) {
-              this.setMessage(`未找到地区 ${geo} 的代理`, true);
+              this.setMessage(`未找到满足条件 ${label} 的代理`, true);
               return;
             }
             if (!(this.routeEntries || []).length) {
@@ -1472,29 +1987,43 @@
             });
             this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
             this.clampAllPages();
-            this.setMessage(`已按地区 ${geo} 顺序填充 ${applied} 条到${this.routeColumnLabel(field)}`);
+            this.setMessage(`已按条件 ${label} 顺序填充 ${applied} 条到${this.routeColumnLabel(field)}`);
           },
           generateRoutesByGeo() {
-            const geo = String(this.routeGeoFill.geo_location || "").trim();
+            const label = this.getRouteFillRuleLabel();
             const field = String(this.routeGeoFill.target_column || "").trim();
-            if (!geo) {
-              this.setMessage("请先选择地区(国家:城市)", true);
+            if (!label) {
+              this.setMessage("请先选择填充条件", true);
               return;
             }
             if (!["front_proxy_key", "middle_proxy_key", "exit_proxy_key"].includes(field)) {
               this.setMessage("目标链路列无效", true);
               return;
             }
-            const refs = this.getProxyRefsByGeoLocation(geo);
+            const refs = this.getProxyRefsByFillRule();
             if (!refs.length) {
-              this.setMessage(`未找到地区 ${geo} 的代理`, true);
+              this.setMessage(`未找到满足条件 ${label} 的代理`, true);
               return;
             }
 
             this.persistRouteDefaults();
+            let created = 0;
             for (const ref of refs) {
+              let inboundPort = 0;
+              try {
+                inboundPort = this.nextAvailableInboundPort();
+              } catch (err) {
+                this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
+                this.clampAllPages();
+                if (created > 0) {
+                  this.setMessage(`已生成 ${created} 条链路，后续失败: ${err}`, true);
+                } else {
+                  this.setMessage(String(err), true);
+                }
+                return;
+              }
               const entry = {
-                inbound_port: this.nextAvailableInboundPort(),
+                inbound_port: inboundPort,
                 inbound_type: "http",
                 listen: "127.0.0.1",
                 front_proxy_key: this.routeDefaults.front_proxy_key || "",
@@ -1503,10 +2032,11 @@
               };
               entry[field] = ref;
               this.routeEntries.push(entry);
+              created += 1;
             }
             this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
             this.clampAllPages();
-            this.setMessage(`已从地区 ${geo} 生成 ${refs.length} 条新链路到${this.routeColumnLabel(field)}`);
+            this.setMessage(`已按条件 ${label} 生成 ${created} 条新链路到${this.routeColumnLabel(field)}`);
           },
           routeColumnLabel(field) {
             if (field === "front_proxy_key") return "前置代理列";
@@ -1539,20 +2069,22 @@
             });
           },
           addRouteEntry() {
-            this.persistRouteDefaults();
-            const usedPorts = new Set((this.routeEntries || []).map((r) => Number(r.inbound_port || 0)));
-            let port = 1081;
-            while (usedPorts.has(port)) port += 1;
-            this.routeEntries.push({
-              inbound_port: port,
-              inbound_type: "http",
-              listen: "127.0.0.1",
-              front_proxy_key: this.routeDefaults.front_proxy_key || "",
-              middle_proxy_key: this.routeDefaults.middle_proxy_key || "",
-              exit_proxy_key: this.routeDefaults.exit_proxy_key || "",
-            });
-            this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
-            this.clampAllPages();
+            try {
+              this.persistRouteDefaults();
+              const port = this.nextAvailableInboundPort();
+              this.routeEntries.push({
+                inbound_port: port,
+                inbound_type: "http",
+                listen: "127.0.0.1",
+                front_proxy_key: this.routeDefaults.front_proxy_key || "",
+                middle_proxy_key: this.routeDefaults.middle_proxy_key || "",
+                exit_proxy_key: this.routeDefaults.exit_proxy_key || "",
+              });
+              this.routesJson = JSON.stringify(this.routePayloadFromEntries(), null, 2);
+              this.clampAllPages();
+            } catch (err) {
+              this.setMessage("新增链路失败: " + err, true);
+            }
           },
           removeRouteEntry(idx) {
             this.routeEntries.splice(idx, 1);
@@ -1599,12 +2131,24 @@
               const fallbackKeys = this.resolveFallbackFrontProxyKeys(this.testFallback.front_proxy_refs);
               const maxAttempts = Math.max(0, Math.min(100, Math.trunc(Number(this.testFallback.max_attempts || 0))));
               const concurrency = this.sanitizeTaskConcurrencyValue(this.taskConcurrency.tester, 60);
+              const testFilter = this.normalizeTestRunFilter(this.testRunFilter);
+              this.testRunFilter = testFilter;
+              try {
+                localStorage.setItem("proxypool.testRunFilter.v1", JSON.stringify(testFilter));
+              } catch {}
+              const onlyAvailable = testFilter.status === "up";
+              const onlyUnavailable = testFilter.status === "down";
+              const onlyUnchecked = testFilter.status === "unchecked";
+              const minLastCheckedAgeHours = Math.max(0, Math.trunc(Number(testFilter.min_retest_days || 0) * 24));
               await this.startProgressTask(
                 "/api/tasks/tester/start",
                 {
                   limit: 0,
                   concurrency,
-                  only_unchecked: false,
+                  only_unchecked: onlyUnchecked,
+                  only_available: onlyAvailable,
+                  only_unavailable: onlyUnavailable,
+                  min_last_checked_age_hours: minLastCheckedAgeHours,
                   fallback_front_proxy_keys: fallbackKeys,
                   fallback_front_max_attempts: maxAttempts,
                 },
@@ -1614,12 +2158,41 @@
               this.setMessage("测速失败: " + err, true);
             }
           },
+          async testSingleProxy(item) {
+            try {
+              const normalizedKey = String(item?.normalized_key || "").trim();
+              if (!normalizedKey) {
+                throw new Error("节点标识缺失");
+              }
+              const fallbackKeys = this.resolveFallbackFrontProxyKeys(this.testFallback.front_proxy_refs);
+              const maxAttempts = Math.max(0, Math.min(100, Math.trunc(Number(this.testFallback.max_attempts || 0))));
+              const resp = await fetch("/api/tester/run-one", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  normalized_key: normalizedKey,
+                  fallback_front_proxy_keys: fallbackKeys,
+                  fallback_front_max_attempts: maxAttempts,
+                }),
+              });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "单节点测试失败");
+              }
+              const latency = Number.isFinite(Number(data.latency_ms)) ? `${Number(data.latency_ms)} ms` : "-";
+              this.setMessage(`单节点测试完成: #${this.getSerial(normalizedKey)} ${data.available ? "UP" : "DOWN"} ${latency}`);
+              await this.loadData();
+              await this.loadProxyCatalog();
+            } catch (err) {
+              this.setMessage("单节点测试失败: " + err, true);
+            }
+          },
           async enrichGeo() {
             try {
               const concurrency = this.sanitizeTaskConcurrencyValue(this.taskConcurrency.geoip, 30);
               await this.startProgressTask(
                 "/api/tasks/geoip/start",
-                { limit: 300, concurrency },
+                { limit: 0, concurrency },
                 "IP位置补全任务"
               );
             } catch (err) {
@@ -1643,7 +2216,7 @@
               const concurrency = this.sanitizeTaskConcurrencyValue(this.taskConcurrency.openai, 30);
               await this.startProgressTask(
                 "/api/tasks/openai-check/start",
-                { limit: 300, concurrency, only_unchecked: false, only_available: true },
+                { limit: 0, concurrency, only_unchecked: false, only_available: true },
                 "ChatGPT解锁检测任务"
               );
             } catch (err) {
@@ -1665,17 +2238,6 @@
             }
           },
           async startProgressTask(url, payload, label) {
-            this.taskState = {
-              active: true,
-              taskId: "",
-              label,
-              message: "任务创建中",
-              total: 0,
-              completed: 0,
-              success: 0,
-              failed: 0,
-              progress: 0,
-            };
             try {
               const startResp = await fetch(url, {
                 method: "POST",
@@ -1687,54 +2249,125 @@
                 throw new Error(startData.detail || "任务创建失败");
               }
               const taskId = startData.task_id;
-              this.taskState.taskId = taskId;
-              await this.pollTask(taskId);
+              this.pendingTaskResultRefresh = true;
+              this.setMessage(`${label}已启动: ${this.shortTaskId(taskId)}`);
+              await this.refreshTaskList({ force: true });
             } catch (err) {
-              this.taskState.active = false;
               throw err;
             }
           },
-          async pollTask(taskId) {
-            const timeoutMs = 6 * 60 * 60 * 1000;
-            const startedAt = Date.now();
-            let transientErrors = 0;
-            while (Date.now() - startedAt < timeoutMs) {
-              try {
-                const resp = await fetch(`/api/tasks/${taskId}`);
-                const data = await resp.json();
-                if (!resp.ok) {
-                  throw new Error(data.detail || "任务查询失败");
-                }
-                transientErrors = 0;
-                this.taskState.message = data.message || data.status || "-";
-                this.taskState.total = data.total || 0;
-                this.taskState.completed = data.completed || 0;
-                this.taskState.success = data.success || 0;
-                this.taskState.failed = data.failed || 0;
-                this.taskState.progress = data.progress || 0;
-                if (data.status === "success") {
-                  this.taskState.active = false;
-                  this.setMessage(`${this.taskState.label}完成: 成功=${this.taskState.success}, 失败=${this.taskState.failed}`);
-                  await this.loadData();
-                  return;
-                }
-                if (data.status === "failed") {
-                  this.taskState.active = false;
-                  this.setMessage(`${this.taskState.label}失败: ${data.error || "unknown error"}`, true);
-                  return;
-                }
-              } catch (err) {
-                transientErrors += 1;
-                this.taskState.message = `查询中断，重试(${transientErrors})`;
-                if (transientErrors >= 20) {
-                  this.taskState.active = false;
-                  throw err;
-                }
+          shortTaskId(taskId) {
+            const text = String(taskId || "");
+            if (!text) return "-";
+            return text.slice(0, 8);
+          },
+          taskLabel(kind) {
+            const key = String(kind || "");
+            if (key === "tester_run") return "测速任务";
+            if (key === "geoip_enrich") return "IP位置补全";
+            if (key === "ip_purity_enrich") return "IP纯净度检测";
+            if (key === "openai_check") return "ChatGPT解锁检测";
+            if (key === "subscriptions_refresh") return "订阅刷新任务";
+            return key || "任务";
+          },
+          taskStatusText(status) {
+            const s = String(status || "");
+            if (s === "queued") return "排队中";
+            if (s === "running") return "运行中";
+            if (s === "success") return "成功";
+            if (s === "failed") return "失败";
+            if (s === "cancelled") return "已停止";
+            return s || "-";
+          },
+          taskStatusClass(status) {
+            const s = String(status || "");
+            if (s === "success") return "text-emerald-700";
+            if (s === "failed") return "text-rose-700";
+            if (s === "cancelled") return "text-amber-700";
+            if (s === "running") return "text-cyan-700";
+            if (s === "queued") return "text-amber-700";
+            return "text-slate-700";
+          },
+          isTaskStoppable(task) {
+            const s = String(task?.status || "");
+            return s === "queued" || s === "running";
+          },
+          isTaskDeletable(task) {
+            const s = String(task?.status || "");
+            return s === "success" || s === "failed" || s === "cancelled";
+          },
+          async stopTask(task) {
+            const taskId = String(task?.task_id || "");
+            if (!taskId) return;
+            try {
+              const resp = await fetch(`/api/tasks/${taskId}/stop`, { method: "POST" });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "停止任务失败");
               }
-              await new Promise((resolve) => setTimeout(resolve, 800));
+              const stopped = !!data.stopped;
+              this.setMessage(stopped ? `任务已请求停止: ${this.shortTaskId(taskId)}` : `任务已结束或不可停止: ${this.shortTaskId(taskId)}`);
+              await this.refreshTaskList({ force: true });
+            } catch (err) {
+              this.setMessage("停止任务失败: " + err, true);
             }
-            this.taskState.active = false;
-            this.setMessage(`${this.taskState.label}超时(>6小时)`, true);
+          },
+          async deleteTask(task) {
+            const taskId = String(task?.task_id || "");
+            if (!taskId) return;
+            try {
+              const resp = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "删除任务失败");
+              }
+              if (data.deleted) {
+                this.setMessage(`任务已删除: ${this.shortTaskId(taskId)}`);
+              } else {
+                this.setMessage(`任务未删除（仅可删除已完成任务）: ${this.shortTaskId(taskId)}`, true);
+              }
+              await this.refreshTaskList({ force: true });
+            } catch (err) {
+              this.setMessage("删除任务失败: " + err, true);
+            }
+          },
+          async refreshTaskList({ force = false } = {}) {
+            if (this.taskListLoading && !force) return;
+            this.taskListLoading = true;
+            try {
+              const prevHasRunning = (this.taskItems || []).some((t) => ["queued", "running"].includes(String(t.status || "")));
+              const resp = await fetch("/api/tasks?limit=80");
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "任务列表加载失败");
+              }
+              const items = Array.isArray(data.items) ? data.items : [];
+              this.taskItems = items;
+              const hasRunning = items.some((t) => ["queued", "running"].includes(String(t.status || "")));
+              if ((this.pendingTaskResultRefresh || prevHasRunning) && !hasRunning) {
+                this.pendingTaskResultRefresh = false;
+                await this.loadData();
+                await this.loadProxyCatalog();
+                await this.loadSubscriptions();
+              }
+            } catch (err) {
+              if (force) {
+                this.setMessage("刷新任务失败: " + err, true);
+              }
+            } finally {
+              this.taskListLoading = false;
+            }
+          },
+          startTaskPolling() {
+            if (this.taskPollingTimer) return;
+            this.taskPollingTimer = setInterval(() => {
+              this.refreshTaskList();
+            }, 1200);
+          },
+          stopTaskPolling() {
+            if (!this.taskPollingTimer) return;
+            clearInterval(this.taskPollingTimer);
+            this.taskPollingTimer = null;
           },
           async copySubscription() {
             try {
@@ -1818,17 +2451,27 @@
           },
         },
         async mounted() {
+          this.loadSectionVisibility();
           this.loadProxyColumns();
           this.loadRouteDefaults();
           this.loadTestFallback();
+          this.loadTestRunFilter();
           this.loadTaskConcurrency();
+          await this.loadBackendPortRange();
+          await this.refreshTaskList({ force: true });
+          this.startTaskPolling();
           await this.loadData();
           await this.loadProxyCatalog();
           await this.loadSubscriptions();
           await this.loadSubscriptionUpdateProxy();
           await this.loadBackendStatus();
         },
-      }).mount("#app");
+        unmounted() {
+          this.stopTaskPolling();
+        },
+      });
+      app.use(ElementPlus);
+      app.mount("#app");
     </script>
   </body>
 </html>

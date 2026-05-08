@@ -8,6 +8,7 @@ READ_ONLY_ALLOWLIST = {
     ("GET", "/api/subscription"),
     ("GET", "/api/backend/status"),
     ("GET", "/api/backend/routes"),
+    ("GET", "/api/backend/default-port-range"),
     ("GET", "/api/backend/latency"),
     ("GET", "/api/backend/process-events"),
     ("GET", "/api/subscriptions"),

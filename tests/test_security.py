@@ -11,6 +11,7 @@ class TestApiSecurity(unittest.TestCase):
         self.assertFalse(is_api_key_required("GET", "/api/subscription"))
         self.assertFalse(is_api_key_required("GET", "/api/backend/status"))
         self.assertFalse(is_api_key_required("GET", "/api/backend/routes"))
+        self.assertFalse(is_api_key_required("GET", "/api/backend/default-port-range"))
         self.assertFalse(is_api_key_required("GET", "/api/backend/latency"))
         self.assertFalse(is_api_key_required("GET", "/api/backend/process-events"))
         self.assertFalse(is_api_key_required("GET", "/api/subscriptions"))

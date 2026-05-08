@@ -10,6 +10,7 @@ from typing import Callable
 from urllib.request import Request, urlopen
 
 from proxypool.storage.sqlite import SQLiteProxyStorage
+from proxypool.tasks.manager import TaskCancelled
 
 
 @dataclass(slots=True)
@@ -104,7 +105,10 @@ class GeoIPService:
         limit: int = 200,
         concurrency: int = 20,
         progress_cb: Callable[[dict], None] | None = None,
+        stop_cb: Callable[[], bool] | None = None,
     ) -> dict[str, int]:
+        if stop_cb and stop_cb():
+            raise TaskCancelled("cancel requested")
         candidates = self.storage.list_geo_candidates(
             limit=limit,
             only_available=True,
@@ -117,9 +121,13 @@ class GeoIPService:
 
         if candidates:
             workers = max(1, min(int(concurrency or 1), len(candidates)))
-            with ThreadPoolExecutor(max_workers=workers) as executor:
+            executor = ThreadPoolExecutor(max_workers=workers)
+            try:
                 futures = [executor.submit(self.enrich_one, row) for row in candidates]
                 for fut in as_completed(futures):
+                    if stop_cb and stop_cb():
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        raise TaskCancelled("cancel requested")
                     try:
                         result = fut.result()
                     except Exception as exc:
@@ -138,6 +146,8 @@ class GeoIPService:
                                 "phase": "enriching",
                             }
                         )
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
 
         report = {
             "requested": len(candidates),
@@ -162,7 +172,10 @@ class GeoIPService:
         concurrency: int = 20,
         only_unchecked: bool = False,
         progress_cb: Callable[[dict], None] | None = None,
+        stop_cb: Callable[[], bool] | None = None,
     ) -> dict[str, int]:
+        if stop_cb and stop_cb():
+            raise TaskCancelled("cancel requested")
         candidates = self.storage.list_ip_purity_candidates(
             limit=limit,
             only_unchecked=only_unchecked,
@@ -176,9 +189,13 @@ class GeoIPService:
 
         if candidates:
             workers = max(1, min(int(concurrency or 1), len(candidates)))
-            with ThreadPoolExecutor(max_workers=workers) as executor:
+            executor = ThreadPoolExecutor(max_workers=workers)
+            try:
                 futures = [executor.submit(self._enrich_ip_purity_one, row) for row in candidates]
                 for fut in as_completed(futures):
+                    if stop_cb and stop_cb():
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        raise TaskCancelled("cancel requested")
                     try:
                         ok = bool(fut.result())
                     except Exception:
@@ -197,6 +214,8 @@ class GeoIPService:
                                 "phase": "purity",
                             }
                         )
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
 
         report = {"requested": len(candidates), "updated": updated, "failed": failed}
         if progress_cb:
@@ -217,19 +236,19 @@ class GeoIPService:
         if not key or not host:
             return False
         if self._proxy_json_fetcher is not None:
-            ip, country, city = self._lookup_geo_via_proxy(row)
-            self.storage.update_geo(key, resolved_ip=ip, country=country, city=city)
-            score, level = self._lookup_ip_purity_via_proxy(row, ip)
+            try:
+                ip, country, city = self._lookup_geo_via_proxy(row)
+                self.storage.update_geo(key, resolved_ip=ip, country=country, city=city)
+                score, level = self._lookup_ip_purity_via_proxy(row, ip)
+                if score is None or not str(level or "").strip() or str(level).strip() == "未知":
+                    score, level = self._purity_lookup(ip)
+            except Exception:
+                ip, country, city = self._lookup_geo_direct(row, host)
+                self.storage.update_geo(key, resolved_ip=ip, country=country, city=city)
+                score, level = self._purity_lookup(ip)
         else:
-            ip = str(row.get("resolved_ip") or "").strip()
-            if not ip:
-                ip = self._resolver(host)
-                self.storage.update_geo(
-                    key,
-                    resolved_ip=ip,
-                    country=str(row.get("country") or ""),
-                    city=str(row.get("city") or ""),
-                )
+            ip, country, city = self._lookup_geo_direct(row, host)
+            self.storage.update_geo(key, resolved_ip=ip, country=country, city=city)
             score, level = self._purity_lookup(ip)
         self.storage.update_ip_purity(key, score=score, level=level)
         return True
@@ -242,16 +261,27 @@ class GeoIPService:
 
         try:
             if self._proxy_json_fetcher is not None:
-                ip, country, city = self._lookup_geo_via_proxy(proxy_row)
+                try:
+                    ip, country, city = self._lookup_geo_via_proxy(proxy_row)
+                except Exception:
+                    ip, country, city = self._lookup_geo_direct(proxy_row, host)
             else:
-                ip = self._resolver(host)
-                country, city = self._geo_lookup(ip)
+                ip, country, city = self._lookup_geo_direct(proxy_row, host)
             self.storage.update_geo(key, resolved_ip=ip, country=country, city=city)
             purity_score: float | None = None
             purity_level = ""
             try:
                 if self._proxy_json_fetcher is not None:
-                    purity_score, purity_level = self._lookup_ip_purity_via_proxy(proxy_row, ip)
+                    try:
+                        purity_score, purity_level = self._lookup_ip_purity_via_proxy(proxy_row, ip)
+                        if (
+                            purity_score is None
+                            or not str(purity_level or "").strip()
+                            or str(purity_level).strip() == "未知"
+                        ):
+                            purity_score, purity_level = self._purity_lookup(ip)
+                    except Exception:
+                        purity_score, purity_level = self._purity_lookup(ip)
                 else:
                     purity_score, purity_level = self._purity_lookup(ip)
                 self.storage.update_ip_purity(key, score=purity_score, level=purity_level)
@@ -270,6 +300,23 @@ class GeoIPService:
         except Exception as exc:
             # keep silent in DB for geo errors, only return status
             return GeoResult(normalized_key=key, ok=False, error=str(exc))
+
+    def _lookup_geo_direct(self, proxy_row: dict, host: str) -> tuple[str, str, str]:
+        ip = str(proxy_row.get("resolved_ip") or "").strip()
+        country = str(proxy_row.get("country") or "").strip()
+        city = str(proxy_row.get("city") or "").strip()
+        if not ip:
+            ip = self._resolver(host)
+        if not country or not city:
+            try:
+                looked_country, looked_city = self._geo_lookup(ip)
+                if not country:
+                    country = str(looked_country or "")
+                if not city:
+                    city = str(looked_city or "")
+            except Exception:
+                pass
+        return ip, country, city
 
     def _lookup_geo_via_proxy(self, proxy_row: dict) -> tuple[str, str, str]:
         providers: list[tuple[str, float, Callable[[object], tuple[str, str, str] | None]]] = [

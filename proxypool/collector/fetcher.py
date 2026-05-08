@@ -8,7 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from proxypool.tester.singbox import build_singbox_outbound
 
@@ -20,7 +20,7 @@ class FetchError(RuntimeError):
 def fetch_text(url: str, timeout_sec: float = 12.0) -> str:
     req = Request(url, headers={"User-Agent": "proxypool/0.1"})
     try:
-        with urlopen(req, timeout=timeout_sec) as resp:  # nosec B310
+        with _open_url_no_proxy(req, timeout=timeout_sec) as resp:  # nosec B310
             raw = resp.read()
             content_type = str(resp.headers.get("Content-Type", ""))
     except Exception as exc:  # pragma: no cover - exercised by integration calls
@@ -132,3 +132,8 @@ def _stop_process(proc: subprocess.Popen[Any]) -> None:
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=1.0)
+
+
+def _open_url_no_proxy(req: Request, timeout: float):
+    opener = build_opener(ProxyHandler({}))
+    return opener.open(req, timeout=timeout)

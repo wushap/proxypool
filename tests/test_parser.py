@@ -136,6 +136,18 @@ proxies:
         self.assertEqual(nodes[0].protocol, "ss")
         self.assertEqual(nodes[1].protocol, "trojan")
 
+    def test_parse_source_content_skips_invalid_ipv6_like_url(self) -> None:
+        content = "\n".join(
+            [
+                "trojan://8r<[9'l6hAO#8ZQi@172.66.44.230:8443?allowInsecure=0&sni=Koma-YT.PAGeS.Dev&ws=1&wspath=%2Ftro8sFW1S91B6sZrM1%3Fed%3D2560#bad",
+                "trojan://pwd@ok.example.com:443#ok",
+            ]
+        )
+        nodes, invalid = parse_source_content(content)
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(nodes[0].host, "ok.example.com")
+        self.assertEqual(len(invalid), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

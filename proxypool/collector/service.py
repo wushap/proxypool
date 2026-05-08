@@ -91,21 +91,40 @@ class CollectorService:
         report = CollectReport(total_sources=1)
         tag = f"subscription#{int(subscription_id)}:{(subscription_name or 'subscription').strip()}|{subscription_url}"
         source_report = SourceCollectReport(source=tag)
+        source_name = f"subscription-{int(subscription_id)}"
+        proxy_source_report: SourceCollectReport | None = None
         try:
             proxy_key = str(self.storage.get_subscription_update_proxy_key() or "").strip()
+            text = ""
             if proxy_key:
                 proxy = self.storage.get_proxy_by_key(proxy_key)
-                if proxy is None:
-                    raise FetchError("subscription update proxy not found")
-                text = fetch_text_via_proxy_node(
-                    subscription_url,
-                    proxy_node=proxy,
-                    timeout_sec=timeout_sec,
-                    singbox_binary=self.singbox_binary,
-                )
-            else:
+                if proxy is not None:
+                    try:
+                        text = fetch_text_via_proxy_node(
+                            subscription_url,
+                            proxy_node=proxy,
+                            timeout_sec=timeout_sec,
+                            singbox_binary=self.singbox_binary,
+                        )
+                    except FetchError:
+                        # Fallback to direct fetch when update proxy is temporarily unavailable.
+                        text = ""
+                if text:
+                    proxy_source_report = self._collect_one_text_source(
+                        text=text,
+                        source=tag,
+                        source_name=source_name,
+                    )
+                    if _source_report_has_success(proxy_source_report):
+                        _merge_collect_report(report, proxy_source_report)
+                        return report
+                    text = ""
+            if not text:
                 text = fetch_text(subscription_url, timeout_sec=timeout_sec)
         except FetchError:
+            if proxy_source_report is not None:
+                _merge_collect_report(report, proxy_source_report)
+                return report
             source_report.invalid = 1
             _merge_collect_report(report, source_report)
             return report
@@ -113,7 +132,7 @@ class CollectorService:
         parsed_report = self._collect_one_text_source(
             text=text,
             source=tag,
-            source_name=f"subscription-{int(subscription_id)}",
+            source_name=source_name,
         )
         _merge_collect_report(report, parsed_report)
         return report
@@ -311,3 +330,7 @@ def _collect_status_and_error(report: CollectReport) -> tuple[str, str]:
     if report.total_invalid > 0:
         return "failed", "empty or invalid subscription content"
     return "success", ""
+
+
+def _source_report_has_success(source_report: SourceCollectReport) -> bool:
+    return source_report.parsed > 0 or source_report.inserted > 0 or source_report.updated > 0

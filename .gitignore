@@ -5,11 +5,14 @@ __pycache__/
 .venv/
 .cache/
 .mypy_cache/
+.codex/
+.worktrees/
 
 # local runtime/state
 data/
 *.log
 *.pid
+proxies.db
 
 # local binary/runtime downloads
 bin/sing-box
@@ -21,3 +24,9 @@ output/
 .idea/
 .vscode/
 .DS_Store
+
+# local notes/screenshots
+image.png
+snap-before-filters.md
+status-dropdown.png
+status-dropdown-2.png

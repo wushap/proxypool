@@ -105,6 +105,51 @@ class TestGeoIPService(unittest.TestCase):
             self.assertTrue(any("ip-api.com/json/" in u for u in calls))
             self.assertTrue(any("db=ip2location" in u for u in calls))
 
+    def test_enrich_batch_falls_back_to_direct_lookup_when_proxy_lookup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "db.sqlite3"
+            storage = SQLiteProxyStorage(db)
+            node = ProxyNode(
+                protocol="trojan",
+                host="fallback-direct.example.com",
+                port=443,
+                raw_link="trojan://f",
+                extra={"password": "x"},
+            )
+            storage.upsert_proxy(node)
+            storage.update_test_result(node.normalized_key(), available=True, latency_ms=10)
+
+            proxy_calls: list[str] = []
+            resolver_calls: list[str] = []
+
+            def proxy_fetcher(proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None) -> dict:
+                proxy_calls.append(url)
+                raise RuntimeError("proxy geo fetch failed")
+
+            def resolver(host: str) -> str:
+                resolver_calls.append(host)
+                return "198.51.100.123"
+
+            service = GeoIPService(
+                storage=storage,
+                resolver=resolver,
+                geo_lookup=lambda ip: ("US", "Seattle"),
+                purity_lookup=lambda ip: (87.0, "家宽"),
+                proxy_json_fetcher=proxy_fetcher,
+            )
+
+            report = service.enrich_batch(limit=1, concurrency=1)
+            self.assertEqual(report["updated"], 1)
+            self.assertEqual(report["failed"], 0)
+            self.assertTrue(proxy_calls)
+            self.assertTrue(resolver_calls)
+
+            row = storage.list_proxies_filtered(limit=1)[0]
+            self.assertEqual(row["resolved_ip"], "198.51.100.123")
+            self.assertEqual(row["country"], "US")
+            self.assertEqual(row["city"], "Seattle")
+            self.assertEqual(str(row["ip_purity_level"]), "家宽")
+
     def test_enrich_ip_purity_batch_uses_proxy_lookup_when_fetcher_provided(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"
@@ -152,6 +197,51 @@ class TestGeoIPService(unittest.TestCase):
             self.assertTrue(float(row["ip_purity_score"] or 0) < 40)
             self.assertTrue(any("ip-api.com/json/" in u for u in calls))
             self.assertTrue(any("db=ip2location" in u for u in calls))
+
+    def test_enrich_ip_purity_batch_falls_back_to_direct_lookup_when_proxy_lookup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "db.sqlite3"
+            storage = SQLiteProxyStorage(db)
+            node = ProxyNode(
+                protocol="vless",
+                host="purity-fallback.example.com",
+                port=443,
+                raw_link="vless://f",
+                extra={"uuid": "u"},
+            )
+            storage.upsert_proxy(node)
+            storage.update_test_result(node.normalized_key(), available=True, latency_ms=10)
+
+            proxy_calls: list[str] = []
+            resolver_calls: list[str] = []
+
+            def proxy_fetcher(proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None) -> dict:
+                proxy_calls.append(url)
+                raise RuntimeError("proxy purity fetch failed")
+
+            def resolver(host: str) -> str:
+                resolver_calls.append(host)
+                return "203.0.113.55"
+
+            service = GeoIPService(
+                storage=storage,
+                resolver=resolver,
+                geo_lookup=lambda ip: ("JP", "Tokyo"),
+                purity_lookup=lambda ip: (91.0, "家宽"),
+                proxy_json_fetcher=proxy_fetcher,
+            )
+
+            report = service.enrich_ip_purity_batch(limit=1, concurrency=1, only_unchecked=False)
+            self.assertEqual(report["updated"], 1)
+            self.assertEqual(report["failed"], 0)
+            self.assertTrue(proxy_calls)
+            self.assertTrue(resolver_calls)
+
+            row = storage.list_proxies_filtered(limit=1)[0]
+            self.assertEqual(row["resolved_ip"], "203.0.113.55")
+            self.assertEqual(row["country"], "JP")
+            self.assertEqual(row["city"], "Tokyo")
+            self.assertEqual(str(row["ip_purity_level"]), "家宽")
 
     def test_enrich_batch(self) -> None:
         with tempfile.TemporaryDirectory() as td:

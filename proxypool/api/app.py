@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from proxypool.api.schemas import (
+    BackendPortRangeRequest,
     GeoEnrichRequest,
     ImportFilesRequest,
     ImportTextsRequest,
@@ -18,6 +19,7 @@ from proxypool.api.schemas import (
     ImportUrlsRequest,
     RunTestRequest,
     SetSingboxRoutesRequest,
+    SingleProxyTestRequest,
     SubscriptionCreateRequest,
     SubscriptionRefreshRequest,
     SubscriptionUpdateProxyRequest,
@@ -120,6 +122,25 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="task not found")
         return task
 
+    @app.post("/api/tasks/{task_id}/stop")
+    async def stop_task(task_id: str) -> dict:
+        stopped = task_manager.stop_task(task_id)
+        task = task_manager.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        return {"stopped": bool(stopped), "task": task}
+
+    @app.delete("/api/tasks/{task_id}")
+    async def delete_task(task_id: str) -> dict:
+        task = task_manager.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        deleted = task_manager.delete_task(task_id)
+        if deleted:
+            return {"deleted": True, "task_id": task_id}
+        latest = task_manager.get_task(task_id)
+        return {"deleted": False, "task": latest}
+
     @app.get("/api/backend/status")
     async def backend_status() -> dict:
         return singbox_manager.status()
@@ -127,6 +148,17 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     @app.get("/api/backend/routes")
     async def backend_routes() -> dict:
         return {"routes": singbox_manager.status()["routes"]}
+
+    @app.get("/api/backend/default-port-range")
+    async def backend_default_port_range() -> dict:
+        return storage.get_backend_default_port_range()
+
+    @app.put("/api/backend/default-port-range")
+    async def backend_set_default_port_range(body: BackendPortRangeRequest) -> dict:
+        try:
+            return storage.set_backend_default_port_range(start=body.start, end=body.end)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/backend/latency")
     async def backend_latency(
@@ -192,8 +224,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         available: bool | None = Query(default=None),
         source: str | None = Query(default=None),
         geo_filter: str | None = Query(default=None, pattern="^(has|none)$"),
+        geo_country: str | None = Query(default=None),
         geo_location: str | None = Query(default=None),
         openai_filter: str | None = Query(default=None, pattern="^(unlocked|blocked|unchecked)$"),
+        ip_purity_filter: str | None = Query(default=None, pattern="^(checked|unchecked|residential|non_residential|unknown)$"),
         fallback_front_filter: str | None = Query(default=None, pattern="^(has|none)$"),
         sort_by: str = Query(default="latency"),
         sort_order: str = Query(default="asc"),
@@ -205,8 +239,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             available=available,
             source_keyword=source,
             geo_filter=geo_filter,
+            geo_country=geo_country,
             geo_location=geo_location,
             openai_filter=openai_filter,
+            ip_purity_filter=ip_purity_filter,
             fallback_front_filter=fallback_front_filter,
             sort_by=sort_by,
             sort_order=sort_order,
@@ -345,44 +381,16 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         if sub is None:
             raise HTTPException(status_code=404, detail="subscription not found")
 
-        report = collector.collect_from_subscription(
-            subscription_id=subscription_id,
-            subscription_name=str(sub.get("name") or ""),
-            subscription_url=str(sub.get("url") or ""),
-            timeout_sec=body.timeout_sec,
-        )
-        status, error = _subscription_status_from_report(report)
-        storage.mark_subscription_result(
-            subscription_id=subscription_id,
-            status=status,
-            error=error,
-            parsed=report.total_parsed,
-            inserted=report.total_inserted,
-            updated=report.total_updated,
-            invalid=report.total_invalid,
-            deduped=report.total_deduped,
-        )
-        item = storage.get_subscription(subscription_id)
-        return {"item": item, "report": _collect_report_to_dict(report)}
-
-    @app.post("/api/subscriptions/refresh-enabled")
-    async def refresh_enabled_subscriptions(
-        timeout_sec: float = Query(default=12.0, ge=1.0, le=120.0),
-    ) -> dict:
-        subscriptions = storage.list_enabled_subscriptions()
-        items: list[dict] = []
-
-        for sub in subscriptions:
-            sub_id = int(sub.get("id") or 0)
+        def _refresh_one() -> dict:
             report = collector.collect_from_subscription(
-                subscription_id=sub_id,
+                subscription_id=subscription_id,
                 subscription_name=str(sub.get("name") or ""),
                 subscription_url=str(sub.get("url") or ""),
-                timeout_sec=timeout_sec,
+                timeout_sec=body.timeout_sec,
             )
             status, error = _subscription_status_from_report(report)
             storage.mark_subscription_result(
-                subscription_id=sub_id,
+                subscription_id=subscription_id,
                 status=status,
                 error=error,
                 parsed=report.total_parsed,
@@ -391,16 +399,119 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 invalid=report.total_invalid,
                 deduped=report.total_deduped,
             )
-            items.append(
-                {
-                    "subscription_id": sub_id,
-                    "name": sub.get("name") or "",
-                    "status": status,
-                    "error": error,
-                    "report": _collect_report_to_dict(report),
-                }
-            )
-        return {"count": len(items), "items": items}
+            item = storage.get_subscription(subscription_id)
+            return {"item": item, "report": _collect_report_to_dict(report)}
+
+        return await asyncio.to_thread(_refresh_one)
+
+    @app.post("/api/subscriptions/refresh-enabled")
+    async def refresh_enabled_subscriptions(
+        timeout_sec: float = Query(default=12.0, ge=1.0, le=120.0),
+    ) -> dict:
+        def _refresh_enabled() -> dict:
+            subscriptions = storage.list_enabled_subscriptions()
+            items: list[dict] = []
+
+            for sub in subscriptions:
+                sub_id = int(sub.get("id") or 0)
+                report = collector.collect_from_subscription(
+                    subscription_id=sub_id,
+                    subscription_name=str(sub.get("name") or ""),
+                    subscription_url=str(sub.get("url") or ""),
+                    timeout_sec=timeout_sec,
+                )
+                status, error = _subscription_status_from_report(report)
+                storage.mark_subscription_result(
+                    subscription_id=sub_id,
+                    status=status,
+                    error=error,
+                    parsed=report.total_parsed,
+                    inserted=report.total_inserted,
+                    updated=report.total_updated,
+                    invalid=report.total_invalid,
+                    deduped=report.total_deduped,
+                )
+                items.append(
+                    {
+                        "subscription_id": sub_id,
+                        "name": sub.get("name") or "",
+                        "status": status,
+                        "error": error,
+                        "report": _collect_report_to_dict(report),
+                    }
+                )
+            return {"count": len(items), "items": items}
+
+        return await asyncio.to_thread(_refresh_enabled)
+
+    @app.post("/api/tasks/subscriptions-refresh/start")
+    async def start_refresh_enabled_subscriptions_task(
+        timeout_sec: float = Query(default=12.0, ge=1.0, le=120.0),
+    ) -> dict:
+        def runner(update, should_stop) -> dict:
+            subscriptions = storage.list_enabled_subscriptions()
+            total = len(subscriptions)
+            items: list[dict] = []
+            success = 0
+            failed = 0
+            update(total=total, completed=0, success=0, failed=0, message=f"queued {total} subscriptions")
+
+            for idx, sub in enumerate(subscriptions, start=1):
+                if should_stop():
+                    break
+                sub_id = int(sub.get("id") or 0)
+                sub_name = str(sub.get("name") or "")
+                update(
+                    total=total,
+                    completed=idx - 1,
+                    success=success,
+                    failed=failed,
+                    message=f"refreshing {sub_name or sub_id} ({idx}/{total})",
+                )
+                report = collector.collect_from_subscription(
+                    subscription_id=sub_id,
+                    subscription_name=sub_name,
+                    subscription_url=str(sub.get("url") or ""),
+                    timeout_sec=timeout_sec,
+                )
+                status, error = _subscription_status_from_report(report)
+                storage.mark_subscription_result(
+                    subscription_id=sub_id,
+                    status=status,
+                    error=error,
+                    parsed=report.total_parsed,
+                    inserted=report.total_inserted,
+                    updated=report.total_updated,
+                    invalid=report.total_invalid,
+                    deduped=report.total_deduped,
+                )
+                items.append(
+                    {
+                        "subscription_id": sub_id,
+                        "name": sub_name,
+                        "status": status,
+                        "error": error,
+                        "report": _collect_report_to_dict(report),
+                    }
+                )
+                if status == "success":
+                    success += 1
+                else:
+                    failed += 1
+                update(
+                    total=total,
+                    completed=idx,
+                    success=success,
+                    failed=failed,
+                    message=f"finished {sub_name or sub_id} ({idx}/{total})",
+                    result={"count": len(items), "items": items},
+                )
+
+            return {"count": len(items), "items": items}
+
+        task_id = task_manager.start_task("subscriptions_refresh", runner)
+        task = task_manager.get_task(task_id)
+        return {"task_id": task_id, "task": task}
 
     @app.post("/api/proxies/delete-unavailable")
     async def delete_unavailable_proxies() -> dict:
@@ -421,7 +532,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.post("/api/tasks/geoip/start")
     async def start_geoip_task(body: GeoEnrichRequest) -> dict:
-        def _runner(update):
+        def _runner(update, should_stop):
             def _progress(payload: dict) -> None:
                 update(
                     total=payload.get("total", 0),
@@ -435,6 +546,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 limit=body.limit,
                 concurrency=body.concurrency,
                 progress_cb=_progress,
+                stop_cb=should_stop,
             )
 
         task_id = task_manager.start_task("geoip_enrich", _runner)
@@ -442,7 +554,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.post("/api/tasks/ip-purity/start")
     async def start_ip_purity_task(body: GeoEnrichRequest) -> dict:
-        def _runner(update):
+        def _runner(update, should_stop):
             def _progress(payload: dict) -> None:
                 update(
                     total=payload.get("total", 0),
@@ -457,6 +569,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 concurrency=body.concurrency,
                 only_unchecked=False,
                 progress_cb=_progress,
+                stop_cb=should_stop,
             )
 
         task_id = task_manager.start_task("ip_purity_enrich", _runner)
@@ -469,15 +582,36 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             concurrency=body.concurrency,
             only_unchecked=body.only_unchecked,
             only_available=body.only_available,
+            only_unavailable=body.only_unavailable,
+            min_last_checked_age_hours=body.min_last_checked_age_hours,
             protocols=body.protocols,
             fallback_front_proxy_keys=body.fallback_front_proxy_keys,
             fallback_front_max_attempts=body.fallback_front_max_attempts,
         )
         return asdict(report)
 
+    @app.post("/api/tester/run-one")
+    async def run_single_proxy_test(body: SingleProxyTestRequest) -> dict:
+        key = str(body.normalized_key or "").strip()
+        if not key:
+            raise HTTPException(status_code=400, detail="normalized_key is empty")
+        if storage.get_proxy_by_key(key) is None:
+            raise HTTPException(status_code=404, detail="proxy not found")
+        try:
+            result = await tester.run_one(
+                normalized_key=key,
+                fallback_front_proxy_keys=body.fallback_front_proxy_keys,
+                fallback_front_max_attempts=body.fallback_front_max_attempts,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return asdict(result)
+
     @app.post("/api/tasks/tester/start")
     async def start_tester_task(body: RunTestRequest) -> dict:
-        def _runner(update):
+        def _runner(update, should_stop):
             def _progress(payload: dict) -> None:
                 update(
                     total=payload.get("total", 0),
@@ -493,10 +627,13 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                     concurrency=body.concurrency,
                     only_unchecked=body.only_unchecked,
                     only_available=body.only_available,
+                    only_unavailable=body.only_unavailable,
+                    min_last_checked_age_hours=body.min_last_checked_age_hours,
                     protocols=body.protocols,
                     fallback_front_proxy_keys=body.fallback_front_proxy_keys,
                     fallback_front_max_attempts=body.fallback_front_max_attempts,
                     progress_cb=_progress,
+                    stop_cb=should_stop,
                 )
             )
             return asdict(report)
@@ -506,7 +643,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.post("/api/tasks/openai-check/start")
     async def start_openai_check_task(body: RunTestRequest) -> dict:
-        def _runner(update):
+        def _runner(update, should_stop):
             def _progress(payload: dict) -> None:
                 update(
                     total=payload.get("total", 0),
@@ -523,6 +660,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                     only_available=True,
                     protocols=body.protocols,
                     progress_cb=_progress,
+                    stop_cb=should_stop,
                 )
             )
             return asdict(report)

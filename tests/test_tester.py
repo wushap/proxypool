@@ -1,6 +1,7 @@
 import asyncio
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from proxypool.models import ProxyNode
@@ -225,6 +226,48 @@ class TestTesterService(unittest.TestCase):
             report = asyncio.run(tester.run_batch(limit=0, concurrency=4))
             self.assertEqual(report.requested, 3)
             self.assertEqual(report.tested, 3)
+
+    def test_run_batch_supports_only_unavailable_and_min_age_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "db.sqlite3"
+            storage = SQLiteProxyStorage(db)
+            old_down = ProxyNode(protocol="trojan", host="down-old.example.com", port=443, raw_link="trojan://old", extra={"password": "p"})
+            recent_down = ProxyNode(protocol="trojan", host="down-recent.example.com", port=443, raw_link="trojan://recent", extra={"password": "p"})
+            up_old = ProxyNode(protocol="trojan", host="up-old.example.com", port=443, raw_link="trojan://up", extra={"password": "p"})
+            storage.upsert_proxy(old_down)
+            storage.upsert_proxy(recent_down)
+            storage.upsert_proxy(up_old)
+            storage.update_test_result(old_down.normalized_key(), available=False, latency_ms=None, error="down")
+            storage.update_test_result(recent_down.normalized_key(), available=False, latency_ms=None, error="down")
+            storage.update_test_result(up_old.normalized_key(), available=True, latency_ms=20)
+            now = datetime.now(timezone.utc)
+            with storage._connect() as conn:
+                conn.execute(
+                    "UPDATE proxies SET last_checked_at = ? WHERE normalized_key = ?",
+                    ((now - timedelta(days=2)).isoformat(), old_down.normalized_key()),
+                )
+                conn.execute(
+                    "UPDATE proxies SET last_checked_at = ? WHERE normalized_key = ?",
+                    ((now - timedelta(hours=2)).isoformat(), recent_down.normalized_key()),
+                )
+                conn.execute(
+                    "UPDATE proxies SET last_checked_at = ? WHERE normalized_key = ?",
+                    ((now - timedelta(days=2)).isoformat(), up_old.normalized_key()),
+                )
+                conn.commit()
+
+            prober = RecordingProber()
+            tester = TesterService(storage, prober=prober)
+            report = asyncio.run(
+                tester.run_batch(
+                    limit=0,
+                    concurrency=4,
+                    only_unavailable=True,
+                    min_last_checked_age_hours=24,
+                )
+            )
+            self.assertEqual(report.requested, 1)
+            self.assertEqual(prober.hosts, ["down-old.example.com"])
 
     def test_openai_check_does_not_change_connectivity_fields(self) -> None:
         with tempfile.TemporaryDirectory() as td:
