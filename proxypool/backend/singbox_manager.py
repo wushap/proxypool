@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import shutil
 import subprocess
@@ -58,7 +59,9 @@ class SingBoxBackendManager:
         self.auto_restart_max = max(0, int(auto_restart_max))
 
         self._process: subprocess.Popen[Any] | None = None
+        self._processes: dict[str, subprocess.Popen[Any]] = {}
         self._current_runtime_config_file: Path | None = None
+        self._runtime_config_files: dict[str, Path] = {}
         self._pid_state: int = -1
         self._last_health_ok: bool | None = None
         self._auto_restart_attempts: int = 0
@@ -69,20 +72,123 @@ class SingBoxBackendManager:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
     def set_routes(self, routes: list[SingBoxRoute], auto_restart: bool = False) -> None:
-        _validate_routes(routes)
-        self.routes_file.write_text(
-            json.dumps([asdict(route) for route in routes], ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        self._write_routes_file(self.routes_file, routes)
 
         if auto_restart and self.is_running():
             self.restart()
 
+    def set_instance_routes(self, instance_id: str, routes: list[SingBoxRoute], auto_restart: bool = False) -> None:
+        safe_id = _safe_instance_id(instance_id)
+        routes_file = self._instance_routes_file(safe_id)
+        self._write_routes_file(routes_file, routes)
+        existing = {str(item.get("instance_id") or ""): item for item in self.storage.list_backend_instances()}
+        item = existing.get(safe_id, {})
+        status = str(item.get("status") or "stopped")
+        was_running = status == "running" or self._is_instance_process_running(safe_id)
+        self.storage.upsert_backend_instance(
+            instance_id=safe_id,
+            pid=int(item.get("pid") or -1),
+            config_file=str(item.get("config_file") or self.runtime_config_file),
+            routes_file=str(routes_file),
+            log_file=str(item.get("log_file") or self._instance_log_file(safe_id)),
+            listen=_routes_listen_summary(routes),
+            ports=[route.inbound_port for route in routes],
+            status=status,
+            last_error=str(item.get("last_error") or ""),
+        )
+        if auto_restart and was_running:
+            self.stop_instance(safe_id)
+            self.start_instance(safe_id, routes=routes)
+
+    def create_instance(self, instance_id: str) -> dict[str, Any]:
+        safe_id = _safe_instance_id(instance_id)
+        existing = {str(item.get("instance_id") or ""): item for item in self.storage.list_backend_instances()}
+        item = existing.get(safe_id)
+        routes = self.get_instance_routes(safe_id)
+        if item is not None:
+            status = str(item.get("status") or "stopped")
+            return self.storage.upsert_backend_instance(
+                instance_id=safe_id,
+                pid=int(item.get("pid") or -1),
+                config_file=str(item.get("config_file") or self.runtime_config_file),
+                routes_file=str(item.get("routes_file") or self._instance_routes_file(safe_id)),
+                log_file=str(item.get("log_file") or self._instance_log_file(safe_id)),
+                listen=_routes_listen_summary(routes),
+                ports=[route.inbound_port for route in routes],
+                status=status,
+                last_error=str(item.get("last_error") or ""),
+            )
+
+        created = self.storage.upsert_backend_instance(
+            instance_id=safe_id,
+            pid=-1,
+            config_file=str(self.runtime_config_file),
+            routes_file=str(self._instance_routes_file(safe_id)),
+            log_file=str(self._instance_log_file(safe_id)),
+            listen=_routes_listen_summary(routes),
+            ports=[route.inbound_port for route in routes],
+            status="stopped",
+        )
+        self._record_process_event(
+            action="create_instance",
+            pid=-1,
+            result="success",
+            detail=f"created stopped instance {safe_id}",
+        )
+        return created
+
+    def replace_failed_exit_proxy(self, old_key: str, new_key: str, auto_restart: bool = False) -> int:
+        old = str(old_key or "").strip()
+        new = str(new_key or "").strip()
+        if not old or not new or old == new:
+            return 0
+        if self.storage.get_proxy_by_key(new) is None:
+            return 0
+        routes = self.get_routes()
+        changed = 0
+        next_routes: list[SingBoxRoute] = []
+        for route in routes:
+            item = SingBoxRoute(**asdict(route))
+            if item.exit_proxy_key == old:
+                item.exit_proxy_key = new
+                changed += 1
+            elif item.proxy_key == old and not item.exit_proxy_key:
+                item.proxy_key = new
+                changed += 1
+            next_routes.append(item)
+        if changed <= 0:
+            return 0
+        self.set_routes(next_routes, auto_restart=auto_restart)
+        self._record_process_event(
+            action="replace_proxy",
+            pid=self._pid_state,
+            result="success",
+            detail=f"replaced failed exit proxy {old} -> {new}; routes={changed}",
+        )
+        return changed
+
     def get_routes(self) -> list[SingBoxRoute]:
-        if not self.routes_file.exists():
+        return self._read_routes_file(self.routes_file)
+
+    def get_instance_routes(self, instance_id: str) -> list[SingBoxRoute]:
+        routes_file = self._instance_routes_file(_safe_instance_id(instance_id))
+        if routes_file.exists():
+            return self._read_routes_file(routes_file)
+        return self.get_routes()
+
+    def _write_routes_file(self, routes_file: Path, routes: list[SingBoxRoute]) -> None:
+        _validate_routes(routes)
+        routes_file.parent.mkdir(parents=True, exist_ok=True)
+        routes_file.write_text(
+            json.dumps([asdict(route) for route in routes], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _read_routes_file(self, routes_file: Path) -> list[SingBoxRoute]:
+        if not routes_file.exists():
             return []
 
-        data = json.loads(self.routes_file.read_text(encoding="utf-8") or "[]")
+        data = json.loads(routes_file.read_text(encoding="utf-8") or "[]")
         routes: list[SingBoxRoute] = []
         for item in data:
             routes.append(
@@ -157,78 +263,140 @@ class SingBoxBackendManager:
         }
 
     def start(self) -> None:
+        self.start_instance("default")
+
+    def start_instance(self, instance_id: str = "default", routes: list[SingBoxRoute] | None = None) -> None:
+        safe_id = _safe_instance_id(instance_id)
         with self._lock:
             self._pid_state = 0
+            runtime_config_file: Path | None = None
             try:
                 if self.backend_engine != "singbox":
                     raise RuntimeError(f"backend engine not supported: {self.backend_engine}")
 
-                if self._process and self._process.poll() is None:
-                    self._pid_state = int(self._process.pid)
+                existing = self._processes.get(safe_id)
+                if existing and existing.poll() is None:
+                    self._pid_state = int(existing.pid)
                     return
 
-                routes = self.get_routes()
-                self._assert_inbound_ports_available(routes)
+                use_routes = routes if routes is not None else self.get_instance_routes(safe_id)
+                self._assert_inbound_ports_available(use_routes)
 
                 if shutil.which(self.binary) is None:
                     raise RuntimeError(f"sing-box binary not found: {self.binary}")
 
-                config = self.build_runtime_config(routes=routes)
-                runtime_config_file = self._new_runtime_config_file()
+                config = self.build_runtime_config(routes=use_routes)
+                runtime_config_file = self._new_runtime_config_file(safe_id)
                 runtime_config_file.write_text(
                     json.dumps(config, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
 
-                log_handle = self.log_file.open("a", encoding="utf-8")
-                self._process = subprocess.Popen(
+                log_file = self._instance_log_file(safe_id)
+                log_handle = log_file.open("a", encoding="utf-8")
+                process = subprocess.Popen(
                     [self.binary, "run", "-c", str(runtime_config_file)],
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
                 )
+                self._processes[safe_id] = process
+                if safe_id == "default":
+                    self._process = process
                 self._current_runtime_config_file = runtime_config_file
-                if not self._wait_inbound_ports_ready(routes, timeout_sec=4.0):
+                self._runtime_config_files[safe_id] = runtime_config_file
+                if not self._wait_inbound_ports_ready(use_routes, timeout_sec=4.0):
                     raise RuntimeError("sing-box startup timeout: inbound ports not ready")
-                self._pid_state = int(self._process.pid)
+                self._pid_state = int(process.pid)
                 self._last_health_ok = True
                 self._auto_restart_attempts = 0
+                self.storage.upsert_backend_instance(
+                    instance_id=safe_id,
+                    pid=self._pid_state,
+                    config_file=str(runtime_config_file),
+                    routes_file=str(self._instance_routes_file(safe_id)),
+                    log_file=str(log_file),
+                    listen=_routes_listen_summary(use_routes),
+                    ports=[route.inbound_port for route in use_routes],
+                    status="running",
+                )
                 self._record_process_event(action="start", pid=self._pid_state, result="success", detail="started")
             except Exception as exc:
-                if self._process and self._process.poll() is None:
-                    self._process.terminate()
+                process = self._processes.get(safe_id)
+                if process and process.poll() is None:
+                    process.terminate()
                     try:
-                        self._process.wait(timeout=2.0)
+                        process.wait(timeout=2.0)
                     except subprocess.TimeoutExpired:
-                        self._process.kill()
-                        self._process.wait(timeout=2.0)
-                self._process = None
+                        process.kill()
+                        process.wait(timeout=2.0)
+                self._processes.pop(safe_id, None)
+                if safe_id == "default":
+                    self._process = None
                 self._pid_state = -1
+                self.storage.upsert_backend_instance(
+                    instance_id=safe_id,
+                    pid=-1,
+                    config_file=str(runtime_config_file or self.runtime_config_file),
+                    routes_file=str(self._instance_routes_file(safe_id)),
+                    log_file=str(self._instance_log_file(safe_id)),
+                    listen=_routes_listen_summary(routes if routes is not None else self.get_instance_routes(safe_id)),
+                    ports=[route.inbound_port for route in (routes if routes is not None else self.get_instance_routes(safe_id))],
+                    status="failed",
+                    last_error=str(exc),
+                )
                 self._record_process_event(action="start", pid=-1, result="failed", detail=str(exc))
                 raise
 
     def stop(self) -> None:
+        self.stop_instance("default")
+
+    def stop_instance(self, instance_id: str = "default") -> None:
+        safe_id = _safe_instance_id(instance_id)
         with self._lock:
-            if not self._process:
+            process = self._processes.get(safe_id)
+            if not process:
+                if safe_id == "default":
+                    self._process = None
                 self._pid_state = -1
+                self.storage.update_backend_instance_status(safe_id, "stopped", pid=-1)
                 self._record_process_event(action="stop", pid=-1, result="noop", detail="already stopped")
                 return
-            if self._process.poll() is not None:
-                pid = int(self._process.pid)
-                self._process = None
+            if process.poll() is not None:
+                pid = int(process.pid)
+                self._processes.pop(safe_id, None)
+                if safe_id == "default":
+                    self._process = None
                 self._pid_state = -1
+                self.storage.update_backend_instance_status(safe_id, "exited", pid=pid)
                 self._record_process_event(action="stop", pid=pid, result="success", detail="already exited")
                 return
-            pid = int(self._process.pid)
-            self._process.terminate()
+            pid = int(process.pid)
+            process.terminate()
             try:
-                self._process.wait(timeout=2.0)
+                process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
-                self._process.kill()
-                self._process.wait(timeout=2.0)
-            self._process = None
+                process.kill()
+                process.wait(timeout=2.0)
+            self._processes.pop(safe_id, None)
+            if safe_id == "default":
+                self._process = None
             self._pid_state = -1
             self._auto_restart_attempts = 0
+            self.storage.update_backend_instance_status(safe_id, "stopped", pid=pid)
             self._record_process_event(action="stop", pid=pid, result="success", detail="stopped")
+
+    def delete_instance(self, instance_id: str) -> bool:
+        safe_id = _safe_instance_id(instance_id)
+        self.stop_instance(safe_id)
+        deleted = self.storage.delete_backend_instance(safe_id)
+        result = "success" if deleted > 0 else "noop"
+        self._record_process_event(
+            action="delete_instance",
+            pid=-1,
+            result=result,
+            detail=f"deleted instance {safe_id}" if deleted > 0 else f"instance not found: {safe_id}",
+        )
+        return deleted > 0
 
     def restart(self) -> None:
         self.stop()
@@ -246,6 +414,10 @@ class SingBoxBackendManager:
             self._process = None
             return False
 
+    def _is_instance_process_running(self, instance_id: str) -> bool:
+        process = self._processes.get(_safe_instance_id(instance_id))
+        return bool(process and process.poll() is None)
+
     def status(self) -> dict[str, Any]:
         routes = self.get_routes()
         running = self.is_running()
@@ -261,7 +433,15 @@ class SingBoxBackendManager:
             "routes": [asdict(route) for route in routes],
             "runtime_config_file": str(self._current_runtime_config_file or self.runtime_config_file),
             "log_file": str(self.log_file),
+            "instances": self.list_instances(),
         }
+
+    def list_instances(self) -> list[dict[str, Any]]:
+        instances = self.storage.list_backend_instances()
+        for item in instances:
+            if str(item.get("status") or "") == "running" and not _is_process_alive(int(item.get("pid") or -1)):
+                self.storage.update_backend_instance_status(str(item.get("instance_id") or ""), "exited", pid=int(item.get("pid") or -1))
+        return self.storage.list_backend_instances()
 
     def health_check(self, timeout_sec: float = 1.5, auto_restart: bool = False) -> dict[str, Any]:
         routes = self.get_routes()
@@ -431,10 +611,23 @@ class SingBoxBackendManager:
             "checked_at": now,
         }
 
-    def _new_runtime_config_file(self) -> Path:
+    def _new_runtime_config_file(self, instance_id: str = "default") -> Path:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
         base_name = self.runtime_config_file.stem or "singbox"
-        return self.runtime_config_file.with_name(f"{base_name}-{stamp}.json")
+        suffix = _safe_instance_id(instance_id)
+        return self.runtime_config_file.with_name(f"{base_name}-{suffix}-{stamp}.json")
+
+    def _instance_log_file(self, instance_id: str) -> Path:
+        safe_id = _safe_instance_id(instance_id)
+        if safe_id == "default":
+            return self.log_file
+        return self.log_file.with_name(f"{self.log_file.stem}-{safe_id}{self.log_file.suffix or '.log'}")
+
+    def _instance_routes_file(self, instance_id: str) -> Path:
+        safe_id = _safe_instance_id(instance_id)
+        if safe_id == "default":
+            return self.routes_file
+        return self.routes_file.with_name(f"{self.routes_file.stem}-{safe_id}{self.routes_file.suffix or '.json'}")
 
     def _record_process_event(self, action: str, pid: int, result: str, detail: str = "") -> None:
         try:
@@ -603,3 +796,26 @@ def _is_bind_available(host: str, port: int) -> bool:
         finally:
             sock.close()
     return False
+
+
+def _is_process_alive(pid: int) -> bool:
+    if int(pid) <= 0:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError:
+        return False
+
+
+def _safe_instance_id(instance_id: str) -> str:
+    text = str(instance_id or "").strip() or "default"
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in text)
+    return safe[:80] or "default"
+
+
+def _routes_listen_summary(routes: list[SingBoxRoute]) -> str:
+    values = sorted({str(route.listen or "127.0.0.1") for route in routes})
+    if not values:
+        return "127.0.0.1"
+    return ",".join(values)[:300]

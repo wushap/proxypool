@@ -41,6 +41,10 @@ class SetSingboxRoutesRequest(BaseModel):
     auto_restart: bool = False
 
 
+class BackendInstanceCreateRequest(BaseModel):
+    instance_id: str = "default"
+
+
 class GeoEnrichRequest(BaseModel):
     limit: int = 0
     concurrency: int = Field(default=20, ge=1, le=500)
@@ -56,6 +60,7 @@ class RunTestRequest(BaseModel):
     protocols: list[str] | None = None
     fallback_front_proxy_keys: list[str] = Field(default_factory=list)
     fallback_front_max_attempts: int = 0
+    replace_failed_with_available: bool = False
 
 
 class SingleProxyTestRequest(BaseModel):
@@ -80,9 +85,25 @@ class SubscriptionUpdateProxyRequest(BaseModel):
     update_proxy_key: str = ""
 
 
+class PublishedSubscriptionCreateRequest(BaseModel):
+    name: str
+    filters: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class PublishedSubscriptionUpdateRequest(BaseModel):
+    name: str | None = None
+    filters: dict[str, str] | None = None
+    enabled: bool | None = None
+
+
 class BackendPortRangeRequest(BaseModel):
     start: int = Field(default=1081, ge=1, le=65535)
     end: int = Field(default=1180, ge=1, le=65535)
+
+
+class BackendDefaultListenRequest(BaseModel):
+    listen: str = "127.0.0.1"
 
 
 class SubscriptionRefreshRequest(BaseModel):

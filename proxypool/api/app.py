@@ -11,12 +11,16 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from proxypool.api.schemas import (
+    BackendInstanceCreateRequest,
     BackendPortRangeRequest,
+    BackendDefaultListenRequest,
     GeoEnrichRequest,
     ImportFilesRequest,
     ImportTextsRequest,
     ImportSourcesRequest,
     ImportUrlsRequest,
+    PublishedSubscriptionCreateRequest,
+    PublishedSubscriptionUpdateRequest,
     RunTestRequest,
     SetSingboxRoutesRequest,
     SingleProxyTestRequest,
@@ -57,6 +61,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         backend_engine=cfg.backend_engine,
         auto_restart_max=cfg.backend_auto_restart_max,
     )
+    tester.replace_failed_proxy_cb = singbox_manager.replace_failed_exit_proxy
 
     app = FastAPI(title="Proxy Pool", version="0.1.0")
     app.state.settings = cfg
@@ -159,6 +164,76 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             return storage.set_backend_default_port_range(start=body.start, end=body.end)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/backend/default-listen")
+    async def backend_default_listen() -> dict:
+        return {"listen": storage.get_backend_default_listen()}
+
+    @app.put("/api/backend/default-listen")
+    async def backend_set_default_listen(body: BackendDefaultListenRequest) -> dict:
+        try:
+            return {"listen": storage.set_backend_default_listen(body.listen)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/backend/instances")
+    async def backend_instances() -> dict:
+        return {"items": singbox_manager.list_instances()}
+
+    @app.post("/api/backend/instances")
+    async def backend_instance_create(body: BackendInstanceCreateRequest) -> dict:
+        try:
+            item = singbox_manager.create_instance(body.instance_id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": item, "items": singbox_manager.list_instances()}
+
+    @app.post("/api/backend/instances/{instance_id}/start")
+    async def backend_instance_start(instance_id: str) -> dict:
+        try:
+            singbox_manager.start_instance(instance_id=instance_id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return singbox_manager.status()
+
+    @app.post("/api/backend/instances/{instance_id}/stop")
+    async def backend_instance_stop(instance_id: str) -> dict:
+        singbox_manager.stop_instance(instance_id=instance_id)
+        return singbox_manager.status()
+
+    @app.get("/api/backend/instances/{instance_id}/routes")
+    async def backend_instance_routes(instance_id: str) -> dict:
+        return {
+            "instance_id": instance_id,
+            "routes": [asdict(route) for route in singbox_manager.get_instance_routes(instance_id)],
+        }
+
+    @app.post("/api/backend/instances/{instance_id}/routes")
+    async def backend_instance_set_routes(instance_id: str, body: SetSingboxRoutesRequest) -> dict:
+        routes = [
+            SingBoxRoute(
+                inbound_port=item.inbound_port,
+                proxy_key=item.proxy_key,
+                front_proxy_key=item.front_proxy_key,
+                middle_proxy_key=item.middle_proxy_key,
+                exit_proxy_key=item.exit_proxy_key,
+                inbound_type=item.inbound_type,
+                listen=item.listen,
+            )
+            for item in body.routes
+        ]
+        try:
+            singbox_manager.set_instance_routes(instance_id, routes, auto_restart=body.auto_restart)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"instance_id": instance_id, "routes": [asdict(route) for route in singbox_manager.get_instance_routes(instance_id)]}
+
+    @app.delete("/api/backend/instances/{instance_id}")
+    async def backend_instance_delete(instance_id: str) -> dict:
+        return {
+            "deleted": singbox_manager.delete_instance(instance_id=instance_id),
+            "items": singbox_manager.list_instances(),
+        }
 
     @app.get("/api/backend/latency")
     async def backend_latency(
@@ -375,6 +450,69 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         deleted = storage.delete_unavailable_subscriptions(include_disabled=include_disabled)
         return {"deleted": deleted}
 
+    def _published_subscription_payload(item: dict) -> dict:
+        out = dict(item)
+        out["export_url"] = f"/api/published-subscriptions/{item['id']}/subscription"
+        return out
+
+    @app.get("/api/published-subscriptions")
+    async def list_published_subscriptions(limit: int = Query(default=200, ge=1, le=5000)) -> dict:
+        return {
+            "items": [
+                _published_subscription_payload(item)
+                for item in storage.list_published_subscriptions(limit=limit)
+            ]
+        }
+
+    @app.post("/api/published-subscriptions")
+    async def create_published_subscription(body: PublishedSubscriptionCreateRequest) -> dict:
+        try:
+            item = storage.create_published_subscription(
+                name=body.name,
+                filters=body.filters,
+                enabled=body.enabled,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": _published_subscription_payload(item)}
+
+    @app.put("/api/published-subscriptions/{subscription_id}")
+    async def update_published_subscription(subscription_id: int, body: PublishedSubscriptionUpdateRequest) -> dict:
+        try:
+            item = storage.update_published_subscription(
+                subscription_id=subscription_id,
+                name=body.name,
+                filters=body.filters,
+                enabled=body.enabled,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": _published_subscription_payload(item)}
+
+    @app.delete("/api/published-subscriptions/{subscription_id}")
+    async def delete_published_subscription(subscription_id: int) -> dict:
+        deleted = storage.delete_published_subscription(subscription_id)
+        if deleted <= 0:
+            raise HTTPException(status_code=404, detail="published subscription not found")
+        return {"deleted": deleted}
+
+    @app.get("/api/published-subscriptions/{subscription_id}/subscription")
+    async def published_subscription(
+        subscription_id: int,
+        limit: int = Query(default=5000, ge=1, le=20000),
+        encode_base64: bool = Query(default=False),
+    ) -> PlainTextResponse:
+        item = storage.get_published_subscription(subscription_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="published subscription not found")
+        if not item.get("enabled"):
+            raise HTTPException(status_code=404, detail="published subscription disabled")
+        links = storage.get_published_subscription_links(subscription_id, limit=limit)
+        text = "\n".join(links)
+        if encode_base64:
+            text = base64.b64encode(text.encode("utf-8")).decode("utf-8")
+        return PlainTextResponse(text)
+
     @app.post("/api/subscriptions/{subscription_id}/refresh")
     async def refresh_subscription(subscription_id: int, body: SubscriptionRefreshRequest) -> dict:
         sub = storage.get_subscription(subscription_id)
@@ -587,6 +725,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             protocols=body.protocols,
             fallback_front_proxy_keys=body.fallback_front_proxy_keys,
             fallback_front_max_attempts=body.fallback_front_max_attempts,
+            replace_failed_with_available=body.replace_failed_with_available,
         )
         return asdict(report)
 
@@ -632,6 +771,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                     protocols=body.protocols,
                     fallback_front_proxy_keys=body.fallback_front_proxy_keys,
                     fallback_front_max_attempts=body.fallback_front_max_attempts,
+                    replace_failed_with_available=body.replace_failed_with_available,
                     progress_cb=_progress,
                     stop_cb=should_stop,
                 )

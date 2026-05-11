@@ -29,9 +29,15 @@ class BatchOpenAIReport:
 
 
 class TesterService:
-    def __init__(self, storage: SQLiteProxyStorage, prober: SingboxProber | None = None) -> None:
+    def __init__(
+        self,
+        storage: SQLiteProxyStorage,
+        prober: SingboxProber | None = None,
+        replace_failed_proxy_cb: Callable[[str, str], None] | None = None,
+    ) -> None:
         self.storage = storage
         self.prober = prober or SingboxProber()
+        self.replace_failed_proxy_cb = replace_failed_proxy_cb
 
     async def run_one(
         self,
@@ -75,6 +81,7 @@ class TesterService:
         fallback_front_proxy_keys: list[str] | None = None,
         fallback_front_max_attempts: int = 0,
         max_fail_count: int = 20,
+        replace_failed_with_available: bool = False,
         progress_cb: Callable[[dict], None] | None = None,
         stop_cb: Callable[[], bool] | None = None,
     ) -> BatchTestReport:
@@ -130,6 +137,8 @@ class TesterService:
                 fallback_front_keys=fallback_success_keys,
                 error=result.error,
             )
+            if replace_failed_with_available and not result.available:
+                self._replace_failed_proxy_config(result.normalized_key)
             if progress_cb:
                 progress_cb(
                     {
@@ -217,6 +226,19 @@ class TesterService:
                 }
             )
         return report
+
+    def _replace_failed_proxy_config(self, old_key: str) -> None:
+        if not self.replace_failed_proxy_cb:
+            return
+        old = str(old_key or "").strip()
+        if not old:
+            return
+        candidates = self.storage.list_proxies_filtered(limit=20, available=True, sort_by="latency", sort_order="asc")
+        for candidate in candidates:
+            new_key = str(candidate.get("normalized_key") or "").strip()
+            if new_key and new_key != old:
+                self.replace_failed_proxy_cb(old, new_key)
+                return
 
     async def _probe_node_once(self, node: dict, fallback_nodes: list[dict] | None = None) -> tuple[ProbeResult, list[str]]:
         async_probe = getattr(self.prober, "probe_async", None)

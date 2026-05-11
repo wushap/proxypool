@@ -76,6 +76,21 @@ class SQLiteProxyStorage:
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_backend_events_created ON backend_process_events(created_at DESC);
+        CREATE TABLE IF NOT EXISTS backend_instances (
+            instance_id TEXT PRIMARY KEY,
+            pid INTEGER NOT NULL DEFAULT -1,
+            config_file TEXT NOT NULL DEFAULT '',
+            routes_file TEXT NOT NULL DEFAULT '',
+            log_file TEXT NOT NULL DEFAULT '',
+            listen TEXT NOT NULL DEFAULT '127.0.0.1',
+            ports_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'stopped',
+            last_error TEXT NOT NULL DEFAULT '',
+            started_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_backend_instances_status ON backend_instances(status);
         CREATE TABLE IF NOT EXISTS subscriptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -94,6 +109,15 @@ class SQLiteProxyStorage:
             updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_subscriptions_enabled ON subscriptions(enabled);
+        CREATE TABLE IF NOT EXISTS published_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            filters_json TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_published_subscriptions_enabled ON published_subscriptions(enabled);
         CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL DEFAULT '',
@@ -634,6 +658,105 @@ class SQLiteProxyStorage:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def upsert_backend_instance(
+        self,
+        instance_id: str,
+        pid: int,
+        config_file: str,
+        routes_file: str,
+        log_file: str,
+        listen: str,
+        ports: list[int],
+        status: str,
+        last_error: str = "",
+    ) -> dict[str, Any]:
+        safe_id = str(instance_id or "").strip() or "default"
+        now = _utc_now()
+        clean_ports = [int(port) for port in ports if 0 < int(port) <= 65535]
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO backend_instances (
+                        instance_id, pid, config_file, routes_file, log_file, listen,
+                        ports_json, status, last_error, started_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(instance_id) DO UPDATE SET
+                        pid = excluded.pid,
+                        config_file = excluded.config_file,
+                        routes_file = excluded.routes_file,
+                        log_file = excluded.log_file,
+                        listen = excluded.listen,
+                        ports_json = excluded.ports_json,
+                        status = excluded.status,
+                        last_error = excluded.last_error,
+                        started_at = excluded.started_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        safe_id,
+                        int(pid),
+                        str(config_file or ""),
+                        str(routes_file or ""),
+                        str(log_file or ""),
+                        str(listen or "127.0.0.1"),
+                        json.dumps(clean_ports, separators=(",", ":")),
+                        str(status or "stopped")[:32],
+                        str(last_error or "")[:1000],
+                        now if str(status or "") == "running" else None,
+                        now,
+                        now,
+                    ),
+                )
+                row = conn.execute("SELECT * FROM backend_instances WHERE instance_id = ?", (safe_id,)).fetchone()
+                conn.commit()
+        if row is None:
+            raise RuntimeError("failed to upsert backend instance")
+        return self._backend_instance_row_to_dict(row)
+
+    def list_backend_instances(self, limit: int = 200) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM backend_instances
+                ORDER BY updated_at DESC, instance_id ASC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [self._backend_instance_row_to_dict(row) for row in rows]
+
+    def update_backend_instance_status(
+        self,
+        instance_id: str,
+        status: str,
+        pid: int | None = None,
+        last_error: str = "",
+    ) -> None:
+        updates = ["status = ?", "last_error = ?", "updated_at = ?"]
+        params: list[Any] = [str(status or "stopped")[:32], str(last_error or "")[:1000], _utc_now()]
+        if pid is not None:
+            updates.append("pid = ?")
+            params.append(int(pid))
+        params.append(str(instance_id or "").strip() or "default")
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    f"UPDATE backend_instances SET {', '.join(updates)} WHERE instance_id = ?",
+                    params,
+                )
+                conn.commit()
+
+    def delete_backend_instance(self, instance_id: str) -> int:
+        safe_id = str(instance_id or "").strip() or "default"
+        with self._write_lock:
+            with self._connect() as conn:
+                cur = conn.execute("DELETE FROM backend_instances WHERE instance_id = ?", (safe_id,))
+                deleted = int(cur.rowcount or 0)
+                conn.commit()
+        return deleted
+
     def list_subscriptions(self, limit: int = 200) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -646,6 +769,110 @@ class SQLiteProxyStorage:
                 (max(1, int(limit)),),
             ).fetchall()
         return [self._subscription_row_to_dict(row) for row in rows]
+
+    def list_published_subscriptions(self, limit: int = 200) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM published_subscriptions
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [self._published_subscription_row_to_dict(row) for row in rows]
+
+    def get_published_subscription(self, subscription_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM published_subscriptions WHERE id = ? LIMIT 1",
+                (int(subscription_id),),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._published_subscription_row_to_dict(row)
+
+    def create_published_subscription(
+        self,
+        name: str,
+        filters: dict[str, Any] | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        filters_json = json.dumps(_normalize_published_subscription_filters(filters), ensure_ascii=False, separators=(",", ":"))
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO published_subscriptions (name, filters_json, enabled, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (str(name or "").strip() or "published-subscription")[:120],
+                        filters_json,
+                        1 if enabled else 0,
+                        now,
+                        now,
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM published_subscriptions WHERE id = last_insert_rowid()"
+                ).fetchone()
+                conn.commit()
+        if row is None:
+            raise RuntimeError("failed to create published subscription")
+        return self._published_subscription_row_to_dict(row)
+
+    def update_published_subscription(
+        self,
+        subscription_id: int,
+        name: str | None = None,
+        filters: dict[str, Any] | None = None,
+        enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        updates: list[str] = []
+        params: list[Any] = []
+        if name is not None:
+            updates.append("name = ?")
+            params.append((str(name or "").strip() or "published-subscription")[:120])
+        if filters is not None:
+            updates.append("filters_json = ?")
+            params.append(json.dumps(_normalize_published_subscription_filters(filters), ensure_ascii=False, separators=(",", ":")))
+        if enabled is not None:
+            updates.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        updates.append("updated_at = ?")
+        params.append(_utc_now())
+        params.append(int(subscription_id))
+
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    f"UPDATE published_subscriptions SET {', '.join(updates)} WHERE id = ?",
+                    params,
+                )
+                row = conn.execute(
+                    "SELECT * FROM published_subscriptions WHERE id = ? LIMIT 1",
+                    (int(subscription_id),),
+                ).fetchone()
+                conn.commit()
+        if row is None:
+            raise ValueError("published subscription not found")
+        return self._published_subscription_row_to_dict(row)
+
+    def delete_published_subscription(self, subscription_id: int) -> int:
+        with self._write_lock:
+            with self._connect() as conn:
+                cur = conn.execute("DELETE FROM published_subscriptions WHERE id = ?", (int(subscription_id),))
+                conn.commit()
+                return int(cur.rowcount)
+
+    def get_published_subscription_links(self, subscription_id: int, limit: int = 5000) -> list[str]:
+        item = self.get_published_subscription(subscription_id)
+        if item is None:
+            raise ValueError("published subscription not found")
+        return self.get_subscription_links(limit=limit, **_filters_to_subscription_link_kwargs(item.get("filters") or {}))
 
     def get_app_setting(self, key: str, default: str = "") -> str:
         safe_key = str(key or "").strip()
@@ -705,6 +932,16 @@ class SQLiteProxyStorage:
         self.set_app_setting("backend_default_port_start", str(safe_start))
         self.set_app_setting("backend_default_port_end", str(safe_end))
         return {"start": safe_start, "end": safe_end}
+
+    def get_backend_default_listen(self) -> str:
+        return self.get_app_setting("backend_default_listen", "127.0.0.1") or "127.0.0.1"
+
+    def set_backend_default_listen(self, listen: str) -> str:
+        safe = str(listen or "").strip() or "127.0.0.1"
+        if len(safe) > 80:
+            raise ValueError("listen address is too long")
+        self.set_app_setting("backend_default_listen", safe)
+        return safe
 
     def get_subscription(self, subscription_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -878,15 +1115,83 @@ class SQLiteProxyStorage:
         only_available: bool = True,
         protocol: str | None = None,
         limit: int = 5000,
+        available: bool | None = None,
+        source_keyword: str | None = None,
+        geo_filter: str | None = None,
+        geo_country: str | None = None,
+        geo_location: str | None = None,
+        openai_filter: str | None = None,
+        ip_purity_filter: str | None = None,
+        fallback_front_filter: str | None = None,
     ) -> list[str]:
         where: list[str] = []
         params: list[Any] = []
 
-        if only_available:
+        if available is not None:
+            where.append("available = ?")
+            params.append(1 if available else 0)
+        elif only_available:
             where.append("available = 1")
         if protocol:
             where.append("protocol = ?")
             params.append(protocol)
+        if source_keyword:
+            source_text = str(source_keyword).strip()
+            if source_text == "-":
+                where.append("source = ''")
+            else:
+                where.append("source LIKE ?")
+                params.append(f"%{source_text}%")
+        if geo_filter == "has":
+            where.append("(country <> '' OR city <> '')")
+        elif geo_filter == "none":
+            where.append("(country = '' AND city = '')")
+        if geo_country:
+            country_text = str(geo_country).strip()
+            if country_text == "-":
+                where.append("country = ''")
+            else:
+                where.append("country = ?")
+                params.append(country_text)
+        if geo_location:
+            text = str(geo_location).strip()
+            if ":" in text:
+                country, city = text.split(":", 1)
+                c = country.strip()
+                ci = city.strip()
+                if c and c != "-":
+                    where.append("country = ?")
+                    params.append(c)
+                elif c == "-":
+                    where.append("country = ''")
+                if ci and ci != "-":
+                    where.append("city = ?")
+                    params.append(ci)
+                elif ci == "-":
+                    where.append("city = ''")
+            else:
+                where.append("(country = ? OR city = ?)")
+                params.extend([text, text])
+        if openai_filter == "unlocked":
+            where.append("openai_unlocked = 1")
+        elif openai_filter == "blocked":
+            where.append("openai_unlocked = 0")
+        elif openai_filter == "unchecked":
+            where.append("openai_unlocked IS NULL")
+        if ip_purity_filter == "checked":
+            where.append("ip_purity_checked_at IS NOT NULL")
+        elif ip_purity_filter == "unchecked":
+            where.append("ip_purity_checked_at IS NULL")
+        elif ip_purity_filter == "residential":
+            where.append("ip_purity_level = '家宽'")
+        elif ip_purity_filter == "non_residential":
+            where.append("ip_purity_level = '非家宽'")
+        elif ip_purity_filter == "unknown":
+            where.append("ip_purity_level = '未知'")
+        if fallback_front_filter == "has":
+            where.append("fallback_front_keys_json <> '[]'")
+        elif fallback_front_filter == "none":
+            where.append("fallback_front_keys_json = '[]'")
 
         where_clause = f"WHERE {' AND '.join(where)}" if where else ""
         params.append(limit)
@@ -949,9 +1254,103 @@ class SQLiteProxyStorage:
         data["enabled"] = bool(data.get("enabled"))
         return data
 
+    def _backend_instance_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        try:
+            ports = json.loads(str(data.get("ports_json") or "[]"))
+        except json.JSONDecodeError:
+            ports = []
+        data["ports"] = [int(port) for port in ports if str(port).strip().isdigit()]
+        data.pop("ports_json", None)
+        return data
+
+    def _published_subscription_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["enabled"] = bool(data.get("enabled"))
+        filters = _normalize_published_subscription_filters(_loads_json_object(data.get("filters_json")))
+        data["filters"] = filters
+        data["match_count"] = len(self.list_proxies_filtered(limit=20000, **_filters_to_proxy_list_kwargs(filters)))
+        data.pop("filters_json", None)
+        return data
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _loads_json_object(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalize_published_subscription_filters(filters: dict[str, Any] | None) -> dict[str, str]:
+    raw = filters or {}
+    out: dict[str, str] = {}
+    allowed = {
+        "protocol",
+        "available",
+        "source",
+        "geo_filter",
+        "geo_country",
+        "geo_location",
+        "openai_filter",
+        "ip_purity_filter",
+        "fallback_front_filter",
+    }
+    for key in allowed:
+        value = str(raw.get(key) or "").strip()
+        if value:
+            out[key] = value[:300]
+    if out.get("available") not in {None, "true", "false"}:
+        out.pop("available", None)
+    if out.get("geo_filter") not in {None, "has", "none"}:
+        out.pop("geo_filter", None)
+    if out.get("openai_filter") not in {None, "unlocked", "blocked", "unchecked"}:
+        out.pop("openai_filter", None)
+    if out.get("ip_purity_filter") not in {None, "checked", "unchecked", "residential", "non_residential", "unknown"}:
+        out.pop("ip_purity_filter", None)
+    if out.get("fallback_front_filter") not in {None, "has", "none"}:
+        out.pop("fallback_front_filter", None)
+    return out
+
+
+def _filters_to_proxy_list_kwargs(filters: dict[str, Any]) -> dict[str, Any]:
+    available_text = str(filters.get("available") or "").strip()
+    available: bool | None
+    if available_text == "true":
+        available = True
+    elif available_text == "false":
+        available = False
+    else:
+        available = None
+    return {
+        "protocol": str(filters.get("protocol") or "").strip() or None,
+        "available": available,
+        "source_keyword": str(filters.get("source") or "").strip() or None,
+        "geo_filter": str(filters.get("geo_filter") or "").strip() or None,
+        "geo_country": str(filters.get("geo_country") or "").strip() or None,
+        "geo_location": str(filters.get("geo_location") or "").strip() or None,
+        "openai_filter": str(filters.get("openai_filter") or "").strip() or None,
+        "ip_purity_filter": str(filters.get("ip_purity_filter") or "").strip() or None,
+        "fallback_front_filter": str(filters.get("fallback_front_filter") or "").strip() or None,
+        "sort_by": "latency",
+        "sort_order": "asc",
+    }
+
+
+def _filters_to_subscription_link_kwargs(filters: dict[str, Any]) -> dict[str, Any]:
+    kwargs = _filters_to_proxy_list_kwargs(filters)
+    kwargs["only_available"] = kwargs.pop("available") is not False
+    if str(filters.get("available") or "").strip() == "true":
+        kwargs["available"] = True
+    elif str(filters.get("available") or "").strip() == "false":
+        kwargs["available"] = False
+    kwargs.pop("sort_by", None)
+    kwargs.pop("sort_order", None)
+    return kwargs
 
 
 def _build_export_alias(row: dict[str, Any], serial: int, serial_map: dict[str, int]) -> str:
