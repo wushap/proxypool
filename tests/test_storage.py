@@ -172,6 +172,50 @@ class TestSQLiteProxyStorage(unittest.TestCase):
             self.assertEqual(len(left), 1)
             self.assertEqual(left[0]["name"], "ok")
 
+    def test_published_subscriptions_filter_export_links(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "db.sqlite3"
+            storage = SQLiteProxyStorage(db)
+            us = ProxyNode(protocol="trojan", host="us.example.com", port=443, raw_link="trojan://us", extra={"password": "p"})
+            jp = ProxyNode(protocol="trojan", host="jp.example.com", port=443, raw_link="trojan://jp", extra={"password": "p"})
+            storage.upsert_proxy(us)
+            storage.upsert_proxy(jp)
+            storage.update_test_result(us.normalized_key(), available=True, latency_ms=100, openai_unlocked=True)
+            storage.update_test_result(jp.normalized_key(), available=True, latency_ms=120, openai_unlocked=False)
+            storage.update_geo(us.normalized_key(), resolved_ip="1.1.1.1", country="US", city="LA")
+            storage.update_geo(jp.normalized_key(), resolved_ip="2.2.2.2", country="JP", city="Tokyo")
+
+            created = storage.create_published_subscription(
+                name="US GPT",
+                filters={
+                    "available": "true",
+                    "geo_location": "US:LA",
+                    "openai_filter": "unlocked",
+                },
+            )
+            self.assertTrue(int(created["id"]) > 0)
+            self.assertEqual(created["name"], "US GPT")
+            self.assertEqual(created["filters"]["geo_location"], "US:LA")
+            self.assertEqual(created["match_count"], 1)
+
+            links = storage.get_published_subscription_links(int(created["id"]))
+            self.assertEqual(len(links), 1)
+            self.assertIn("trojan://us", links[0])
+
+            updated = storage.update_published_subscription(
+                int(created["id"]),
+                name="JP blocked",
+                filters={"geo_country": "JP", "openai_filter": "blocked"},
+            )
+            self.assertEqual(updated["name"], "JP blocked")
+            self.assertEqual(updated["match_count"], 1)
+            self.assertIn("trojan://jp", storage.get_published_subscription_links(int(created["id"]))[0])
+
+            listed = storage.list_published_subscriptions()
+            self.assertEqual(len(listed), 1)
+            self.assertEqual(storage.delete_published_subscription(int(created["id"])), 1)
+            self.assertEqual(storage.list_published_subscriptions(), [])
+
     def test_get_candidates_for_test_limit_zero_means_all(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"

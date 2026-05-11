@@ -132,6 +132,177 @@ class TestSingBoxBackendManager(unittest.TestCase):
             finally:
                 sock.close()
 
+    def test_backend_instances_are_persisted_and_reconciled(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            storage = SQLiteProxyStorage(base / "proxies.db")
+            manager = SingBoxBackendManager(
+                storage=storage,
+                binary="sing-box",
+                test_url="https://www.cloudflare.com/cdn-cgi/trace",
+                routes_file=base / "routes.json",
+                runtime_config_file=base / "runtime" / "singbox.json",
+                log_file=base / "runtime" / "singbox.log",
+                backend_engine="singbox",
+            )
+            storage.upsert_backend_instance(
+                instance_id="alpha",
+                pid=12345,
+                config_file=str(base / "runtime" / "singbox-alpha.json"),
+                routes_file=str(base / "routes-alpha.json"),
+                log_file=str(base / "runtime" / "singbox-alpha.log"),
+                listen="127.0.0.1",
+                ports=[1081, 1082],
+                status="running",
+            )
+
+            with patch("proxypool.backend.singbox_manager._is_process_alive", return_value=True):
+                instances = manager.list_instances()
+
+            self.assertEqual(len(instances), 1)
+            self.assertEqual(instances[0]["instance_id"], "alpha")
+            self.assertEqual(instances[0]["status"], "running")
+            self.assertEqual(instances[0]["ports"], [1081, 1082])
+
+            with patch("proxypool.backend.singbox_manager._is_process_alive", return_value=False):
+                instances = manager.list_instances()
+            self.assertEqual(instances[0]["status"], "exited")
+
+    def test_delete_backend_instance_removes_persisted_record(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            storage = SQLiteProxyStorage(base / "proxies.db")
+            manager = SingBoxBackendManager(
+                storage=storage,
+                binary="sing-box",
+                test_url="https://www.cloudflare.com/cdn-cgi/trace",
+                routes_file=base / "routes.json",
+                runtime_config_file=base / "runtime" / "singbox.json",
+                log_file=base / "runtime" / "singbox.log",
+                backend_engine="singbox",
+            )
+            storage.upsert_backend_instance(
+                instance_id="alpha",
+                pid=-1,
+                config_file=str(base / "runtime" / "singbox-alpha.json"),
+                routes_file=str(base / "routes-alpha.json"),
+                log_file=str(base / "runtime" / "singbox-alpha.log"),
+                listen="127.0.0.1",
+                ports=[1081],
+                status="stopped",
+            )
+
+            self.assertTrue(manager.delete_instance("alpha"))
+
+            self.assertEqual(storage.list_backend_instances(), [])
+            events = storage.list_backend_process_events(limit=5)
+            self.assertEqual(events[0]["action"], "delete_instance")
+            self.assertEqual(events[0]["result"], "success")
+
+    def test_instance_routes_use_separate_routes_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            storage = SQLiteProxyStorage(base / "proxies.db")
+            manager = SingBoxBackendManager(
+                storage=storage,
+                binary="sing-box",
+                test_url="https://www.cloudflare.com/cdn-cgi/trace",
+                routes_file=base / "routes.json",
+                runtime_config_file=base / "runtime" / "singbox.json",
+                log_file=base / "runtime" / "singbox.log",
+                backend_engine="singbox",
+            )
+
+            manager.set_routes([SingBoxRoute(inbound_port=1081, exit_proxy_key="default-key")])
+            manager.set_instance_routes("alpha", [SingBoxRoute(inbound_port=2081, exit_proxy_key="alpha-key")])
+
+            self.assertEqual(manager.get_routes()[0].inbound_port, 1081)
+            alpha_routes = manager.get_instance_routes("alpha")
+            self.assertEqual(alpha_routes[0].inbound_port, 2081)
+            self.assertEqual(alpha_routes[0].exit_proxy_key, "alpha-key")
+
+    def test_create_backend_instance_is_persisted_stopped(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            storage = SQLiteProxyStorage(base / "proxies.db")
+            manager = SingBoxBackendManager(
+                storage=storage,
+                binary="sing-box",
+                test_url="https://www.cloudflare.com/cdn-cgi/trace",
+                routes_file=base / "routes.json",
+                runtime_config_file=base / "runtime" / "singbox.json",
+                log_file=base / "runtime" / "singbox.log",
+                backend_engine="singbox",
+            )
+
+            item = manager.create_instance("alpha")
+
+            self.assertEqual(item["instance_id"], "alpha")
+            self.assertEqual(item["status"], "stopped")
+            self.assertEqual(item["pid"], -1)
+            self.assertEqual(manager.list_instances()[0]["status"], "stopped")
+
+    def test_updating_stopped_instance_routes_does_not_start_process(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            storage = SQLiteProxyStorage(base / "proxies.db")
+            manager = SingBoxBackendManager(
+                storage=storage,
+                binary="sing-box",
+                test_url="https://www.cloudflare.com/cdn-cgi/trace",
+                routes_file=base / "routes.json",
+                runtime_config_file=base / "runtime" / "singbox.json",
+                log_file=base / "runtime" / "singbox.log",
+                backend_engine="singbox",
+            )
+            manager.create_instance("alpha")
+
+            with patch.object(manager, "start_instance") as start_instance:
+                manager.set_instance_routes(
+                    "alpha",
+                    [SingBoxRoute(inbound_port=2081, exit_proxy_key="alpha-key")],
+                    auto_restart=True,
+                )
+
+            start_instance.assert_not_called()
+            instances = manager.list_instances()
+            self.assertEqual(instances[0]["status"], "stopped")
+
+    def test_default_listen_setting(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            storage = SQLiteProxyStorage(Path(td) / "proxies.db")
+            self.assertEqual(storage.get_backend_default_listen(), "127.0.0.1")
+            self.assertEqual(storage.set_backend_default_listen("0.0.0.0"), "0.0.0.0")
+            self.assertEqual(storage.get_backend_default_listen(), "0.0.0.0")
+
+    def test_replace_failed_exit_proxy_updates_routes_and_records_event(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            storage = SQLiteProxyStorage(base / "proxies.db")
+            old = ProxyNode(protocol="trojan", host="old.example.com", port=443, raw_link="trojan://old", extra={"password": "p"})
+            new = ProxyNode(protocol="trojan", host="new.example.com", port=443, raw_link="trojan://new", extra={"password": "p"})
+            storage.upsert_proxy(old)
+            storage.upsert_proxy(new)
+            manager = SingBoxBackendManager(
+                storage=storage,
+                binary="sing-box",
+                test_url="https://www.cloudflare.com/cdn-cgi/trace",
+                routes_file=base / "routes.json",
+                runtime_config_file=base / "runtime" / "singbox.json",
+                log_file=base / "runtime" / "singbox.log",
+                backend_engine="singbox",
+            )
+            manager.set_routes([SingBoxRoute(inbound_port=1081, exit_proxy_key=old.normalized_key())])
+
+            changed = manager.replace_failed_exit_proxy(old.normalized_key(), new.normalized_key())
+
+            self.assertEqual(changed, 1)
+            self.assertEqual(manager.get_routes()[0].exit_proxy_key, new.normalized_key())
+            events = storage.list_backend_process_events(limit=5)
+            self.assertEqual(events[0]["action"], "replace_proxy")
+            self.assertIn(old.normalized_key(), events[0]["detail"])
+            self.assertIn(new.normalized_key(), events[0]["detail"])
+
     def test_health_check_auto_restart_respects_max_attempts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

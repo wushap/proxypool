@@ -415,6 +415,26 @@ class TestTesterService(unittest.TestCase):
             self.assertEqual(target_row["fallback_front_keys"], [front_2.normalized_key()])
             self.assertGreaterEqual(len(prober.chain_calls), 2)
 
+    def test_failed_probe_can_trigger_replacement_callback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "db.sqlite3"
+            storage = SQLiteProxyStorage(db)
+            down = ProxyNode(protocol="trojan", host="down.example.com", port=443, raw_link="trojan://down", extra={"password": "p"})
+            replacement = ProxyNode(protocol="trojan", host="up-replacement.example.com", port=443, raw_link="trojan://up", extra={"password": "p"})
+            storage.upsert_proxy(down)
+            storage.upsert_proxy(replacement)
+            storage.update_test_result(replacement.normalized_key(), available=True, latency_ms=10)
+            replacements: list[tuple[str, str]] = []
+
+            def replace_failed(old_key: str, new_key: str) -> None:
+                replacements.append((old_key, new_key))
+
+            tester = TesterService(storage, prober=FakeProber(), replace_failed_proxy_cb=replace_failed)
+            report = asyncio.run(tester.run_batch(limit=10, concurrency=2, replace_failed_with_available=True))
+
+            self.assertEqual(report.unavailable, 1)
+            self.assertEqual(replacements, [(down.normalized_key(), replacement.normalized_key())])
+
 
 if __name__ == "__main__":
     unittest.main()
