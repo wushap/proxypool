@@ -6,61 +6,320 @@
     <title>Proxy Pool Console</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
     <script src="https://unpkg.com/element-plus/dist/index.full.min.js"></script>
     <style>
       :root {
-        --bg: #f5f8f1;
+        --bg: #f4f6f8;
+        --bg-2: #e9edf2;
         --panel: #ffffff;
-        --ink: #102a21;
-        --accent: #0f766e;
-        --accent-2: #15803d;
-        --muted: #5b6f68;
+        --panel-muted: #f8fafc;
+        --line: #d8dee7;
+        --line-soft: #e7ebf0;
+        --ink: #18212f;
+        --muted: #647084;
+        --accent: #2563eb;
+        --accent-strong: #1d4ed8;
+        --success: #059669;
+        --danger: #dc2626;
+        --warning: #d97706;
+      }
+      * {
+        box-sizing: border-box;
       }
       body {
-        font-family: "Space Grotesk", sans-serif;
+        margin: 0;
+        font-family: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         color: var(--ink);
-        background: radial-gradient(circle at 20% 0%, #d9f99d 0%, transparent 40%), radial-gradient(circle at 80% 10%, #99f6e4 0%, transparent 42%), var(--bg);
+        background: linear-gradient(180deg, var(--bg) 0%, #eef2f6 100%);
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
       }
       .glass {
-        background: color-mix(in oklab, var(--panel) 88%, white);
-        border: 1px solid rgba(16, 42, 33, 0.08);
-        box-shadow: 0 12px 32px rgba(16, 42, 33, 0.08);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px !important;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+      .ops-shell {
+        min-height: 100vh;
+      }
+      .ops-layout {
+        min-height: 100vh;
+      }
+      .ops-sidebar {
+        background: #111827;
+        border-right: 1px solid #0f172a;
+        color: #dbe4ef;
+        display: flex;
+        flex-direction: column;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+      }
+      .ops-sidebar-brand {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 20px 18px 16px;
+      }
+      .ops-sidebar-brand h2 {
+        color: #ffffff;
+        font-family: "Space Grotesk", "Inter", sans-serif;
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1.2;
+        margin: 0;
+      }
+      .ops-sidebar-brand p {
+        color: #94a3b8;
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      .ops-menu {
+        --el-menu-bg-color: #111827;
+        --el-menu-text-color: #cbd5e1;
+        --el-menu-active-color: #ffffff;
+        --el-menu-hover-bg-color: #1f2937;
+        border-right: 0 !important;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 4px;
+        padding: 10px 8px;
+      }
+      .ops-menu .el-menu-item {
+        border-radius: 6px;
+        height: 40px;
+        justify-content: flex-start;
+        line-height: 40px;
+        margin: 2px 0;
+        width: 100%;
+      }
+      .ops-menu .el-menu-item.is-active {
+        background: #2563eb;
+      }
+      .ops-workspace {
+        min-width: 0;
+      }
+      .ops-main {
+        margin: 0 auto;
+        max-width: 1440px;
+        padding: 24px;
+      }
+      .ops-header {
+        padding: 18px;
+      }
+      .ops-header-main {
+        display: grid;
+        grid-template-columns: minmax(260px, 1fr) auto;
+        gap: 18px;
+        align-items: start;
+      }
+      .ops-kicker {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.4;
+        text-transform: uppercase;
+      }
+      .ops-title {
+        margin: 4px 0 0;
+        font-family: "Space Grotesk", "Inter", sans-serif;
+        font-size: 28px;
+        font-weight: 700;
+        line-height: 1.15;
+      }
+      .ops-subtitle {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .ops-status-strip,
+      .ops-command-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      .ops-command-bar {
+        max-width: 780px;
+      }
+      .ops-command-bar .el-button {
+        margin-left: 0 !important;
+        border-radius: 6px;
+        font-weight: 600;
+      }
+      .ops-action-link {
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--ink);
+        display: inline-flex;
+        font-size: 14px;
+        font-weight: 600;
+        min-height: 32px;
+        padding: 0 12px;
+        text-decoration: none;
+      }
+      .ops-action-link:hover {
+        background: var(--panel-muted);
+      }
+      .ops-control-grid {
+        background: var(--panel-muted) !important;
+        border-color: var(--line-soft) !important;
+        border-radius: 8px !important;
+      }
+      .ops-message {
+        border-radius: 6px;
+        border: 1px solid var(--line-soft);
+        background: #f8fafc;
+        padding: 10px 12px;
+      }
+      .ops-task-center {
+        background: #f8fbff !important;
+        border-color: #c9dcff !important;
+        border-radius: 8px !important;
+      }
+      .ops-page-section {
+        padding: 18px !important;
+      }
+      .ops-section-title {
+        font-size: 16px;
+        font-weight: 700;
+      }
+      .ops-stat-card {
+        padding: 16px !important;
+      }
+      .ops-stat-card p:first-child {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .ops-stat-card p:nth-child(2) {
+        color: var(--ink);
+        font-family: "Space Grotesk", "Inter", sans-serif;
+      }
+      table {
+        border-collapse: collapse !important;
+        border-spacing: 0 !important;
+      }
+      thead tr {
+        border-bottom: 1px solid var(--line);
+      }
+      tbody tr {
+        border-bottom: 1px solid var(--line-soft);
+      }
+      tbody tr:hover {
+        background: #f8fafc !important;
+      }
+      input,
+      select,
+      textarea {
+        border-color: var(--line) !important;
+        border-radius: 6px !important;
+      }
+      input:focus,
+      select:focus,
+      textarea:focus {
+        border-color: var(--accent) !important;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+        outline: none;
       }
       .pulse-in {
-        animation: rise 0.5s ease both;
+        animation: rise 0.28s ease both;
       }
       @keyframes rise {
-        from { opacity: 0; transform: translateY(8px); }
+        from { opacity: 0; transform: translateY(4px); }
         to { opacity: 1; transform: translateY(0); }
+      }
+      @media (max-width: 900px) {
+        .ops-layout {
+          display: block;
+        }
+        .ops-sidebar {
+          height: auto;
+          position: static;
+          width: 100% !important;
+        }
+        .ops-sidebar-brand {
+          padding: 14px;
+        }
+        .ops-menu {
+          display: grid;
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+          gap: 6px;
+          overflow-x: auto;
+          padding: 8px;
+        }
+        .ops-menu .el-menu-item {
+          flex: 0 0 auto;
+          justify-content: center;
+          min-width: 0;
+          padding: 0 8px;
+          text-align: center;
+        }
+        .ops-main {
+          padding: 14px;
+        }
+        .ops-header-main {
+          grid-template-columns: 1fr;
+        }
+        .ops-status-strip,
+        .ops-command-bar {
+          justify-content: flex-start;
+        }
       }
     </style>
   </head>
   <body>
-    <div id="app" class="min-h-screen">
-      <main class="mx-auto max-w-7xl px-4 py-8 md:px-8">
-        <header class="glass pulse-in rounded-2xl p-6">
-          <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div>
-              <p class="text-sm tracking-widest text-teal-700">PROXY OBSERVATORY</p>
-              <h1 class="mt-2 text-3xl font-bold">高性能代理池控制台</h1>
-              <p class="mt-2 text-sm text-slate-600">Collector + Tester + Subscription Export</p>
+    <div id="app" class="ops-shell">
+      <el-config-provider size="small" :button="{ autoInsertSpace: true }">
+        <el-container class="ops-layout">
+          <el-aside class="ops-sidebar" width="248px">
+            <div class="ops-sidebar-brand">
+              <h2>Proxy Pool</h2>
+              <p>实用型代理池管理台</p>
             </div>
-            <div class="flex flex-wrap gap-2">
-              <button @click="onOpenImportFiles" :disabled="isActionRunning('importFiles')" class="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('importFiles', '导入节点文件', '导入中...') }}</button>
-              <button @click="onRunTest" :disabled="isActionRunning('runTest')" class="rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('runTest', '立即测速', '测速中...') }}</button>
-              <button @click="onRunUnlockCheck" :disabled="isActionRunning('runUnlockCheck')" class="rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('runUnlockCheck', '检测ChatGPT解锁', '检测中...') }}</button>
-              <button @click="onEnrichGeo" :disabled="isActionRunning('enrichGeo')" class="rounded-xl bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('enrichGeo', '补全IP位置', '补全中...') }}</button>
-              <button @click="onRunIpPurity" :disabled="isActionRunning('runIpPurity')" class="rounded-xl bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('runIpPurity', '检测IP纯净度', '检测中...') }}</button>
-              <button @click="onDeleteUnavailable" :disabled="isActionRunning('deleteUnavailable')" class="rounded-xl bg-rose-700 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('deleteUnavailable', '删除不可用节点', '删除中...') }}</button>
-              <button @click="onCopySubscription" :disabled="isActionRunning('copySubscription')" class="rounded-xl border border-teal-700 px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('copySubscription', '复制订阅', '复制中...') }}</button>
-              <a href="/api/subscription?only_available=true" target="_blank" class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold hover:bg-slate-50">导出链接</a>
+            <el-menu class="ops-menu" :default-active="activePage" @select="selectPage">
+              <el-menu-item index="overview">总览与任务</el-menu-item>
+              <el-menu-item index="subscriptions">订阅管理</el-menu-item>
+              <el-menu-item index="published-subscriptions">订阅发布管理</el-menu-item>
+              <el-menu-item index="backend">sing-box 后端</el-menu-item>
+              <el-menu-item index="proxies">代理节点</el-menu-item>
+            </el-menu>
+          </el-aside>
+          <el-container class="ops-workspace">
+            <main class="ops-main">
+        <header class="glass ops-header pulse-in">
+          <div class="ops-header-main">
+            <div>
+              <p class="ops-kicker">Proxy Pool Console</p>
+              <h1 class="ops-title">Proxy Pool 控制台</h1>
+              <p class="ops-subtitle">订阅导入、批量检测、sing-box 链路和节点筛选集中操作。</p>
+              <div class="ops-status-strip mt-3 justify-start">
+                <el-tag type="info" effect="plain">节点 {{ stats.total ?? 0 }}</el-tag>
+                <el-tag type="success" effect="plain">可用 {{ stats.available ?? 0 }}</el-tag>
+                <el-tag :type="backendStatus.running ? 'success' : 'info'" effect="plain">后端 {{ backendStatus.running ? '运行中' : '未运行' }}</el-tag>
+                <el-tag :type="taskItems.some((t) => ['queued', 'running'].includes(String(t.status || ''))) ? 'warning' : 'info'" effect="plain">任务 {{ taskItems.length }}</el-tag>
+              </div>
+            </div>
+            <div class="ops-command-bar">
+              <el-button type="primary" :loading="isActionRunning('importFiles')" @click="onOpenImportFiles">{{ buttonLabel('importFiles', '导入节点文件', '导入中...') }}</el-button>
+              <el-button type="success" :loading="isActionRunning('runTest')" @click="onRunTest">{{ buttonLabel('runTest', '立即测速', '测速中...') }}</el-button>
+              <el-button :loading="isActionRunning('runUnlockCheck')" @click="onRunUnlockCheck">{{ buttonLabel('runUnlockCheck', '检测ChatGPT解锁', '检测中...') }}</el-button>
+              <el-button :loading="isActionRunning('enrichGeo')" @click="onEnrichGeo">{{ buttonLabel('enrichGeo', '补全IP位置', '补全中...') }}</el-button>
+              <el-button :loading="isActionRunning('runIpPurity')" @click="onRunIpPurity">{{ buttonLabel('runIpPurity', '检测IP纯净度', '检测中...') }}</el-button>
+              <el-button type="danger" plain :loading="isActionRunning('deleteUnavailable')" @click="onDeleteUnavailable">{{ buttonLabel('deleteUnavailable', '删除不可用节点', '删除中...') }}</el-button>
+              <el-button plain :loading="isActionRunning('copySubscription')" @click="onCopySubscription">{{ buttonLabel('copySubscription', '复制订阅', '复制中...') }}</el-button>
+              <a href="/api/subscription?only_available=true" target="_blank" class="ops-action-link">导出链接</a>
             </div>
           </div>
-          <div class="mt-3 grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-12">
+          <div class="ops-control-grid mt-4 grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-12">
             <div class="md:col-span-7">
               <p class="text-xs font-semibold text-slate-700">测速失败回退前置代理(序号)</p>
               <input
@@ -107,6 +366,10 @@
             <div class="flex items-end md:col-span-2">
               <button @click="onSaveTestRunFilter" :disabled="isActionRunning('saveTestRunFilter')" class="w-full rounded border border-indigo-300 px-2 py-2 text-xs text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveTestRunFilter', '保存测速筛选', '保存中...') }}</button>
             </div>
+            <label class="flex items-center gap-2 text-xs text-slate-700 md:col-span-4">
+              <input v-model="testRunFilter.replace_failed_with_available" type="checkbox" />
+              节点可达性检测失败时自动替换 sing-box 落地节点
+            </label>
             <div class="md:col-span-2">
               <p class="text-xs font-semibold text-slate-700">测速并发</p>
               <input v-model.number="taskConcurrency.tester" type="number" min="1" max="500" class="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs" />
@@ -136,8 +399,8 @@
             accept=".txt,.yaml,.yml,.conf,.json,.log"
             @change="onImportFilesSelected"
           />
-          <p v-if="message" class="mt-4 text-sm" :class="messageError ? 'text-rose-700' : 'text-emerald-700'">{{ message }}</p>
-          <div class="mt-4 rounded-xl border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-900">
+          <p v-if="message" class="ops-message mt-4 text-sm" :class="messageError ? 'text-rose-700' : 'text-emerald-700'">{{ message }}</p>
+          <div class="ops-task-center mt-4 rounded-xl border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-900">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <span class="font-semibold">任务中心</span>
               <button
@@ -192,39 +455,12 @@
           </div>
         </header>
 
-        <section class="mt-6 grid gap-4 md:grid-cols-4">
+        <section v-show="activePage === 'overview'" class="mt-6 grid gap-4 md:grid-cols-4">
           <article class="glass pulse-in rounded-2xl p-5" v-for="card in statCards" :key="card.title">
             <p class="text-xs uppercase tracking-widest text-slate-500">{{ card.title }}</p>
             <p class="mt-2 text-3xl font-bold">{{ card.value }}</p>
             <p class="mt-1 text-xs text-slate-500">{{ card.desc }}</p>
           </article>
-        </section>
-
-        <section class="glass mt-6 rounded-2xl p-4 pulse-in">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-xs font-semibold text-slate-700">页面显示</span>
-            <button
-              @click="toggleSectionVisibility('subscriptions')"
-              class="rounded border px-3 py-1 text-xs"
-              :class="sectionVisibility.subscriptions ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100'"
-            >
-              订阅管理 {{ sectionVisibility.subscriptions ? '隐藏' : '显示' }}
-            </button>
-            <button
-              @click="toggleSectionVisibility('backend')"
-              class="rounded border px-3 py-1 text-xs"
-              :class="sectionVisibility.backend ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100'"
-            >
-              sing-box后端 {{ sectionVisibility.backend ? '隐藏' : '显示' }}
-            </button>
-            <button
-              @click="toggleSectionVisibility('proxies')"
-              class="rounded border px-3 py-1 text-xs"
-              :class="sectionVisibility.proxies ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 text-slate-600 hover:bg-slate-100'"
-            >
-              代理节点 {{ sectionVisibility.proxies ? '隐藏' : '显示' }}
-            </button>
-          </div>
         </section>
 
         <datalist id="proxy-key-options">
@@ -237,7 +473,7 @@
           </option>
         </datalist>
 
-        <section v-if="sectionVisibility.subscriptions" class="glass mt-6 rounded-2xl p-5 pulse-in">
+        <section v-show="activePage === 'subscriptions'" class="glass ops-page-section mt-6 rounded-2xl p-5 pulse-in">
           <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 class="text-lg font-bold">订阅管理</h2>
             <div class="flex flex-wrap gap-2">
@@ -326,15 +562,106 @@
           </div>
         </section>
 
-        <section v-if="sectionVisibility.backend" class="glass mt-6 rounded-2xl p-5 pulse-in">
+        <section v-show="activePage === 'published-subscriptions'" class="glass ops-page-section mt-6 rounded-2xl p-5 pulse-in">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-lg font-bold">订阅发布管理</h2>
+            <button @click="onLoadPublishedSubscriptions" :disabled="isActionRunning('loadPublishedSubscriptions')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('loadPublishedSubscriptions', '刷新列表', '刷新中...') }}</button>
+          </div>
+          <div class="grid gap-2 md:grid-cols-6">
+            <input v-model.trim="publishedSubscriptionForm.name" type="text" placeholder="发布订阅名称" class="rounded border border-slate-300 px-3 py-2 text-sm md:col-span-2" />
+            <select v-model="publishedSubscriptionForm.filters.available" class="rounded border border-slate-300 px-3 py-2 text-sm">
+              <option value="true">仅可直连</option>
+              <option value="false">仅不可直连</option>
+              <option value="">直连不限</option>
+            </select>
+            <select v-model="publishedSubscriptionForm.filters.openai_filter" class="rounded border border-slate-300 px-3 py-2 text-sm">
+              <option value="">解锁不限</option>
+              <option value="unlocked">ChatGPT已解锁</option>
+              <option value="blocked">ChatGPT未解锁</option>
+              <option value="unchecked">ChatGPT未检测</option>
+            </select>
+            <select v-model="publishedSubscriptionForm.filters.ip_purity_filter" class="rounded border border-slate-300 px-3 py-2 text-sm">
+              <option value="">家宽不限</option>
+              <option value="residential">家宽</option>
+              <option value="non_residential">非家宽</option>
+              <option value="unknown">未知</option>
+            </select>
+            <button @click="onCreatePublishedSubscription" :disabled="isActionRunning('createPublishedSubscription')" class="rounded border border-blue-700 px-3 py-2 text-sm font-semibold text-blue-800 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('createPublishedSubscription', '创建发布订阅', '创建中...') }}</button>
+          </div>
+          <div class="mt-2 grid gap-2 md:grid-cols-4">
+            <select v-model="publishedSubscriptionForm.filters.geo_country" class="rounded border border-slate-300 px-3 py-2 text-sm">
+              <option value="">国家不限</option>
+              <option v-for="opt in geoCountryOptions" :key="'pub-form-country-' + opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+            <select v-model="publishedSubscriptionForm.filters.geo_location" class="rounded border border-slate-300 px-3 py-2 text-sm">
+              <option value="">城市不限</option>
+              <option v-for="opt in geoLocationFilterOptions" :key="'pub-form-location-' + opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+            <select v-model="publishedSubscriptionForm.filters.fallback_front_filter" class="rounded border border-slate-300 px-3 py-2 text-sm">
+              <option value="">链路不限</option>
+              <option value="none">无前置链路</option>
+              <option value="has">有可连通前置</option>
+            </select>
+            <input v-model.trim="publishedSubscriptionForm.filters.source" type="text" placeholder="来源关键词(可选)" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+            <div class="flex items-center gap-2">
+              <span>每页</span>
+              <select v-model.number="pagination.publishedSubscriptions.perPage" @change="onPaginationPageSizeChange('publishedSubscriptions')" class="rounded border border-slate-300 bg-white px-2 py-1">
+                <option v-for="n in pageSizeOptions" :key="'pub-size-' + n" :value="n">{{ n }}</option>
+              </select>
+            </div>
+            <div class="flex items-center gap-2">
+              <button @click="goPrevPage('publishedSubscriptions')" :disabled="!canPrevPage('publishedSubscriptions')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">上一页</button>
+              <span>{{ pageIndicator('publishedSubscriptions') }}</span>
+              <button @click="goNextPage('publishedSubscriptions')" :disabled="!canNextPage('publishedSubscriptions')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">下一页</button>
+            </div>
+          </div>
+          <div class="mt-3 overflow-x-auto">
+            <table class="min-w-full border-separate border-spacing-y-2 text-xs">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="px-2 py-2">ID</th>
+                  <th class="px-2 py-2">名称</th>
+                  <th class="px-2 py-2">筛选条件</th>
+                  <th class="px-2 py-2">节点数</th>
+                  <th class="px-2 py-2">发布链接</th>
+                  <th class="px-2 py-2">启用</th>
+                  <th class="px-2 py-2">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in paginatedPublishedSubscriptions" :key="item.id" class="bg-white/70">
+                  <td class="px-2 py-2 font-mono text-slate-600">{{ item.id }}</td>
+                  <td class="px-2 py-2">
+                    <input :value="item.name || ''" @change="onRenamePublishedSubscription(item, $event.target.value)" type="text" class="w-36 rounded border border-slate-300 px-2 py-1" />
+                  </td>
+                  <td class="px-2 py-2 text-slate-600">{{ formatPublishedSubscriptionFilters(item.filters) }}</td>
+                  <td class="px-2 py-2 font-mono text-slate-700">{{ item.match_count || 0 }}</td>
+                  <td class="px-2 py-2 font-mono text-slate-500">{{ publishedSubscriptionExportUrl(item) }}</td>
+                  <td class="px-2 py-2">
+                    <button @click="onTogglePublishedSubscription(item)" :disabled="isActionRunning(`togglePubSub-${item.id}`)" class="rounded border px-2 py-1" :class="item.enabled ? 'border-emerald-300 text-emerald-700 hover:bg-emerald-50' : 'border-slate-300 text-slate-600 hover:bg-slate-50'">
+                      {{ buttonLabel(`togglePubSub-${item.id}`, item.enabled ? '已启用' : '已停用', '处理中...') }}
+                    </button>
+                  </td>
+                  <td class="px-2 py-2">
+                    <div class="flex flex-wrap gap-1">
+                      <button @click="applyPublishedSubscriptionFiltersToForm(item)" class="rounded border border-slate-300 px-2 py-1 text-slate-700 hover:bg-slate-50">套用筛选</button>
+                      <button @click="onUpdatePublishedSubscriptionFilters(item)" :disabled="isActionRunning(`updatePubSub-${item.id}`)" class="rounded border border-blue-300 px-2 py-1 text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`updatePubSub-${item.id}`, '保存当前筛选', '保存中...') }}</button>
+                      <button @click="onCopyPublishedSubscriptionUrl(item)" :disabled="isActionRunning(`copyPubSub-${item.id}`)" class="rounded border border-cyan-300 px-2 py-1 text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`copyPubSub-${item.id}`, '复制链接', '复制中...') }}</button>
+                      <a :href="publishedSubscriptionExportUrl(item)" target="_blank" class="rounded border border-slate-300 px-2 py-1 text-slate-700 hover:bg-slate-50">打开</a>
+                      <button @click="onDeletePublishedSubscription(item.id)" :disabled="isActionRunning(`deletePubSub-${item.id}`)" class="rounded border border-rose-300 px-2 py-1 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`deletePubSub-${item.id}`, '删除', '删除中...') }}</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section v-show="activePage === 'backend'" class="glass ops-page-section mt-6 rounded-2xl p-5 pulse-in">
           <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 class="text-lg font-bold">sing-box 后端</h2>
-            <div class="flex flex-wrap gap-2">
-              <button @click="onLoadBackendStatus" :disabled="isActionRunning('loadBackendStatus')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('loadBackendStatus', '刷新状态', '刷新中...') }}</button>
-              <button @click="onBackendStart" :disabled="isActionRunning('backendStart')" class="rounded-lg bg-teal-700 px-3 py-2 text-sm text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('backendStart', '启动', '启动中...') }}</button>
-              <button @click="onBackendStop" :disabled="isActionRunning('backendStop')" class="rounded-lg bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('backendStop', '停止', '停止中...') }}</button>
-              <button @click="onBackendRestart" :disabled="isActionRunning('backendRestart')" class="rounded-lg bg-green-700 px-3 py-2 text-sm text-white hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('backendRestart', '重启', '重启中...') }}</button>
-            </div>
           </div>
           <div class="mb-3 text-sm text-slate-600">
             <span>后端: <b>{{ backendStatus.backend || '-' }}</b></span>
@@ -345,13 +672,62 @@
             <span class="ml-3">已尝试: <b>{{ backendStatus.auto_restart_attempts ?? 0 }}</b></span>
           </div>
           <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <p class="mb-2 text-xs font-semibold text-slate-700">默认入站端口范围</p>
-            <p class="mb-2 text-[11px] text-slate-500">新增链路/按地区生成链路时，将在该范围内自动分配未占用端口。</p>
+            <p class="mb-2 text-xs font-semibold text-slate-700">实例管理</p>
             <div class="grid gap-2 md:grid-cols-6">
+              <input v-model.trim="backendInstanceId" type="text" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2" placeholder="实例 ID，如 alpha" />
+              <button @click="onBackendInstanceCreate" :disabled="isActionRunning('backendInstanceCreate')" class="rounded border border-blue-300 px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('backendInstanceCreate', '创建实例', '创建中...') }}</button>
+              <button @click="onBackendInstanceStart" :disabled="isActionRunning('backendInstanceStart')" class="rounded border border-teal-300 px-2 py-1 text-xs text-teal-700 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('backendInstanceStart', '启动实例', '启动中...') }}</button>
+              <button @click="onBackendInstanceStop" :disabled="isActionRunning('backendInstanceStop')" class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('backendInstanceStop', '停止实例', '停止中...') }}</button>
+              <button @click="onBackendInstanceDelete" :disabled="isActionRunning('backendInstanceDelete')" class="rounded border border-rose-300 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('backendInstanceDelete', '删除实例', '删除中...') }}</button>
+            </div>
+          </div>
+          <div class="mb-3 overflow-x-auto">
+            <table class="min-w-full border-separate border-spacing-y-2 text-xs">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="px-2 py-2">实例</th>
+                  <th class="px-2 py-2">状态</th>
+                  <th class="px-2 py-2">PID</th>
+                  <th class="px-2 py-2">监听</th>
+                  <th class="px-2 py-2">端口</th>
+                  <th class="px-2 py-2">配置文件</th>
+                  <th class="px-2 py-2">错误</th>
+                  <th class="px-2 py-2">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in backendInstances" :key="item.instance_id" class="bg-white/70">
+                  <td class="px-2 py-2 font-mono">{{ item.instance_id }}</td>
+                  <td class="px-2 py-2">{{ item.status || '-' }}</td>
+                  <td class="px-2 py-2 font-mono">{{ formatBackendPid(item.pid) }}</td>
+                  <td class="px-2 py-2">{{ item.listen || '-' }}</td>
+                  <td class="px-2 py-2 font-mono">{{ (item.ports || []).join(',') || '-' }}</td>
+                  <td class="px-2 py-2 font-mono text-slate-500">{{ shortPath(item.config_file) }}</td>
+                  <td class="px-2 py-2 text-rose-600">{{ item.last_error || '-' }}</td>
+                  <td class="px-2 py-2">
+                    <div class="flex flex-wrap gap-1">
+                      <button @click="onOpenBackendInstanceConfig(item)" class="rounded border border-blue-300 px-2 py-1 text-blue-700 hover:bg-blue-50">打开配置</button>
+                      <button @click="onBackendInstanceStart(item.instance_id)" :disabled="isActionRunning(`backendInstanceStart-${item.instance_id}`)" class="rounded border border-teal-300 px-2 py-1 text-teal-700 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`backendInstanceStart-${item.instance_id}`, '启动', '启动中...') }}</button>
+                      <button @click="onBackendInstanceStop(item.instance_id)" :disabled="isActionRunning(`backendInstanceStop-${item.instance_id}`)" class="rounded border border-slate-300 px-2 py-1 text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`backendInstanceStop-${item.instance_id}`, '停止', '停止中...') }}</button>
+                      <button @click="onBackendInstanceDelete(item.instance_id)" :disabled="isActionRunning(`backendInstanceDelete-${item.instance_id}`)" class="rounded border border-rose-300 px-2 py-1 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`backendInstanceDelete-${item.instance_id}`, '删除', '删除中...') }}</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <h3 class="mb-2 text-sm font-semibold text-slate-700">配置管理</h3>
+          <div class="mb-3 text-xs text-slate-500">当前配置实例: <b class="font-mono text-slate-700">{{ backendConfigInstanceId || 'default' }}</b></div>
+          <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p class="mb-2 text-xs font-semibold text-slate-700">默认监听地址与默认入站端口范围</p>
+            <p class="mb-2 text-[11px] text-slate-500">新增链路/按地区生成链路时，将使用默认监听地址，并在该范围内自动分配未占用端口。</p>
+            <div class="grid gap-2 md:grid-cols-6">
+              <input v-model.trim="backendDefaultListen" type="text" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1" placeholder="监听地址" />
               <input v-model.number="backendPortRange.start" type="number" min="1" max="65535" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1" placeholder="起始端口" />
               <input v-model.number="backendPortRange.end" type="number" min="1" max="65535" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1" placeholder="结束端口" />
+              <button @click="onSaveBackendDefaultListen" :disabled="isActionRunning('saveBackendDefaultListen')" class="rounded border border-blue-300 px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 md:col-span-1">{{ buttonLabel('saveBackendDefaultListen', '保存监听', '保存中...') }}</button>
               <button @click="onSaveBackendPortRange" :disabled="isActionRunning('saveBackendPortRange')" class="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60 md:col-span-1">{{ buttonLabel('saveBackendPortRange', '保存范围', '保存中...') }}</button>
-              <div class="text-xs text-slate-500 md:col-span-3 flex items-center">当前: {{ backendPortRange.start }} - {{ backendPortRange.end }}</div>
+              <div class="text-xs text-slate-500 md:col-span-1 flex items-center">当前: {{ backendDefaultListen }} {{ backendPortRange.start }}-{{ backendPortRange.end }}</div>
             </div>
           </div>
 
@@ -370,22 +746,24 @@
             </div>
           </div>
           <div class="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <p class="mb-2 text-xs font-semibold text-slate-700">按地区/按ChatGPT解锁批量填充链路列</p>
-            <p class="mb-2 text-[11px] text-slate-500">会按当前序号顺序（已按延迟排序）筛选代理，可按 `国家:城市` 或 ChatGPT 解锁状态填充到现有链路，或直接生成新链路。</p>
-            <div class="grid gap-2 md:grid-cols-6">
-              <select v-model="routeGeoFill.mode" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1">
-                <option value="geo">按地区</option>
-                <option value="openai">按ChatGPT解锁</option>
-              </select>
-              <select v-if="routeGeoFill.mode === 'geo'" v-model="routeGeoFill.geo_location" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2">
+            <p class="mb-2 text-xs font-semibold text-slate-700">按地区/按ChatGPT解锁/按家宽批量填充链路列</p>
+            <p class="mb-2 text-[11px] text-slate-500">组合条件会按 AND 生效；留空的条件不参与筛选。结果按当前序号顺序（已按延迟排序）填充到现有链路，或直接生成新链路。</p>
+            <div class="grid gap-2 md:grid-cols-7">
+              <select v-model="routeGeoFill.geo_location" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2">
                 <option value="">选择地区(国家:城市)</option>
                 <option v-for="g in geoLocationOptions" :key="'route-geo-' + g" :value="g">{{ g }}</option>
               </select>
-              <select v-else v-model="routeGeoFill.openai_status" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-2">
+              <select v-model="routeGeoFill.openai_status" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1">
                 <option value="">选择ChatGPT解锁状态</option>
                 <option value="unlocked">已解锁</option>
                 <option value="blocked">未解锁</option>
                 <option value="unchecked">未检测</option>
+              </select>
+              <select v-model="routeGeoFill.ip_purity_level" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1">
+                <option value="">选择IP纯净度</option>
+                <option value="residential">家宽</option>
+                <option value="non_residential">非家宽</option>
+                <option value="unknown">未知</option>
               </select>
               <select v-model="routeGeoFill.target_column" class="rounded border border-slate-300 px-2 py-1 text-xs md:col-span-1">
                 <option value="front_proxy_key">前置代理列</option>
@@ -456,7 +834,7 @@
           </div>
           <div class="mt-3 flex flex-wrap gap-2">
             <button @click="onAddRouteEntry" :disabled="isActionRunning('addRouteEntry')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('addRouteEntry', '新增链路', '处理中...') }}</button>
-            <button @click="onSaveRouteEntries" :disabled="isActionRunning('saveRouteEntries')" class="rounded-lg border border-teal-700 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveRouteEntries', '保存链路并热重启', '保存中...') }}</button>
+            <button @click="onSaveRouteEntries" :disabled="isActionRunning('saveRouteEntries')" class="rounded-lg border border-teal-700 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveRouteEntries', '保存实例配置', '保存中...') }}</button>
             <button @click="onCheckRouteLatency" :disabled="isActionRunning('checkRouteLatency')" class="rounded-lg border border-cyan-700 px-3 py-2 text-sm font-semibold text-cyan-800 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('checkRouteLatency', '检测链路延迟', '检测中...') }}</button>
           </div>
 
@@ -466,7 +844,7 @@
             <textarea v-model="routesJson" class="mt-2 h-36 w-full rounded-lg border border-slate-300 bg-white p-3 font-mono text-xs"></textarea>
             <div class="mt-2 flex gap-2">
               <button @click="onApplyRoutesJsonToEntries" :disabled="isActionRunning('applyRoutesJsonToEntries')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('applyRoutesJsonToEntries', '应用JSON到表单', '应用中...') }}</button>
-              <button @click="onSaveRoutes" :disabled="isActionRunning('saveRoutes')" class="rounded-lg border border-teal-700 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveRoutes', '按JSON保存并热重启', '保存中...') }}</button>
+              <button @click="onSaveRoutes" :disabled="isActionRunning('saveRoutes')" class="rounded-lg border border-teal-700 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('saveRoutes', '按JSON保存实例配置', '保存中...') }}</button>
             </div>
           </details>
 
@@ -510,7 +888,7 @@
           </div>
         </section>
 
-        <section v-if="sectionVisibility.proxies" class="glass mt-6 rounded-2xl p-5 pulse-in">
+        <section v-show="activePage === 'proxies'" class="glass ops-page-section mt-6 rounded-2xl p-5 pulse-in">
           <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <h2 class="text-lg font-bold">代理节点</h2>
           </div>
@@ -525,6 +903,7 @@
             <div class="flex items-center gap-2">
               <button @click="clearProxyFilters" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100">清空筛选</button>
               <button @click="resetProxyColumns" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100">重置列</button>
+              <button @click="onCopySelectedProxyLinks" :disabled="!selectedProxyKeys.length || isActionRunning('copySelectedProxyLinks')" class="rounded border border-blue-300 px-2 py-1 text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('copySelectedProxyLinks', `批量复制链接(${selectedProxyKeys.length})`, '复制中...') }}</button>
               <button @click="onLoadDataClick" :disabled="isActionRunning('loadData')" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('loadData', '刷新', '刷新中...') }}</button>
               <button @click="goPrevPage('proxies')" :disabled="!canPrevPage('proxies')" class="rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-60">上一页</button>
               <span>{{ pageIndicator('proxies') }}</span>
@@ -619,11 +998,22 @@
             <table class="min-w-full border-separate border-spacing-y-2 text-sm">
               <thead>
                 <tr class="text-left text-slate-500">
+                  <th class="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      :checked="areAllPaginatedProxiesSelected()"
+                      :disabled="!paginatedProxies.length"
+                      @change="toggleAllPaginatedProxies($event.target.checked)"
+                    />
+                  </th>
                   <th v-for="col in visibleProxyColumns" :key="'th-' + col.key" class="px-3 py-2">{{ col.label }}</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="item in paginatedProxies" :key="item.normalized_key" class="rounded-xl bg-white/70">
+                  <td class="px-3 py-2">
+                    <input v-model="selectedProxyKeys" type="checkbox" :value="item.normalized_key" />
+                  </td>
                   <td v-for="col in visibleProxyColumns" :key="'td-' + item.normalized_key + '-' + col.key" class="px-3 py-2">
                     <template v-if="col.key === 'serial'">
                       <span class="font-mono text-slate-500">#{{ getSerial(item.normalized_key) }}</span>
@@ -662,13 +1052,22 @@
                       <span class="text-slate-500">{{ shortSource(item.source) }}</span>
                     </template>
                     <template v-else-if="col.key === 'action'">
-                      <button
-                        @click="onTestSingleProxy(item)"
-                        :disabled="isActionRunning(`testProxy-${item.normalized_key}`)"
-                        class="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {{ buttonLabel(`testProxy-${item.normalized_key}`, '测试', '测试中...') }}
-                      </button>
+                      <div class="flex flex-wrap gap-1">
+                        <button
+                          @click="onTestSingleProxy(item)"
+                          :disabled="isActionRunning(`testProxy-${item.normalized_key}`)"
+                          class="rounded border border-cyan-300 px-2 py-1 text-xs text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {{ buttonLabel(`testProxy-${item.normalized_key}`, '测试', '测试中...') }}
+                        </button>
+                        <button
+                          @click="onCopyProxyLink(item)"
+                          :disabled="isActionRunning(`copyProxyLink-${item.normalized_key}`) || !proxyRawLink(item)"
+                          class="rounded border border-blue-300 px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {{ buttonLabel(`copyProxyLink-${item.normalized_key}`, '复制链接', '复制中...') }}
+                        </button>
+                      </div>
                     </template>
                   </td>
                 </tr>
@@ -676,11 +1075,28 @@
             </table>
           </div>
         </section>
-      </main>
+            </main>
+          </el-container>
+        </el-container>
+      </el-config-provider>
     </div>
 
     <script>
       const { createApp } = Vue;
+      const applyElementPlusDefaults = () => {
+        const defaults = [
+          [ElementPlus.ElButton, { size: "small" }],
+          [ElementPlus.ElTag, { size: "small", effect: "plain" }],
+          [ElementPlus.ElInput, { size: "small", clearable: true }],
+          [ElementPlus.ElSelect, { size: "small", clearable: true }],
+        ];
+        defaults.forEach(([component, props]) => {
+          if (component && typeof component.setPropsDefaults === "function") {
+            component.setPropsDefaults(props);
+          }
+        });
+      };
+      applyElementPlusDefaults();
       const DEFAULT_PROXY_COLUMN_CONFIGS = {
         serial: { label: "序号", visible: true },
         protocol: { label: "协议", visible: true },
@@ -717,6 +1133,7 @@
       const app = createApp({
         data() {
           return {
+            activePage: "overview",
             stats: {},
             proxies: [],
             allProxies: [],
@@ -731,6 +1148,7 @@
             pageSizeOptions: [10, 50, 100],
             pagination: {
               subscriptions: { page: 1, perPage: 10 },
+              publishedSubscriptions: { page: 1, perPage: 10 },
               routes: { page: 1, perPage: 10 },
               backendEvents: { page: 1, perPage: 10 },
               proxies: { page: 1, perPage: 50 },
@@ -746,6 +1164,7 @@
               mode: "geo",
               geo_location: "",
               openai_status: "",
+              ip_purity_level: "residential",
               target_column: "exit_proxy_key",
             },
             routeLatencyMap: {},
@@ -753,6 +1172,9 @@
               start: 1081,
               end: 1180,
             },
+            backendDefaultListen: "127.0.0.1",
+            backendInstanceId: "default",
+            backendConfigInstanceId: "default",
             testFallback: {
               front_proxy_refs: "",
               max_attempts: 3,
@@ -760,6 +1182,7 @@
             testRunFilter: {
               status: "all",
               min_retest_days: 0,
+              replace_failed_with_available: false,
             },
             taskConcurrency: {
               tester: 60,
@@ -775,17 +1198,26 @@
               name: "",
               url: "",
             },
-            subscriptionUpdateProxyRef: "",
-            sectionVisibility: {
-              subscriptions: true,
-              backend: true,
-              proxies: true,
+            publishedSubscriptions: [],
+            publishedSubscriptionForm: {
+              name: "",
+              filters: {
+                available: "true",
+                geo_country: "",
+                geo_location: "",
+                openai_filter: "",
+                ip_purity_filter: "",
+                fallback_front_filter: "",
+                source: "",
+              },
             },
+            subscriptionUpdateProxyRef: "",
             taskItems: [],
             taskPollingTimer: null,
             taskListLoading: false,
             pendingTaskResultRefresh: false,
             proxyConfigDialogVisible: false,
+            selectedProxyKeys: [],
           };
         },
         computed: {
@@ -961,6 +1393,9 @@
           paginatedSubscriptions() {
             return this.paginateItems(this.subscriptions || [], "subscriptions");
           },
+          paginatedPublishedSubscriptions() {
+            return this.paginateItems(this.publishedSubscriptions || [], "publishedSubscriptions");
+          },
           paginatedRouteEntries() {
             const list = this.routeEntries || [];
             const sliced = this.paginateItems(list, "routes");
@@ -970,11 +1405,17 @@
           paginatedBackendEvents() {
             return this.paginateItems(this.backendEvents || [], "backendEvents");
           },
+          backendInstances() {
+            return Array.isArray(this.backendStatus?.instances) ? this.backendStatus.instances : [];
+          },
           paginatedProxies() {
             return this.paginateItems(this.proxies || [], "proxies");
           },
         },
         methods: {
+          selectPage(key) {
+            this.activePage = key;
+          },
           isActionRunning(key) {
             return !!this.buttonState[String(key || "")];
           },
@@ -1016,14 +1457,37 @@
           async onDeleteTask(task) { await this.runWithButtonState(`deleteTask-${task.task_id}`, async () => this.deleteTask(task)); },
           async onLoadSubscriptions() { await this.runWithButtonState("loadSubscriptions", async () => this.loadSubscriptions()); },
           async onCreateSubscription() { await this.runWithButtonState("createSubscription", async () => this.createSubscription()); },
+          async onLoadPublishedSubscriptions() { await this.runWithButtonState("loadPublishedSubscriptions", async () => this.loadPublishedSubscriptions()); },
+          async onCreatePublishedSubscription() { await this.runWithButtonState("createPublishedSubscription", async () => this.createPublishedSubscription()); },
           async onSaveSubscriptionUpdateProxy() { await this.runWithButtonState("saveSubUpdateProxy", async () => this.saveSubscriptionUpdateProxy()); },
           async onRefreshAllSubscriptions() { await this.runWithButtonState("refreshAllSubscriptions", async () => this.refreshAllSubscriptions()); },
           async onDeleteUnavailableSubscriptions() { await this.runWithButtonState("deleteUnavailableSubscriptions", async () => this.deleteUnavailableSubscriptions()); },
           async onLoadBackendStatus() { await this.runWithButtonState("loadBackendStatus", async () => this.loadBackendStatus()); },
           async onSaveBackendPortRange() { await this.runWithButtonState("saveBackendPortRange", async () => this.saveBackendPortRange()); },
+          async onSaveBackendDefaultListen() { await this.runWithButtonState("saveBackendDefaultListen", async () => this.saveBackendDefaultListen()); },
           async onBackendStart() { await this.runWithButtonState("backendStart", async () => this.backendStart()); },
           async onBackendStop() { await this.runWithButtonState("backendStop", async () => this.backendStop()); },
           async onBackendRestart() { await this.runWithButtonState("backendRestart", async () => this.backendRestart()); },
+          backendActionInstanceId(instanceId = "") {
+            return String(typeof instanceId === "string" ? instanceId : this.backendInstanceId || "default").trim() || "default";
+          },
+          async onBackendInstanceCreate(instanceId = "") {
+            const id = this.backendActionInstanceId(instanceId);
+            await this.runWithButtonState(`backendInstanceCreate${typeof instanceId === "string" && instanceId ? `-${id}` : ""}`, async () => this.createBackendInstance(id));
+          },
+          async onBackendInstanceStart(instanceId = "") {
+            const id = this.backendActionInstanceId(instanceId);
+            await this.runWithButtonState(`backendInstanceStart${typeof instanceId === "string" && instanceId ? `-${id}` : ""}`, async () => this.backendInstanceStart(id));
+          },
+          async onBackendInstanceStop(instanceId = "") {
+            const id = this.backendActionInstanceId(instanceId);
+            await this.runWithButtonState(`backendInstanceStop${typeof instanceId === "string" && instanceId ? `-${id}` : ""}`, async () => this.backendInstanceStop(id));
+          },
+          async onBackendInstanceDelete(instanceId = "") {
+            const id = this.backendActionInstanceId(instanceId);
+            await this.runWithButtonState(`backendInstanceDelete${typeof instanceId === "string" && instanceId ? `-${id}` : ""}`, async () => this.backendInstanceDelete(id));
+          },
+          async onOpenBackendInstanceConfig(item) { await this.openBackendInstanceConfig(item); },
           async onAddRouteEntry() { await this.runWithButtonState("addRouteEntry", async () => this.addRouteEntry()); },
           async onRemoveRouteEntry(idx) { await this.runWithButtonState(`removeRouteEntry-${idx}`, async () => this.removeRouteEntry(idx)); },
           async onApplyDefaultsToEmptyRoutes() { await this.runWithButtonState("applyDefaultsEmpty", async () => this.applyDefaultsToRoutes(false)); },
@@ -1037,6 +1501,8 @@
           async onSaveRoutes() { await this.runWithButtonState("saveRoutes", async () => this.saveRoutes()); },
           async onLoadDataClick() { await this.runWithButtonState("loadData", async () => this.loadData()); },
           async onTestSingleProxy(item) { await this.runWithButtonState(`testProxy-${item.normalized_key}`, async () => this.testSingleProxy(item)); },
+          async onCopyProxyLink(item) { await this.runWithButtonState(`copyProxyLink-${item.normalized_key}`, async () => this.copyProxyLink(item)); },
+          async onCopySelectedProxyLinks() { await this.runWithButtonState("copySelectedProxyLinks", async () => this.copySelectedProxyLinks()); },
           async applyProxyConfig() {
             await this.onLoadDataClick();
             this.proxyConfigDialogVisible = false;
@@ -1054,6 +1520,7 @@
           },
           getSectionItems(section) {
             if (section === "subscriptions") return this.subscriptions || [];
+            if (section === "publishedSubscriptions") return this.publishedSubscriptions || [];
             if (section === "routes") return this.routeEntries || [];
             if (section === "backendEvents") return this.backendEvents || [];
             if (section === "proxies") return this.proxies || [];
@@ -1110,45 +1577,38 @@
             state.page = 1;
           },
           clampAllPages() {
-            for (const section of ["subscriptions", "routes", "backendEvents", "proxies"]) {
+            for (const section of ["subscriptions", "publishedSubscriptions", "routes", "backendEvents", "proxies"]) {
               const state = this.getPageState(section);
               const totalPages = this.getTotalPages(section);
               if (state.page > totalPages) state.page = totalPages;
             }
           },
+          pruneSelectedProxyKeys() {
+            const availableKeys = new Set((this.allProxies || []).map((item) => String(item.normalized_key || "")));
+            this.selectedProxyKeys = (this.selectedProxyKeys || []).filter((key) => availableKeys.has(String(key || "")));
+          },
+          areAllPaginatedProxiesSelected() {
+            const keys = (this.paginatedProxies || []).map((item) => String(item.normalized_key || "")).filter(Boolean);
+            if (!keys.length) return false;
+            const selected = new Set(this.selectedProxyKeys || []);
+            return keys.every((key) => selected.has(key));
+          },
+          toggleAllPaginatedProxies(checked) {
+            const current = new Set((this.selectedProxyKeys || []).map((key) => String(key || "")).filter(Boolean));
+            const keys = (this.paginatedProxies || []).map((item) => String(item.normalized_key || "")).filter(Boolean);
+            keys.forEach((key) => {
+              if (checked) current.add(key);
+              else current.delete(key);
+            });
+            this.selectedProxyKeys = Array.from(current);
+          },
+          selectedProxyItems() {
+            const selected = new Set((this.selectedProxyKeys || []).map((key) => String(key || "")));
+            return (this.allProxies || []).filter((item) => selected.has(String(item.normalized_key || "")));
+          },
           normalizeFilterValue(value) {
             if (value === null || value === undefined) return "";
             return String(value).trim();
-          },
-          sectionDisplayName(key) {
-            if (key === "subscriptions") return "订阅管理";
-            if (key === "backend") return "sing-box后端";
-            if (key === "proxies") return "代理节点";
-            return String(key || "");
-          },
-          loadSectionVisibility() {
-            try {
-              const raw = localStorage.getItem("proxypool.sectionVisibility.v1");
-              if (!raw) return;
-              const data = JSON.parse(raw) || {};
-              for (const key of Object.keys(this.sectionVisibility)) {
-                if (typeof data[key] === "boolean") {
-                  this.sectionVisibility[key] = data[key];
-                }
-              }
-            } catch {}
-          },
-          persistSectionVisibility() {
-            try {
-              localStorage.setItem("proxypool.sectionVisibility.v1", JSON.stringify(this.sectionVisibility));
-            } catch {}
-          },
-          toggleSectionVisibility(key) {
-            const name = this.sectionDisplayName(key);
-            if (!(key in this.sectionVisibility)) return;
-            this.sectionVisibility[key] = !this.sectionVisibility[key];
-            this.persistSectionVisibility();
-            this.setMessage(`${name}${this.sectionVisibility[key] ? "已显示" : "已隐藏"}`);
           },
           loadProxyColumns() {
             try {
@@ -1293,6 +1753,174 @@
               this.resetPage("subscriptions");
             } catch (err) {
               this.setMessage("加载订阅失败: " + err, true);
+            }
+          },
+          normalizePublishedSubscriptionFilters(filters) {
+            const raw = filters || {};
+            const clean = {};
+            for (const key of ["available", "geo_country", "geo_location", "openai_filter", "ip_purity_filter", "fallback_front_filter", "source"]) {
+              const value = String(raw[key] || "").trim();
+              if (value) clean[key] = value;
+            }
+            return clean;
+          },
+          async loadPublishedSubscriptions() {
+            try {
+              const resp = await fetch("/api/published-subscriptions?limit=1000");
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "加载发布订阅失败");
+              }
+              this.publishedSubscriptions = data.items || [];
+              this.resetPage("publishedSubscriptions");
+            } catch (err) {
+              this.setMessage("加载发布订阅失败: " + err, true);
+            }
+          },
+          publishedSubscriptionExportUrl(item) {
+            const path = String(item?.export_url || `/api/published-subscriptions/${item?.id}/subscription`);
+            return path;
+          },
+          formatPublishedSubscriptionFilters(filters) {
+            const f = filters || {};
+            const parts = [];
+            if (f.available === "true") parts.push("仅可直连");
+            else if (f.available === "false") parts.push("仅不可直连");
+            if (f.geo_location) parts.push(`位置 ${f.geo_location}`);
+            else if (f.geo_country) parts.push(`国家 ${f.geo_country}`);
+            if (f.openai_filter === "unlocked") parts.push("ChatGPT已解锁");
+            else if (f.openai_filter === "blocked") parts.push("ChatGPT未解锁");
+            else if (f.openai_filter === "unchecked") parts.push("ChatGPT未检测");
+            if (f.ip_purity_filter === "residential") parts.push("家宽");
+            else if (f.ip_purity_filter === "non_residential") parts.push("非家宽");
+            else if (f.ip_purity_filter === "unknown") parts.push("纯净度未知");
+            if (f.fallback_front_filter === "has") parts.push("有可连通前置");
+            else if (f.fallback_front_filter === "none") parts.push("无前置链路");
+            if (f.source) parts.push(`来源 ${f.source}`);
+            return parts.length ? parts.join(" / ") : "不限";
+          },
+          applyPublishedSubscriptionFiltersToForm(item) {
+            this.publishedSubscriptionForm.name = String(item?.name || "");
+            this.publishedSubscriptionForm.filters = {
+              available: "",
+              geo_country: "",
+              geo_location: "",
+              openai_filter: "",
+              ip_purity_filter: "",
+              fallback_front_filter: "",
+              source: "",
+              ...(item?.filters || {}),
+            };
+            this.setMessage("已套用发布订阅筛选，可修改后保存当前筛选");
+          },
+          async createPublishedSubscription() {
+            const name = String(this.publishedSubscriptionForm.name || "").trim();
+            try {
+              const resp = await fetch("/api/published-subscriptions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  name: name || "published-subscription",
+                  enabled: true,
+                  filters: this.normalizePublishedSubscriptionFilters(this.publishedSubscriptionForm.filters),
+                }),
+              });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "创建失败");
+              }
+              this.publishedSubscriptionForm.name = "";
+              this.setMessage("发布订阅已创建");
+              await this.loadPublishedSubscriptions();
+            } catch (err) {
+              this.setMessage("创建发布订阅失败: " + err, true);
+            }
+          },
+          async onRenamePublishedSubscription(item, nextName) {
+            const name = String(nextName || "").trim();
+            if (!name || name === String(item.name || "").trim()) return;
+            await this.runWithButtonState(`renamePubSub-${item.id}`, async () => {
+              try {
+                const resp = await fetch(`/api/published-subscriptions/${item.id}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ name }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                  throw new Error(data.detail || "更新失败");
+                }
+                this.setMessage("发布订阅名称已更新");
+                await this.loadPublishedSubscriptions();
+              } catch (err) {
+                this.setMessage("更新发布订阅名称失败: " + err, true);
+              }
+            });
+          },
+          async onTogglePublishedSubscription(item) {
+            await this.runWithButtonState(`togglePubSub-${item.id}`, async () => {
+              try {
+                const resp = await fetch(`/api/published-subscriptions/${item.id}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ enabled: !item.enabled }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                  throw new Error(data.detail || "更新失败");
+                }
+                this.setMessage(`发布订阅 ${data.item.enabled ? "已启用" : "已停用"}`);
+                await this.loadPublishedSubscriptions();
+              } catch (err) {
+                this.setMessage("切换发布订阅状态失败: " + err, true);
+              }
+            });
+          },
+          async onUpdatePublishedSubscriptionFilters(item) {
+            await this.runWithButtonState(`updatePubSub-${item.id}`, async () => {
+              try {
+                const resp = await fetch(`/api/published-subscriptions/${item.id}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ filters: this.normalizePublishedSubscriptionFilters(this.publishedSubscriptionForm.filters) }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                  throw new Error(data.detail || "保存失败");
+                }
+                this.setMessage(`发布订阅筛选已保存: ${data.item.match_count || 0} 个节点`);
+                await this.loadPublishedSubscriptions();
+              } catch (err) {
+                this.setMessage("保存发布订阅筛选失败: " + err, true);
+              }
+            });
+          },
+          async onCopyPublishedSubscriptionUrl(item) {
+            await this.runWithButtonState(`copyPubSub-${item.id}`, async () => {
+              try {
+                await this.copyTextToClipboard(new URL(this.publishedSubscriptionExportUrl(item), window.location.href).toString());
+                this.setMessage("发布订阅链接已复制");
+              } catch (err) {
+                this.setMessage("复制发布订阅链接失败: " + err, true);
+              }
+            });
+          },
+          async onDeletePublishedSubscription(subscriptionId) {
+            await this.runWithButtonState(`deletePubSub-${subscriptionId}`, async () => {
+              await this.deletePublishedSubscription(subscriptionId);
+            });
+          },
+          async deletePublishedSubscription(subscriptionId) {
+            try {
+              const resp = await fetch(`/api/published-subscriptions/${subscriptionId}`, { method: "DELETE" });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "删除失败");
+              }
+              this.setMessage(`已删除发布订阅: ${data.deleted || 0}`);
+              await this.loadPublishedSubscriptions();
+            } catch (err) {
+              this.setMessage("删除发布订阅失败: " + err, true);
             }
           },
           async loadSubscriptionUpdateProxy() {
@@ -1511,6 +2139,7 @@
               if ((this.routeEntries || []).length > 0) {
                 this.routeEntries = this.routeEntries.map((item) => this.normalizeRouteItem(item));
               }
+              this.pruneSelectedProxyKeys();
             } catch (err) {
               this.setMessage("加载代理序号映射失败: " + err, true);
             }
@@ -1580,6 +2209,86 @@
               this.setMessage("重启失败: " + err, true);
             }
           },
+          async createBackendInstance(instanceId) {
+            try {
+              const id = String(instanceId || "default").trim() || "default";
+              const resp = await fetch("/api/backend/instances", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ instance_id: id }),
+              });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "创建实例失败");
+              this.backendStatus = { ...this.backendStatus, instances: data.items || [] };
+              this.backendInstanceId = id;
+              this.backendConfigInstanceId = id;
+              await this.openBackendInstanceConfig({ instance_id: id });
+              this.setMessage(`sing-box 实例已创建: ${id}`);
+              await this.loadBackendEvents();
+            } catch (err) {
+              this.setMessage("创建实例失败: " + err, true);
+            }
+          },
+          async backendInstanceStart(instanceId) {
+            try {
+              const id = String(instanceId || "default").trim() || "default";
+              const resp = await fetch(`/api/backend/instances/${encodeURIComponent(id)}/start`, { method: "POST" });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "启动实例失败");
+              this.backendStatus = data;
+              this.backendInstanceId = id;
+              this.setMessage(`sing-box 实例已启动: ${id}`);
+              await this.loadBackendEvents();
+            } catch (err) {
+              this.setMessage("启动实例失败: " + err, true);
+            }
+          },
+          async backendInstanceStop(instanceId) {
+            try {
+              const id = String(instanceId || "default").trim() || "default";
+              const resp = await fetch(`/api/backend/instances/${encodeURIComponent(id)}/stop`, { method: "POST" });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "停止实例失败");
+              this.backendStatus = data;
+              this.backendInstanceId = id;
+              this.setMessage(`sing-box 实例已停止: ${id}`);
+              await this.loadBackendEvents();
+            } catch (err) {
+              this.setMessage("停止实例失败: " + err, true);
+            }
+          },
+          async backendInstanceDelete(instanceId) {
+            try {
+              const id = String(instanceId || "default").trim() || "default";
+              const resp = await fetch(`/api/backend/instances/${encodeURIComponent(id)}`, { method: "DELETE" });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "删除实例失败");
+              this.backendStatus = { ...this.backendStatus, instances: data.items || [] };
+              if (this.backendInstanceId === id) this.backendInstanceId = "default";
+              if (this.backendConfigInstanceId === id) this.backendConfigInstanceId = "default";
+              this.setMessage(data.deleted ? `sing-box 实例已删除: ${id}` : `sing-box 实例不存在: ${id}`);
+              await this.loadBackendEvents();
+            } catch (err) {
+              this.setMessage("删除实例失败: " + err, true);
+            }
+          },
+          async openBackendInstanceConfig(item) {
+            try {
+              const id = String(item?.instance_id || this.backendInstanceId || "default").trim() || "default";
+              const resp = await fetch(`/api/backend/instances/${encodeURIComponent(id)}/routes`);
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "加载实例配置失败");
+              this.backendConfigInstanceId = id;
+              this.backendInstanceId = id;
+              this.routesJson = JSON.stringify(data.routes || [], null, 2);
+              this.routeEntries = (data.routes || []).map((route) => this.normalizeRouteItem(route));
+              this.resetPage("routes");
+              this.routeLatencyMap = {};
+              this.setMessage(`已打开实例配置: ${id}`);
+            } catch (err) {
+              this.setMessage("打开实例配置失败: " + err, true);
+            }
+          },
           async saveRoutes() {
             try {
               const routes = JSON.parse(this.routesJson || "[]");
@@ -1598,17 +2307,21 @@
                   proxy_key: exit,
                 };
               });
-              const resp = await fetch("/api/backend/routes", {
+              const id = String(this.backendConfigInstanceId || "default").trim() || "default";
+              const url = id === "default" ? "/api/backend/routes" : `/api/backend/instances/${encodeURIComponent(id)}/routes`;
+              const resp = await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ routes: normalizedRoutes, auto_restart: true }),
               });
               const data = await resp.json();
               if (!resp.ok) throw new Error(data.detail || "保存失败");
-              this.backendStatus = data;
+              if (id === "default") {
+                this.backendStatus = data;
+              }
               this.routeEntries = (data.routes || []).map((item) => this.normalizeRouteItem(item));
               this.resetPage("routes");
-              this.setMessage("路由已保存");
+              this.setMessage(`路由已保存: ${id}`);
               await this.checkRouteLatency();
             } catch (err) {
               this.setMessage("保存路由失败: " + err, true);
@@ -1650,7 +2363,7 @@
             return {
               inbound_port: Number(item.inbound_port || defaultPort),
               inbound_type: item.inbound_type || "http",
-              listen: item.listen || "127.0.0.1",
+              listen: item.listen || this.backendDefaultListen || "127.0.0.1",
               front_proxy_key: this.toDisplayProxyRef(frontRaw),
               middle_proxy_key: this.toDisplayProxyRef(middleRaw),
               exit_proxy_key: this.toDisplayProxyRef(exitRaw),
@@ -1731,6 +2444,7 @@
             return {
               status,
               min_retest_days: minRetestDays,
+              replace_failed_with_available: data.replace_failed_with_available === true,
             };
           },
           loadTestRunFilter() {
@@ -1757,7 +2471,7 @@
               up: "仅可用",
               unchecked: "仅未测速",
             };
-            this.setMessage(`测速筛选已保存: 状态=${statusLabelMap[payload.status] || "全部"}, 复测间隔>=${payload.min_retest_days}天`);
+            this.setMessage(`测速筛选已保存: 状态=${statusLabelMap[payload.status] || "全部"}, 复测间隔>=${payload.min_retest_days}天, 失败替换=${payload.replace_failed_with_available ? "开启" : "关闭"}`);
           },
           sanitizeTaskConcurrencyValue(value, fallback = 30) {
             const n = Number(value);
@@ -1884,6 +2598,37 @@
               this.setMessage("加载默认端口范围失败: " + err, true);
             }
           },
+          async loadBackendDefaultListen() {
+            try {
+              const resp = await fetch("/api/backend/default-listen");
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "加载默认监听地址失败");
+              }
+              this.backendDefaultListen = String(data.listen || "127.0.0.1").trim() || "127.0.0.1";
+            } catch (err) {
+              this.backendDefaultListen = this.backendDefaultListen || "127.0.0.1";
+              this.setMessage("加载默认监听地址失败: " + err, true);
+            }
+          },
+          async saveBackendDefaultListen() {
+            try {
+              const listen = String(this.backendDefaultListen || "").trim() || "127.0.0.1";
+              const resp = await fetch("/api/backend/default-listen", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ listen }),
+              });
+              const data = await resp.json();
+              if (!resp.ok) {
+                throw new Error(data.detail || "保存默认监听地址失败");
+              }
+              this.backendDefaultListen = String(data.listen || listen).trim() || "127.0.0.1";
+              this.setMessage(`默认监听地址已保存: ${this.backendDefaultListen}`);
+            } catch (err) {
+              this.setMessage("保存默认监听地址失败: " + err, true);
+            }
+          },
           async saveBackendPortRange() {
             try {
               const payload = this.normalizeBackendPortRange(this.backendPortRange || {});
@@ -1940,23 +2685,75 @@
             }
             return refs;
           },
-          getProxyRefsByFillRule() {
-            const mode = String(this.routeGeoFill.mode || "geo").trim();
-            if (mode === "openai") {
-              return this.getProxyRefsByOpenaiStatus(this.routeGeoFill.openai_status);
+          getProxyRefsByIpPurityLevel(ipPurityLevel) {
+            const target = String(ipPurityLevel || "").trim();
+            if (!target) return [];
+            const refs = [];
+            const levelMap = {
+              residential: "家宽",
+              non_residential: "非家宽",
+              unknown: "未知",
+            };
+            const targetLevel = levelMap[target] || target;
+            for (const item of this.allProxies || []) {
+              const level = String(item?.ip_purity_level || "").trim();
+              if (level !== targetLevel) continue;
+              const serial = this.getSerial(item.normalized_key);
+              if (serial === "-") continue;
+              refs.push(`#${serial}`);
             }
-            return this.getProxyRefsByGeoLocation(this.routeGeoFill.geo_location);
+            return refs;
+          },
+          proxyMatchesRouteFillFilters(item) {
+            const geoLocation = String(this.routeGeoFill.geo_location || "").trim();
+            const openaiStatus = String(this.routeGeoFill.openai_status || "").trim();
+            const ipPurityLevel = String(this.routeGeoFill.ip_purity_level || "").trim();
+            if (geoLocation && this.formatGeo(item) !== geoLocation) return false;
+            if (openaiStatus) {
+              const unlocked = item?.openai_unlocked;
+              const matched =
+                (openaiStatus === "unlocked" && unlocked === true) ||
+                (openaiStatus === "blocked" && unlocked === false) ||
+                (openaiStatus === "unchecked" && (unlocked === null || unlocked === undefined));
+              if (!matched) return false;
+            }
+            if (ipPurityLevel) {
+              const levelMap = {
+                residential: "家宽",
+                non_residential: "非家宽",
+                unknown: "未知",
+              };
+              const targetLevel = levelMap[ipPurityLevel] || ipPurityLevel;
+              if (String(item?.ip_purity_level || "").trim() !== targetLevel) return false;
+            }
+            return Boolean(geoLocation || openaiStatus || ipPurityLevel);
+          },
+          getRouteFillFilterLabels() {
+            const labels = [];
+            const geoLocation = String(this.routeGeoFill.geo_location || "").trim();
+            const openaiStatus = String(this.routeGeoFill.openai_status || "").trim();
+            const ipPurityLevel = String(this.routeGeoFill.ip_purity_level || "").trim();
+            if (geoLocation) labels.push(geoLocation);
+            if (openaiStatus === "unlocked") labels.push("ChatGPT已解锁");
+            if (openaiStatus === "blocked") labels.push("ChatGPT未解锁");
+            if (openaiStatus === "unchecked") labels.push("ChatGPT未检测");
+            if (ipPurityLevel === "residential") labels.push("IP纯净度家宽");
+            if (ipPurityLevel === "non_residential") labels.push("IP纯净度非家宽");
+            if (ipPurityLevel === "unknown") labels.push("IP纯净度未知");
+            return labels;
+          },
+          getProxyRefsByFillRule() {
+            const refs = [];
+            for (const item of this.allProxies || []) {
+              if (!this.proxyMatchesRouteFillFilters(item)) continue;
+              const serial = this.getSerial(item.normalized_key);
+              if (serial === "-") continue;
+              refs.push(`#${serial}`);
+            }
+            return refs;
           },
           getRouteFillRuleLabel() {
-            const mode = String(this.routeGeoFill.mode || "geo").trim();
-            if (mode === "openai") {
-              const openaiStatus = String(this.routeGeoFill.openai_status || "").trim();
-              if (openaiStatus === "unlocked") return "ChatGPT已解锁";
-              if (openaiStatus === "blocked") return "ChatGPT未解锁";
-              if (openaiStatus === "unchecked") return "ChatGPT未检测";
-              return "ChatGPT解锁状态";
-            }
-            return String(this.routeGeoFill.geo_location || "").trim();
+            return this.getRouteFillFilterLabels().join(" + ");
           },
           fillRouteColumnByGeo() {
             const label = this.getRouteFillRuleLabel();
@@ -2025,7 +2822,7 @@
               const entry = {
                 inbound_port: inboundPort,
                 inbound_type: "http",
-                listen: "127.0.0.1",
+                listen: this.backendDefaultListen || "127.0.0.1",
                 front_proxy_key: this.routeDefaults.front_proxy_key || "",
                 middle_proxy_key: this.routeDefaults.middle_proxy_key || "",
                 exit_proxy_key: this.routeDefaults.exit_proxy_key || "",
@@ -2075,7 +2872,7 @@
               this.routeEntries.push({
                 inbound_port: port,
                 inbound_type: "http",
-                listen: "127.0.0.1",
+                listen: this.backendDefaultListen || "127.0.0.1",
                 front_proxy_key: this.routeDefaults.front_proxy_key || "",
                 middle_proxy_key: this.routeDefaults.middle_proxy_key || "",
                 exit_proxy_key: this.routeDefaults.exit_proxy_key || "",
@@ -2107,7 +2904,9 @@
           async saveRouteEntries() {
             try {
               const routes = this.routePayloadFromEntries();
-              const resp = await fetch("/api/backend/routes", {
+              const id = String(this.backendConfigInstanceId || "default").trim() || "default";
+              const url = id === "default" ? "/api/backend/routes" : `/api/backend/instances/${encodeURIComponent(id)}/routes`;
+              const resp = await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ routes, auto_restart: true }),
@@ -2116,11 +2915,15 @@
               if (!resp.ok) {
                 throw new Error(data.detail || "保存失败");
               }
-              this.backendStatus = data;
+              if (id === "default") {
+                this.backendStatus = data;
+              } else {
+                await this.loadBackendStatus();
+              }
               this.routeEntries = (data.routes || []).map((item) => this.normalizeRouteItem(item));
               this.resetPage("routes");
               this.routesJson = JSON.stringify(data.routes || [], null, 2);
-              this.setMessage("链式路由已保存并热重启");
+              this.setMessage(`实例配置已保存: ${id}`);
               await this.checkRouteLatency();
             } catch (err) {
               this.setMessage("保存链式路由失败: " + err, true);
@@ -2151,6 +2954,7 @@
                   min_last_checked_age_hours: minLastCheckedAgeHours,
                   fallback_front_proxy_keys: fallbackKeys,
                   fallback_front_max_attempts: maxAttempts,
+                  replace_failed_with_available: testFilter.replace_failed_with_available === true,
                 },
                 "测速任务"
               );
@@ -2372,10 +3176,64 @@
           async copySubscription() {
             try {
               const text = await (await fetch("/api/subscription?only_available=true")).text();
-              await navigator.clipboard.writeText(text);
+              await this.copyTextToClipboard(text);
               this.setMessage("订阅已复制到剪贴板");
             } catch (err) {
               this.setMessage("复制失败: " + err, true);
+            }
+          },
+          proxyRawLink(item) {
+            return String(item?.raw_link || "").trim();
+          },
+          fallbackCopyTextToClipboard(text) {
+            const textarea = document.createElement("textarea");
+            textarea.value = String(text || "");
+            textarea.setAttribute("readonly", "readonly");
+            textarea.style.position = "fixed";
+            textarea.style.left = "-9999px";
+            textarea.style.top = "0";
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            try {
+              if (!document.execCommand("copy")) {
+                throw new Error("浏览器拒绝复制");
+              }
+            } finally {
+              document.body.removeChild(textarea);
+            }
+          },
+          async copyTextToClipboard(text) {
+            const value = String(text || "");
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+              await navigator.clipboard.writeText(value);
+              return;
+            }
+            this.fallbackCopyTextToClipboard(value);
+          },
+          async copyProxyLink(item) {
+            try {
+              const link = this.proxyRawLink(item);
+              if (!link) {
+                throw new Error("节点链接为空");
+              }
+              await this.copyTextToClipboard(link);
+              this.setMessage(`节点链接已复制: #${this.getSerial(item.normalized_key)}`);
+            } catch (err) {
+              this.setMessage("复制节点链接失败: " + err, true);
+            }
+          },
+          async copySelectedProxyLinks() {
+            try {
+              const items = this.selectedProxyItems();
+              const links = items.map((item) => this.proxyRawLink(item)).filter(Boolean);
+              if (!links.length) {
+                throw new Error("未选择可复制链接的节点");
+              }
+              await this.copyTextToClipboard(links.join("\n"));
+              this.setMessage(`已复制 ${links.length} 条节点链接`);
+            } catch (err) {
+              this.setMessage("批量复制节点链接失败: " + err, true);
             }
           },
           formatTime(ts) {
@@ -2451,18 +3309,19 @@
           },
         },
         async mounted() {
-          this.loadSectionVisibility();
           this.loadProxyColumns();
           this.loadRouteDefaults();
           this.loadTestFallback();
           this.loadTestRunFilter();
           this.loadTaskConcurrency();
           await this.loadBackendPortRange();
+          await this.loadBackendDefaultListen();
           await this.refreshTaskList({ force: true });
           this.startTaskPolling();
           await this.loadData();
           await this.loadProxyCatalog();
           await this.loadSubscriptions();
+          await this.loadPublishedSubscriptions();
           await this.loadSubscriptionUpdateProxy();
           await this.loadBackendStatus();
         },
