@@ -20,6 +20,11 @@ class AppSettings:
     backend_engine: str
     backend_health_check_sec: int
     backend_auto_restart_max: int
+    resin_binary: str = "resin"
+    resin_port: int = 2260
+    resin_admin_token: str = ""
+    resin_data_dir: Path = Path("data/resin")
+    resin_auto_start: bool = False
 
 
 def load_settings() -> AppSettings:
@@ -47,6 +52,16 @@ def load_settings() -> AppSettings:
     backend_health_check_sec = max(5, int(os.getenv("PROXYPOOL_BACKEND_HEALTH_CHECK_SEC", "30")))
     backend_auto_restart_max = max(0, int(os.getenv("PROXYPOOL_BACKEND_AUTO_RESTART_MAX", "3")))
 
+    local_resin = project_root / "bin" / "resin"
+    resin_binary = os.getenv(
+        "PROXYPOOL_RESIN_BINARY",
+        str(local_resin if local_resin.exists() else "resin"),
+    )
+    resin_port = max(1, int(os.getenv("PROXYPOOL_RESIN_PORT", "2260")))
+    resin_admin_token = os.getenv("PROXYPOOL_RESIN_ADMIN_TOKEN", "")
+    resin_data_dir = Path(os.getenv("PROXYPOOL_RESIN_DATA_DIR", str(project_root / "data" / "resin")))
+    resin_auto_start = os.getenv("PROXYPOOL_RESIN_AUTO_START", "").strip().lower() in {"1", "true", "yes"}
+
     return AppSettings(
         project_root=project_root,
         db_path=db_path,
@@ -61,4 +76,9 @@ def load_settings() -> AppSettings:
         backend_engine=backend_engine,
         backend_health_check_sec=backend_health_check_sec,
         backend_auto_restart_max=backend_auto_restart_max,
+        resin_binary=resin_binary,
+        resin_port=resin_port,
+        resin_admin_token=resin_admin_token,
+        resin_data_dir=resin_data_dir,
+        resin_auto_start=resin_auto_start,
     )

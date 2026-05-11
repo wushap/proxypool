@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import httpx
+import pytest
+
+from proxypool.api.app import create_app
+from proxypool.models import ProxyNode
+from proxypool.settings import AppSettings
+
+
+def _make_settings(tmp_path: Path) -> AppSettings:
+    return AppSettings(
+        project_root=tmp_path,
+        db_path=tmp_path / "proxies.db",
+        output_dir=tmp_path / "output",
+        sources_file=tmp_path / "sources.txt",
+        singbox_routes_file=tmp_path / "singbox-routes.json",
+        singbox_runtime_config_file=tmp_path / "singbox-runtime.json",
+        singbox_runtime_log_file=tmp_path / "singbox-runtime.log",
+        singbox_binary="sing-box",
+        test_url="https://www.cloudflare.com/cdn-cgi/trace",
+        api_key="",
+        backend_engine="singbox",
+        backend_health_check_sec=30,
+        backend_auto_restart_max=3,
+    )
+
+
+@pytest.mark.anyio
+async def test_pool_crud_endpoints(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    proxy = ProxyNode(protocol="trojan", host="us.example.com", port=443, raw_link="trojan://us", extra={"password": "p"})
+    storage.upsert_proxy(proxy)
+    storage.update_test_result(proxy.normalized_key(), available=True, latency_ms=100)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create pool
+        resp = await client.post("/api/pools", json={"name": "my-pool", "filters": {"available": "true"}})
+        assert resp.status_code == 200
+        data = resp.json()
+        pool = data["item"]
+        assert pool["name"] == "my-pool"
+        assert pool["status"] == "stopped"
+        pool_id = pool["id"]
+
+        # List pools
+        resp = await client.get("/api/pools")
+        assert resp.status_code == 200
+        pools = resp.json()["items"]
+        assert len(pools) >= 1
+
+        # Get pool
+        resp = await client.get(f"/api/pools/{pool_id}")
+        assert resp.status_code == 200
+        assert resp.json()["item"]["name"] == "my-pool"
+
+        # Update pool
+        resp = await client.put(f"/api/pools/{pool_id}", json={"name": "renamed-pool"})
+        assert resp.status_code == 200
+        assert resp.json()["item"]["name"] == "renamed-pool"
+
+        # Delete pool
+        resp = await client.delete(f"/api/pools/{pool_id}")
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] is True
+
+        # Verify deleted
+        resp = await client.get(f"/api/pools/{pool_id}")
+        assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_pool_not_found(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/pools/999")
+        assert resp.status_code == 404
+
+        resp = await client.delete("/api/pools/999")
+        assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_pool_create_with_all_filters(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/api/pools", json={
+            "name": "filtered-pool",
+            "filters": {
+                "available": "true",
+                "protocol": "trojan",
+                "geo_country": "US",
+                "openai_filter": "unlocked",
+                "ip_purity_filter": "residential",
+                "latency_min": "50",
+                "latency_max": "500",
+                "freshness_hours": "24",
+            },
+        })
+        assert resp.status_code == 200
+        pool = resp.json()["item"]
+        assert pool["filters"]["latency_min"] == "50"
+        assert pool["filters"]["latency_max"] == "500"
+        assert pool["filters"]["freshness_hours"] == "24"
+
+
+@pytest.mark.anyio
+async def test_resin_status_endpoint(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/resin/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "running" in data
+        assert data["running"] is False
+
+
+@pytest.mark.anyio
+async def test_resin_info_when_not_running(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/resin/info")
+        assert resp.status_code == 503

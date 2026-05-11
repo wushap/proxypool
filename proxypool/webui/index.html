@@ -289,6 +289,7 @@
               <el-menu-item index="overview">总览与任务</el-menu-item>
               <el-menu-item index="subscriptions">订阅管理</el-menu-item>
               <el-menu-item index="published-subscriptions">订阅发布管理</el-menu-item>
+              <el-menu-item index="proxy-pools">代理池</el-menu-item>
               <el-menu-item index="backend">sing-box 后端</el-menu-item>
               <el-menu-item index="proxies">代理节点</el-menu-item>
             </el-menu>
@@ -651,6 +652,119 @@
                       <button @click="onCopyPublishedSubscriptionUrl(item)" :disabled="isActionRunning(`copyPubSub-${item.id}`)" class="rounded border border-cyan-300 px-2 py-1 text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`copyPubSub-${item.id}`, '复制链接', '复制中...') }}</button>
                       <a :href="publishedSubscriptionExportUrl(item)" target="_blank" class="rounded border border-slate-300 px-2 py-1 text-slate-700 hover:bg-slate-50">打开</a>
                       <button @click="onDeletePublishedSubscription(item.id)" :disabled="isActionRunning(`deletePubSub-${item.id}`)" class="rounded border border-rose-300 px-2 py-1 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`deletePubSub-${item.id}`, '删除', '删除中...') }}</button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section v-show="activePage === 'proxy-pools'" class="glass ops-page-section mt-6 rounded-2xl p-5 pulse-in">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-lg font-bold">代理池管理</h2>
+            <div class="flex gap-2">
+              <button @click="onLoadProxyPools" :disabled="isActionRunning('loadProxyPools')" class="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('loadProxyPools', '刷新', '刷新中...') }}</button>
+            </div>
+          </div>
+          <!-- Resin status bar -->
+          <div class="mb-4 rounded-lg border border-slate-200 bg-white/60 p-3 text-sm">
+            <div class="flex flex-wrap items-center gap-3">
+              <span class="font-semibold">Resin 网关:</span>
+              <span v-if="resinStatus.running" class="text-emerald-700">运行中 (PID {{ resinStatus.pid || '-' }})</span>
+              <span v-else class="text-slate-500">未启动</span>
+              <span v-if="resinStatus.healthy" class="text-emerald-600">健康</span>
+              <span v-else-if="resinStatus.running" class="text-amber-600">不可达</span>
+              <button @click="onResinStart" :disabled="isActionRunning('resinStart')" class="rounded border border-blue-300 px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('resinStart', '启动 Resin', '启动中...') }}</button>
+              <button @click="onResinStop" :disabled="isActionRunning('resinStop')" class="rounded border border-rose-300 px-2 py-1 text-xs text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('resinStop', '停止 Resin', '停止中...') }}</button>
+              <a v-if="resinStatus.running" :href="'http://' + (backendStatus.listen || '127.0.0.1') + ':2260'" target="_blank" class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">打开 Resin 管理界面</a>
+            </div>
+          </div>
+          <!-- Create pool form -->
+          <div class="mb-4 rounded-lg border border-slate-200 bg-white/60 p-3">
+            <h3 class="mb-2 text-sm font-semibold">创建代理池</h3>
+            <div class="grid gap-2 md:grid-cols-4">
+              <input v-model.trim="proxyPoolForm.name" type="text" placeholder="池名称" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+              <input v-model.trim="proxyPoolForm.listen" type="text" placeholder="监听地址 (默认 0.0.0.0)" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+              <select v-model="proxyPoolForm.inbound_type" class="rounded border border-slate-300 px-3 py-2 text-sm">
+                <option value="http">HTTP</option>
+                <option value="socks">SOCKS</option>
+              </select>
+              <button @click="onCreateProxyPool" :disabled="isActionRunning('createProxyPool')" class="rounded border border-blue-700 px-3 py-2 text-sm font-semibold text-blue-800 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel('createProxyPool', '创建代理池', '创建中...') }}</button>
+            </div>
+            <div class="mt-2 grid gap-2 md:grid-cols-6">
+              <select v-model="proxyPoolForm.filters.available" class="rounded border border-slate-300 px-3 py-2 text-sm">
+                <option value="true">仅可直连</option>
+                <option value="false">仅不可直连</option>
+                <option value="">直连不限</option>
+              </select>
+              <select v-model="proxyPoolForm.filters.openai_filter" class="rounded border border-slate-300 px-3 py-2 text-sm">
+                <option value="">解锁不限</option>
+                <option value="unlocked">ChatGPT已解锁</option>
+                <option value="blocked">ChatGPT未解锁</option>
+                <option value="unchecked">ChatGPT未检测</option>
+              </select>
+              <select v-model="proxyPoolForm.filters.ip_purity_filter" class="rounded border border-slate-300 px-3 py-2 text-sm">
+                <option value="">家宽不限</option>
+                <option value="residential">家宽</option>
+                <option value="non_residential">非家宽</option>
+                <option value="unknown">未知</option>
+              </select>
+              <select v-model="proxyPoolForm.filters.geo_country" class="rounded border border-slate-300 px-3 py-2 text-sm">
+                <option value="">国家不限</option>
+                <option v-for="opt in geoCountryOptions" :key="'pool-country-' + opt.value" :value="opt.value">{{ opt.label }}</option>
+              </select>
+              <input v-model.trim="proxyPoolForm.filters.source" type="text" placeholder="来源关键词" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+              <input v-model.trim="proxyPoolForm.filters.protocol" type="text" placeholder="协议(ss/trojan等)" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <div class="mt-2 grid gap-2 md:grid-cols-4">
+              <input v-model.number="proxyPoolForm.filters.latency_min" type="number" min="0" placeholder="最低延迟(ms)" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+              <input v-model.number="proxyPoolForm.filters.latency_max" type="number" min="0" placeholder="最高延迟(ms)" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+              <input v-model.number="proxyPoolForm.filters.freshness_hours" type="number" min="0" placeholder="新鲜度(小时内)" class="rounded border border-slate-300 px-3 py-2 text-sm" />
+              <select v-model="proxyPoolForm.filters.fallback_front_filter" class="rounded border border-slate-300 px-3 py-2 text-sm">
+                <option value="">链路不限</option>
+                <option value="none">无前置链路</option>
+                <option value="has">有可连通前置</option>
+              </select>
+            </div>
+          </div>
+          <!-- Pool list -->
+          <div class="overflow-x-auto">
+            <table class="min-w-full border-separate border-spacing-y-2 text-xs">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="px-2 py-2">ID</th>
+                  <th class="px-2 py-2">名称</th>
+                  <th class="px-2 py-2">筛选条件</th>
+                  <th class="px-2 py-2">匹配节点</th>
+                  <th class="px-2 py-2">状态</th>
+                  <th class="px-2 py-2">Resin</th>
+                  <th class="px-2 py-2">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in proxyPools" :key="item.id" class="bg-white/70">
+                  <td class="px-2 py-2 font-mono text-slate-600">{{ item.id }}</td>
+                  <td class="px-2 py-2">
+                    <input :value="item.name || ''" @change="onRenameProxyPool(item, $event.target.value)" type="text" class="w-32 rounded border border-slate-300 px-2 py-1" />
+                  </td>
+                  <td class="px-2 py-2 text-slate-600 max-w-xs truncate" :title="formatPoolFilters(item.filters)">{{ formatPoolFilters(item.filters) }}</td>
+                  <td class="px-2 py-2 font-mono text-slate-700">{{ item.match_count || 0 }}</td>
+                  <td class="px-2 py-2">
+                    <span :class="item.status === 'running' ? 'text-emerald-700' : item.status === 'error' ? 'text-rose-700' : 'text-slate-500'">
+                      {{ item.status || 'stopped' }}
+                    </span>
+                  </td>
+                  <td class="px-2 py-2 text-xs text-slate-500">
+                    <span v-if="item.resin_subscription_id" class="text-emerald-600">已同步</span>
+                    <span v-else class="text-slate-400">未同步</span>
+                  </td>
+                  <td class="px-2 py-2">
+                    <div class="flex flex-wrap gap-1">
+                      <button @click="onSyncPool(item.id)" :disabled="isActionRunning(`syncPool-${item.id}`)" class="rounded border border-blue-300 px-2 py-1 text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`syncPool-${item.id}`, '同步', '同步中...') }}</button>
+                      <button @click="onUpdatePoolFilters(item)" :disabled="isActionRunning(`updatePool-${item.id}`)" class="rounded border border-cyan-300 px-2 py-1 text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`updatePool-${item.id}`, '保存筛选', '保存中...') }}</button>
+                      <a v-if="item.export_url" :href="item.export_url" target="_blank" class="rounded border border-slate-300 px-2 py-1 text-slate-700 hover:bg-slate-50">订阅源</a>
+                      <button @click="onDeleteProxyPool(item.id)" :disabled="isActionRunning(`deletePool-${item.id}`)" class="rounded border border-rose-300 px-2 py-1 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60">{{ buttonLabel(`deletePool-${item.id}`, '删除', '删除中...') }}</button>
                     </div>
                   </td>
                 </tr>
@@ -1212,6 +1326,26 @@
               },
             },
             subscriptionUpdateProxyRef: "",
+            proxyPools: [],
+            proxyPoolForm: {
+              name: "",
+              listen: "0.0.0.0",
+              inbound_type: "http",
+              filters: {
+                available: "true",
+                geo_country: "",
+                geo_location: "",
+                openai_filter: "",
+                ip_purity_filter: "",
+                fallback_front_filter: "",
+                source: "",
+                protocol: "",
+                latency_min: "",
+                latency_max: "",
+                freshness_hours: "",
+              },
+            },
+            resinStatus: {},
             taskItems: [],
             taskPollingTimer: null,
             taskListLoading: false,
@@ -1415,6 +1549,14 @@
         methods: {
           selectPage(key) {
             this.activePage = key;
+            if (key === "proxy-pools") {
+              this.loadProxyPools();
+              this.loadResinStatus();
+            } else if (key === "published-subscriptions") {
+              this.loadPublishedSubscriptions();
+            } else if (key === "backend") {
+              this.loadBackendStatus();
+            }
           },
           isActionRunning(key) {
             return !!this.buttonState[String(key || "")];
@@ -1459,6 +1601,11 @@
           async onCreateSubscription() { await this.runWithButtonState("createSubscription", async () => this.createSubscription()); },
           async onLoadPublishedSubscriptions() { await this.runWithButtonState("loadPublishedSubscriptions", async () => this.loadPublishedSubscriptions()); },
           async onCreatePublishedSubscription() { await this.runWithButtonState("createPublishedSubscription", async () => this.createPublishedSubscription()); },
+          async onLoadProxyPools() { await this.runWithButtonState("loadProxyPools", async () => this.loadProxyPools()); },
+          async onCreateProxyPool() { await this.runWithButtonState("createProxyPool", async () => this.createProxyPool()); },
+          async onSyncPool(poolId) { await this.runWithButtonState(`syncPool-${poolId}`, async () => this.syncPool(poolId)); },
+          async onResinStart() { await this.runWithButtonState("resinStart", async () => this.resinStart()); },
+          async onResinStop() { await this.runWithButtonState("resinStop", async () => this.resinStop()); },
           async onSaveSubscriptionUpdateProxy() { await this.runWithButtonState("saveSubUpdateProxy", async () => this.saveSubscriptionUpdateProxy()); },
           async onRefreshAllSubscriptions() { await this.runWithButtonState("refreshAllSubscriptions", async () => this.refreshAllSubscriptions()); },
           async onDeleteUnavailableSubscriptions() { await this.runWithButtonState("deleteUnavailableSubscriptions", async () => this.deleteUnavailableSubscriptions()); },
@@ -1922,6 +2069,150 @@
             } catch (err) {
               this.setMessage("删除发布订阅失败: " + err, true);
             }
+          },
+          // ---- Proxy Pool methods ----
+          async loadProxyPools() {
+            try {
+              const resp = await fetch("/api/pools?limit=1000");
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "加载代理池失败");
+              this.proxyPools = data.items || [];
+            } catch (err) {
+              this.setMessage("加载代理池失败: " + err, true);
+            }
+          },
+          async loadResinStatus() {
+            try {
+              const resp = await fetch("/api/resin/status");
+              this.resinStatus = await resp.json();
+            } catch {
+              this.resinStatus = { running: false, healthy: false };
+            }
+          },
+          async resinStart() {
+            try {
+              const resp = await fetch("/api/resin/start", { method: "POST" });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "启动 Resin 失败");
+              this.resinStatus = data;
+              this.setMessage("Resin 已启动");
+            } catch (err) {
+              this.setMessage("启动 Resin 失败: " + err, true);
+            }
+          },
+          async resinStop() {
+            try {
+              const resp = await fetch("/api/resin/stop", { method: "POST" });
+              this.resinStatus = await resp.json();
+              this.setMessage("Resin 已停止");
+            } catch (err) {
+              this.setMessage("停止 Resin 失败: " + err, true);
+            }
+          },
+          async createProxyPool() {
+            const name = String(this.proxyPoolForm.name || "").trim();
+            if (!name) { this.setMessage("请输入池名称", true); return; }
+            try {
+              const resp = await fetch("/api/pools", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  name,
+                  listen: this.proxyPoolForm.listen || "0.0.0.0",
+                  inbound_type: this.proxyPoolForm.inbound_type || "http",
+                  filters: this.normalizePoolFilters(this.proxyPoolForm.filters),
+                }),
+              });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "创建失败");
+              this.proxyPoolForm.name = "";
+              this.setMessage("代理池已创建");
+              await this.loadProxyPools();
+            } catch (err) {
+              this.setMessage("创建代理池失败: " + err, true);
+            }
+          },
+          async syncPool(poolId) {
+            try {
+              const resp = await fetch(`/api/pools/${poolId}/sync`, { method: "POST" });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.detail || "同步失败");
+              this.setMessage("代理池已同步");
+              await this.loadProxyPools();
+            } catch (err) {
+              this.setMessage("同步代理池失败: " + err, true);
+            }
+          },
+          async onRenameProxyPool(item, nextName) {
+            const name = String(nextName || "").trim();
+            if (!name || name === String(item.name || "").trim()) return;
+            await this.runWithButtonState(`renamePool-${item.id}`, async () => {
+              try {
+                const resp = await fetch(`/api/pools/${item.id}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ name }),
+                });
+                if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || "更新失败"); }
+                this.setMessage("代理池名称已更新");
+                await this.loadProxyPools();
+              } catch (err) {
+                this.setMessage("更新代理池名称失败: " + err, true);
+              }
+            });
+          },
+          async onUpdatePoolFilters(item) {
+            await this.runWithButtonState(`updatePool-${item.id}`, async () => {
+              try {
+                const resp = await fetch(`/api/pools/${item.id}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ filters: this.normalizePoolFilters(this.proxyPoolForm.filters) }),
+                });
+                if (!resp.ok) { const d = await resp.json(); throw new Error(d.detail || "保存失败"); }
+                this.setMessage("代理池筛选已保存");
+                await this.loadProxyPools();
+              } catch (err) {
+                this.setMessage("保存代理池筛选失败: " + err, true);
+              }
+            });
+          },
+          async onDeleteProxyPool(poolId) {
+            await this.runWithButtonState(`deletePool-${poolId}`, async () => {
+              try {
+                const resp = await fetch(`/api/pools/${poolId}`, { method: "DELETE" });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || "删除失败");
+                this.setMessage("代理池已删除");
+                await this.loadProxyPools();
+              } catch (err) {
+                this.setMessage("删除代理池失败: " + err, true);
+              }
+            });
+          },
+          normalizePoolFilters(filters) {
+            const out = {};
+            for (const [k, v] of Object.entries(filters || {})) {
+              const s = String(v ?? "").trim();
+              if (s) out[k] = s;
+            }
+            return out;
+          },
+          formatPoolFilters(filters) {
+            const f = filters || {};
+            const parts = [];
+            if (f.available === "true") parts.push("可直连");
+            else if (f.available === "false") parts.push("不可直连");
+            if (f.protocol) parts.push(f.protocol);
+            if (f.geo_country) parts.push(f.geo_country);
+            if (f.openai_filter === "unlocked") parts.push("GPT解锁");
+            else if (f.openai_filter === "blocked") parts.push("GPT未解锁");
+            if (f.ip_purity_filter === "residential") parts.push("家宽");
+            else if (f.ip_purity_filter === "non_residential") parts.push("非家宽");
+            if (f.latency_min || f.latency_max) parts.push(`延迟${f.latency_min||0}-${f.latency_max||'∞'}ms`);
+            if (f.freshness_hours) parts.push(`${f.freshness_hours}h内`);
+            if (f.source) parts.push(`来源:${f.source}`);
+            return parts.length ? parts.join(" / ") : "不限";
           },
           async loadSubscriptionUpdateProxy() {
             try {

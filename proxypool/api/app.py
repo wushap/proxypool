@@ -19,6 +19,8 @@ from proxypool.api.schemas import (
     ImportTextsRequest,
     ImportSourcesRequest,
     ImportUrlsRequest,
+    ProxyPoolCreateRequest,
+    ProxyPoolUpdateRequest,
     PublishedSubscriptionCreateRequest,
     PublishedSubscriptionUpdateRequest,
     RunTestRequest,
@@ -31,6 +33,9 @@ from proxypool.api.schemas import (
 )
 from proxypool.api.security import is_request_authorized
 from proxypool.backend.singbox_manager import SingBoxBackendManager, SingBoxRoute
+from proxypool.backend.resin_manager import ResinBackendManager
+from proxypool.backend.resin_client import ResinClient
+from proxypool.pool.service import ProxyPoolService
 from proxypool.collector.service import CollectorService
 from proxypool.geoip.service import GeoIPService
 from proxypool.scheduler.jobs import SchedulerService
@@ -63,6 +68,21 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     )
     tester.replace_failed_proxy_cb = singbox_manager.replace_failed_exit_proxy
 
+    resin_manager = ResinBackendManager(
+        binary=cfg.resin_binary,
+        port=cfg.resin_port,
+        admin_token=cfg.resin_admin_token,
+        data_dir=cfg.resin_data_dir,
+        log_file=Path(str(cfg.singbox_runtime_log_file).replace("singbox", "resin")),
+    )
+    resin_base_url = f"http://127.0.0.1:{cfg.resin_port}"
+    resin_client = ResinClient(base_url=resin_base_url, admin_token=cfg.resin_admin_token)
+    pool_service = ProxyPoolService(
+        storage=storage,
+        resin_manager=resin_manager,
+        resin_client=resin_client,
+    )
+
     app = FastAPI(title="Proxy Pool", version="0.1.0")
     app.state.settings = cfg
     app.state.storage = storage
@@ -72,6 +92,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.singbox_manager = singbox_manager
+    app.state.resin_manager = resin_manager
+    app.state.resin_client = resin_client
+    app.state.pool_service = pool_service
     app.state.backend_health_task = None
 
     async def _backend_health_loop() -> None:
@@ -87,6 +110,11 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     @app.on_event("startup")
     async def on_startup() -> None:
         app.state.backend_health_task = asyncio.create_task(_backend_health_loop())
+        if cfg.resin_auto_start:
+            try:
+                resin_manager.start()
+            except Exception:
+                pass
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
@@ -836,6 +864,113 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def scheduler_stop() -> dict:
         scheduler.stop()
         return {"status": "stopped"}
+
+    # ---- Proxy Pool endpoints ----
+
+    @app.get("/api/pools")
+    async def list_pools() -> dict:
+        return {"items": pool_service.list_pools()}
+
+    @app.post("/api/pools")
+    async def create_pool(body: ProxyPoolCreateRequest) -> dict:
+        try:
+            item = pool_service.create_pool(
+                name=body.name,
+                filters=body.filters,
+                listen=body.listen,
+                inbound_type=body.inbound_type,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": item}
+
+    @app.get("/api/pools/{pool_id}")
+    async def get_pool(pool_id: int) -> dict:
+        item = pool_service.get_pool(pool_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="pool not found")
+        return {"item": item}
+
+    @app.put("/api/pools/{pool_id}")
+    async def update_pool(pool_id: int, body: ProxyPoolUpdateRequest) -> dict:
+        try:
+            item = pool_service.update_pool(pool_id, **body.model_dump(exclude_none=True))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": item}
+
+    @app.delete("/api/pools/{pool_id}")
+    async def delete_pool(pool_id: int) -> dict:
+        deleted = pool_service.delete_pool(pool_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="pool not found")
+        return {"deleted": True}
+
+    @app.post("/api/pools/{pool_id}/sync")
+    async def sync_pool(pool_id: int) -> dict:
+        try:
+            item = pool_service.sync_pool(pool_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": item}
+
+    @app.post("/api/pools/{pool_id}/start")
+    async def start_pool(pool_id: int) -> dict:
+        try:
+            item = pool_service.start_pool(pool_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": item}
+
+    @app.post("/api/pools/{pool_id}/stop")
+    async def stop_pool(pool_id: int) -> dict:
+        try:
+            item = pool_service.stop_pool(pool_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": item}
+
+    # ---- Resin backend management endpoints ----
+
+    @app.get("/api/resin/status")
+    async def resin_status() -> dict:
+        return resin_manager.status()
+
+    @app.post("/api/resin/start")
+    async def resin_start() -> dict:
+        try:
+            resin_manager.start()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return resin_manager.status()
+
+    @app.post("/api/resin/stop")
+    async def resin_stop() -> dict:
+        resin_manager.stop()
+        return resin_manager.status()
+
+    @app.post("/api/resin/restart")
+    async def resin_restart() -> dict:
+        try:
+            resin_manager.restart()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return resin_manager.status()
+
+    @app.get("/api/resin/info")
+    async def resin_info() -> dict:
+        if not resin_manager.is_running():
+            raise HTTPException(status_code=503, detail="resin not running")
+        return resin_client.get_system_info()
+
+    @app.get("/api/resin/nodes")
+    async def resin_nodes(
+        limit: int = Query(default=200, ge=1, le=5000),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict:
+        if not resin_manager.is_running():
+            raise HTTPException(status_code=503, detail="resin not running")
+        return resin_client.list_nodes(limit=limit, offset=offset)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:

@@ -118,6 +118,22 @@ class SQLiteProxyStorage:
             updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_published_subscriptions_enabled ON published_subscriptions(enabled);
+        CREATE TABLE IF NOT EXISTS proxy_pools (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            published_subscription_id INTEGER,
+            resin_subscription_id TEXT NOT NULL DEFAULT '',
+            resin_platform_id TEXT NOT NULL DEFAULT '',
+            filters_json TEXT NOT NULL DEFAULT '{}',
+            listen TEXT NOT NULL DEFAULT '0.0.0.0',
+            inbound_type TEXT NOT NULL DEFAULT 'http',
+            status TEXT NOT NULL DEFAULT 'stopped',
+            last_synced_at TEXT,
+            last_error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_proxy_pools_status ON proxy_pools(status);
         CREATE TABLE IF NOT EXISTS app_settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL DEFAULT '',
@@ -240,6 +256,10 @@ class SQLiteProxyStorage:
         fallback_front_filter: str | None = None,
         sort_by: str = "latency",
         sort_order: str = "asc",
+        latency_min: int | None = None,
+        latency_max: int | None = None,
+        freshness_hours: int | None = None,
+        exclude_keys: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         where: list[str] = []
         params: list[Any] = []
@@ -307,6 +327,20 @@ class SQLiteProxyStorage:
             where.append("fallback_front_keys_json <> '[]'")
         elif fallback_front_filter == "none":
             where.append("fallback_front_keys_json = '[]'")
+        if latency_min is not None and int(latency_min) >= 0:
+            where.append("latency_ms >= ?")
+            params.append(int(latency_min))
+        if latency_max is not None and int(latency_max) >= 0:
+            where.append("latency_ms <= ?")
+            params.append(int(latency_max))
+        if freshness_hours is not None and int(freshness_hours) > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=int(freshness_hours))).isoformat()
+            where.append("last_checked_at >= ?")
+            params.append(cutoff)
+        if exclude_keys:
+            placeholders = ", ".join("?" for _ in exclude_keys)
+            where.append(f"normalized_key NOT IN ({placeholders})")
+            params.extend(exclude_keys)
 
         where_clause = f"WHERE {' AND '.join(where)}" if where else ""
         params.extend([limit, offset])
@@ -943,6 +977,140 @@ class SQLiteProxyStorage:
         self.set_app_setting("backend_default_listen", safe)
         return safe
 
+    # ---- proxy pool CRUD ----
+
+    def create_proxy_pool(
+        self,
+        name: str,
+        filters: dict[str, Any] | None = None,
+        listen: str = "0.0.0.0",
+        inbound_type: str = "http",
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        filters_json = json.dumps(_normalize_pool_filters(filters), ensure_ascii=False, separators=(",", ":"))
+        safe_name = (str(name or "").strip() or "proxy-pool")[:120]
+        safe_listen = str(listen or "0.0.0.0").strip() or "0.0.0.0"
+        safe_type = str(inbound_type or "http").strip().lower() or "http"
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO proxy_pools (name, filters_json, listen, inbound_type, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 'stopped', ?, ?)
+                    """,
+                    (safe_name, filters_json, safe_listen, safe_type, now, now),
+                )
+                pool_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                row = conn.execute("SELECT * FROM proxy_pools WHERE id = ?", (pool_id,)).fetchone()
+                conn.commit()
+        if row is None:
+            raise RuntimeError("failed to create proxy pool")
+        return self._pool_row_to_dict(row)
+
+    def update_proxy_pool(
+        self,
+        pool_id: int,
+        name: str | None = None,
+        filters: dict[str, Any] | None = None,
+        listen: str | None = None,
+        inbound_type: str | None = None,
+        published_subscription_id: int | None = None,
+        resin_subscription_id: str | None = None,
+        resin_platform_id: str | None = None,
+    ) -> dict[str, Any]:
+        updates: list[str] = []
+        params: list[Any] = []
+        if name is not None:
+            updates.append("name = ?")
+            params.append((str(name or "").strip() or "proxy-pool")[:120])
+        if filters is not None:
+            updates.append("filters_json = ?")
+            params.append(json.dumps(_normalize_pool_filters(filters), ensure_ascii=False, separators=(",", ":")))
+        if listen is not None:
+            updates.append("listen = ?")
+            params.append(str(listen or "0.0.0.0").strip() or "0.0.0.0")
+        if inbound_type is not None:
+            updates.append("inbound_type = ?")
+            params.append(str(inbound_type or "http").strip().lower() or "http")
+        if published_subscription_id is not None:
+            updates.append("published_subscription_id = ?")
+            params.append(int(published_subscription_id))
+        if resin_subscription_id is not None:
+            updates.append("resin_subscription_id = ?")
+            params.append(str(resin_subscription_id))
+        if resin_platform_id is not None:
+            updates.append("resin_platform_id = ?")
+            params.append(str(resin_platform_id))
+        if not updates:
+            return self.get_proxy_pool(pool_id) or {}
+        updates.append("updated_at = ?")
+        params.append(_utc_now())
+        params.append(int(pool_id))
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    f"UPDATE proxy_pools SET {', '.join(updates)} WHERE id = ?",
+                    params,
+                )
+                row = conn.execute("SELECT * FROM proxy_pools WHERE id = ?", (int(pool_id),)).fetchone()
+                conn.commit()
+        if row is None:
+            raise ValueError("proxy pool not found")
+        return self._pool_row_to_dict(row)
+
+    def delete_proxy_pool(self, pool_id: int) -> int:
+        with self._write_lock:
+            with self._connect() as conn:
+                cur = conn.execute("DELETE FROM proxy_pools WHERE id = ?", (int(pool_id),))
+                deleted = int(cur.rowcount or 0)
+                conn.commit()
+        return deleted
+
+    def get_proxy_pool(self, pool_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM proxy_pools WHERE id = ? LIMIT 1", (int(pool_id),)).fetchone()
+        if row is None:
+            return None
+        return self._pool_row_to_dict(row)
+
+    def list_proxy_pools(self, limit: int = 200) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM proxy_pools ORDER BY updated_at DESC, id DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [self._pool_row_to_dict(row) for row in rows]
+
+    def update_proxy_pool_status(
+        self,
+        pool_id: int,
+        status: str,
+        last_error: str = "",
+        last_synced_at: str | None = None,
+    ) -> None:
+        updates = ["status = ?", "last_error = ?", "updated_at = ?"]
+        params: list[Any] = [str(status or "stopped")[:32], str(last_error or "")[:1000], _utc_now()]
+        if last_synced_at is not None:
+            updates.append("last_synced_at = ?")
+            params.append(last_synced_at)
+        params.append(int(pool_id))
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    f"UPDATE proxy_pools SET {', '.join(updates)} WHERE id = ?",
+                    params,
+                )
+                conn.commit()
+
+    def _pool_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["filters"] = _normalize_pool_filters(_loads_json_object(data.get("filters_json")))
+        data.pop("filters_json", None)
+        data["match_count"] = len(
+            self.list_proxies_filtered(limit=20000, **_pool_filters_to_list_kwargs(data.get("filters") or {}))
+        )
+        return data
+
     def get_subscription(self, subscription_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1284,6 +1452,33 @@ def _loads_json_object(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalize_pool_filters(filters: dict[str, Any] | None) -> dict[str, str]:
+    out = _normalize_published_subscription_filters(filters)
+    raw = filters or {}
+    for key in ("latency_min", "latency_max", "freshness_hours"):
+        value = str(raw.get(key) or "").strip()
+        if value:
+            try:
+                num = int(float(value))
+                if num >= 0:
+                    out[key] = str(num)
+            except (ValueError, TypeError):
+                pass
+    return out
+
+
+def _pool_filters_to_list_kwargs(filters: dict[str, Any]) -> dict[str, Any]:
+    kwargs = _filters_to_proxy_list_kwargs(filters)
+    for key in ("latency_min", "latency_max", "freshness_hours"):
+        value = str(filters.get(key) or "").strip()
+        if value:
+            try:
+                kwargs[key] = int(float(value))
+            except (ValueError, TypeError):
+                pass
+    return kwargs
 
 
 def _normalize_published_subscription_filters(filters: dict[str, Any] | None) -> dict[str, str]:

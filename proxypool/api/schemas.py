@@ -117,3 +117,17 @@ class ProxyListResponse(BaseModel):
 
 class GenericMessage(BaseModel):
     message: str
+
+
+class ProxyPoolCreateRequest(BaseModel):
+    name: str
+    filters: dict[str, str] = Field(default_factory=dict)
+    listen: str = "0.0.0.0"
+    inbound_type: str = "http"
+
+
+class ProxyPoolUpdateRequest(BaseModel):
+    name: str | None = None
+    filters: dict[str, str] | None = None
+    listen: str | None = None
+    inbound_type: str | None = None
