@@ -14,8 +14,6 @@ data/
 *.pid
 proxies.db
 
-# local binary/runtime downloads
-bin/sing-box
 
 # local import/export artifacts
 output/
