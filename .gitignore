@@ -30,3 +30,9 @@ image.png
 snap-before-filters.md
 status-dropdown.png
 status-dropdown-2.png
+
+# runtime route configs (proxy keys change frequently)
+configs/singbox-routes*.json
+
+# internal planning docs
+docs/superpowers/
