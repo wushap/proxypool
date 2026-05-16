@@ -25,6 +25,8 @@ def _make_settings(tmp_path: Path) -> AppSettings:
         backend_engine="singbox",
         backend_health_check_sec=30,
         backend_auto_restart_max=3,
+        mihomo_binary="mihomo",
+        mihomo_runtime_dir=tmp_path / "runtime" / "mihomo",
     )
 
 
@@ -161,3 +163,74 @@ async def test_chain_pool_update_accepts_empty_filters_list(tmp_path: Path) -> N
 
     assert resp.status_code == 200
     assert resp.json()["front_pool"]["regex_filters"] == []
+
+
+@pytest.mark.anyio
+async def test_app_exposes_chain_instance_manager(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    assert hasattr(app.state, "chain_instance_manager")
+    assert app.state.chain_instance_manager.backend.backend_type == "mihomo"
+
+
+@pytest.mark.anyio
+async def test_pool_chain_config_round_trip(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post("/api/pools", json={"name": "pool-a"})
+        pool_id = create_resp.json()["item"]["id"]
+
+        resp = await client.put(
+            f"/api/pools/{pool_id}/chain",
+            json={
+                "chain_enabled": True,
+                "sticky_ttl_sec": 7200,
+                "session_missing_action": "REJECT",
+                "session_header_names": ["X-ProxyPool-Session"],
+                "session_query_param_names": ["session"],
+                "gateway_path_prefix": "/proxy/pool-a",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["item"]["chain_enabled"] is True
+
+        resp = await client.get(f"/api/pools/{pool_id}/chain")
+        assert resp.status_code == 200
+        assert resp.json()["item"]["sticky_ttl_sec"] == 7200
+        assert resp.json()["item"]["gateway_path_prefix"] == "/proxy/pool-a"
+
+
+@pytest.mark.anyio
+async def test_pool_chain_instance_lifecycle(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
+    exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="exit-1")
+    storage.upsert_proxy(front)
+    storage.upsert_proxy(exit_node)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post("/api/pools", json={"name": "pool-a"})
+        pool_id = create_resp.json()["item"]["id"]
+
+        resp = await client.post(
+            f"/api/pools/{pool_id}/chain/instances",
+            json={
+                "instance_id": "chain-a",
+                "front_node_key": front.normalized_key(),
+                "exit_node_key": exit_node.normalized_key(),
+                "listen": "127.0.0.1",
+                "port": 18080,
+                "inbound_type": "http",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["item"]["instance_id"] == "chain-a"
+
+        resp = await client.get(f"/api/pools/{pool_id}/chain/instances")
+        assert resp.status_code == 200
+        assert resp.json()["items"][0]["instance_id"] == "chain-a"

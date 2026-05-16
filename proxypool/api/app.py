@@ -16,11 +16,13 @@ from proxypool.api.schemas import (
     BackendInstanceCreateRequest,
     BackendPortRangeRequest,
     BackendDefaultListenRequest,
+    ChainInstanceCreateRequest,
     GeoEnrichRequest,
     ImportFilesRequest,
     ImportTextsRequest,
     ImportSourcesRequest,
     ImportUrlsRequest,
+    ProxyPoolChainConfigRequest,
     ProxyPoolCreateRequest,
     ProxyPoolUpdateRequest,
     PublishedSubscriptionCreateRequest,
@@ -34,6 +36,8 @@ from proxypool.api.schemas import (
     SubscriptionUpdateRequest,
 )
 from proxypool.api.security import is_request_authorized
+from proxypool.backend.chain_instance_manager import ChainInstanceManager
+from proxypool.backend.mihomo_manager import MihomoEgressBackend
 from proxypool.backend.singbox_manager import SingBoxBackendManager, SingBoxRoute
 from proxypool.backend.resin_manager import ResinBackendManager
 from proxypool.backend.resin_client import ResinClient
@@ -97,6 +101,11 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         test_url=cfg.test_url,
         health_config=HealthConfig(),
     )
+    chain_backend = MihomoEgressBackend(
+        binary=cfg.mihomo_binary,
+        runtime_dir=cfg.mihomo_runtime_dir,
+    )
+    chain_instance_manager = ChainInstanceManager(storage=storage, backend=chain_backend)
 
     app = FastAPI(title="Proxy Pool", version="0.1.0")
     app.state.settings = cfg
@@ -111,6 +120,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.resin_client = resin_client
     app.state.pool_service = pool_service
     app.state.chain_service = chain_service
+    app.state.chain_instance_manager = chain_instance_manager
     app.state.backend_health_task = None
 
     async def _backend_health_loop() -> None:
@@ -917,6 +927,44 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"item": item}
 
+    @app.get("/api/pools/{pool_id}/chain")
+    async def get_pool_chain(pool_id: int) -> dict:
+        item = pool_service.get_pool_chain_config(pool_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="pool not found")
+        return {"item": item}
+
+    @app.put("/api/pools/{pool_id}/chain")
+    async def update_pool_chain(pool_id: int, body: ProxyPoolChainConfigRequest) -> dict:
+        try:
+            item = pool_service.update_pool_chain_config(pool_id, **body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"item": item}
+
+    @app.get("/api/pools/{pool_id}/chain/instances")
+    async def list_pool_chain_instances(pool_id: int) -> dict:
+        item = pool_service.get_pool(pool_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="pool not found")
+        return {"items": chain_instance_manager.list_instances(pool_id=pool_id)}
+
+    @app.post("/api/pools/{pool_id}/chain/instances")
+    async def create_pool_chain_instance(pool_id: int, body: ChainInstanceCreateRequest) -> dict:
+        item = pool_service.get_pool(pool_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="pool not found")
+        created = chain_instance_manager.create_instance(
+            instance_id=body.instance_id,
+            pool_id=pool_id,
+            front_node_key=body.front_node_key,
+            exit_node_key=body.exit_node_key,
+            listen=body.listen,
+            port=body.port,
+            inbound_type=body.inbound_type,
+        )
+        return {"item": created, "items": chain_instance_manager.list_instances(pool_id=pool_id)}
+
     @app.delete("/api/pools/{pool_id}")
     async def delete_pool(pool_id: int) -> dict:
         deleted = pool_service.delete_pool(pool_id)
@@ -1121,13 +1169,13 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/api/chain/route")
     async def chain_route(
-        account: str = "",
+        session_id: str = "",
         pool_id: int = 0,
         target_domain: str = "",
     ) -> dict:
         """Route a request through the proxy chain."""
         chain_service.initialize()
-        result = chain_service.route_request(account, pool_id, target_domain)
+        result = chain_service.route_request(session_id, pool_id, target_domain)
         if result is None:
             raise HTTPException(status_code=503, detail="No available nodes for routing")
         return result

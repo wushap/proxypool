@@ -175,12 +175,12 @@ class TestStickyRouter:
         router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
         
         # First request creates lease
-        result1 = router.route("user1", 1)
+        result1 = router.route("sess-1", 1)
         assert result1 is not None
         assert result1.lease_created is True
         
         # Second request reuses lease
-        result2 = router.route("user1", 1)
+        result2 = router.route("sess-1", 1)
         assert result2 is not None
         assert result2.exit_node.key == "e1"
 
@@ -222,11 +222,24 @@ class TestStickyRouter:
         router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=0)  # Immediate expiry
         
         # Create a lease
-        router.route("user1", 1)
+        router.route("sess-1", 1)
         
         # Cleanup should remove it
         removed = router.cleanup_expired_leases()
         assert removed >= 0  # May or may not be removed depending on timing
+
+    def test_get_leases_returns_session_id(self):
+        front_pool = NodePool("front", "front", [])
+        exit_pool = NodePool("exit", "exit", [])
+        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link=""))
+        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", egress_ip="10.0.0.1"))
+        router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
+
+        router.route("sess-abc", 3)
+        leases = router.get_leases(3)
+
+        assert leases[0]["session_id"] == "sess-abc"
+        assert "account" not in leases[0]
 
 
 class TestStorage:
@@ -280,14 +293,16 @@ class TestStorage:
     def test_sticky_lease_operations(self, storage):
         # Create lease
         lease = storage.upsert_sticky_lease(
-            account="user1",
+            session_id="user1",
             pool_id=1,
+            instance_id="inst-1",
             exit_node_key="node1",
             egress_ip="1.2.3.4",
             expires_at="2099-01-01T00:00:00",
             last_accessed="2024-01-01T00:00:00",
         )
-        assert lease["account"] == "user1"
+        assert lease["session_id"] == "user1"
+        assert lease["instance_id"] == "inst-1"
         
         # Get lease
         lease = storage.get_sticky_lease("user1", 1)
@@ -300,6 +315,62 @@ class TestStorage:
         # Delete lease
         deleted = storage.delete_sticky_lease("user1", 1)
         assert deleted == 1
+
+    def test_proxy_pool_chain_config_round_trip(self, storage):
+        pool = storage.create_proxy_pool(name="pool-a", filters={}, listen="0.0.0.0", inbound_type="http")
+        updated = storage.update_proxy_pool(
+            int(pool["id"]),
+            chain_enabled=True,
+            sticky_ttl_sec=7200,
+            session_missing_action="REJECT",
+            session_header_names=["X-ProxyPool-Session", "X-Session-Id"],
+            session_query_param_names=["session", "sid"],
+            gateway_path_prefix="/proxy/pool-a",
+        )
+
+        assert updated["chain_enabled"] is True
+        assert updated["sticky_ttl_sec"] == 7200
+        assert updated["session_missing_action"] == "REJECT"
+        assert updated["session_header_names"] == ["X-ProxyPool-Session", "X-Session-Id"]
+        assert updated["session_query_param_names"] == ["session", "sid"]
+        assert updated["gateway_path_prefix"] == "/proxy/pool-a"
+
+    def test_sticky_lease_session_round_trip(self, storage):
+        lease = storage.upsert_sticky_lease(
+            session_id="sess-1",
+            pool_id=7,
+            instance_id="inst-1",
+            exit_node_key="exit-1",
+            egress_ip="1.2.3.4",
+            expires_at="2026-05-16T12:00:00+00:00",
+            last_accessed="2026-05-16T11:00:00+00:00",
+        )
+
+        assert lease["session_id"] == "sess-1"
+        assert lease["instance_id"] == "inst-1"
+        assert storage.get_sticky_lease("sess-1", 7)["egress_ip"] == "1.2.3.4"
+
+    def test_chain_instance_storage_round_trip(self, storage):
+        item = storage.upsert_chain_egress_instance(
+            instance_id="chain-a",
+            pool_id=1,
+            backend_type="mihomo",
+            front_node_key="front-1",
+            exit_node_key="exit-1",
+            listen="127.0.0.1",
+            port=18080,
+            inbound_type="http",
+            status="running",
+            pid=4321,
+            config_file="/tmp/mihomo-a.yaml",
+            log_file="/tmp/mihomo-a.log",
+            egress_ip="8.8.8.8",
+            last_error="",
+        )
+
+        assert item["backend_type"] == "mihomo"
+        assert item["front_node_key"] == "front-1"
+        assert storage.list_chain_egress_instances(pool_id=1)[0]["instance_id"] == "chain-a"
 
 
 class TestProxyChainService:
@@ -379,3 +450,17 @@ class TestProxyChainService:
 
         assert service.health_manager.build_chain_proxy_url == service.chain_builder.build_chain_proxy_url
         service.health_manager.start.assert_called_once_with()
+
+    def test_route_request_persists_session_lease(self, storage):
+        storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
+        storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
+        storage.upsert_proxy(ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"))
+        storage.upsert_proxy(ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080"))
+
+        service = ProxyChainService(storage)
+        result = service.route_request("sess-1", 9, "")
+
+        assert result is not None
+        lease = storage.get_sticky_lease("sess-1", 9)
+        assert lease is not None
+        assert lease["session_id"] == "sess-1"

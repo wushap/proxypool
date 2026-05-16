@@ -20,6 +20,8 @@ class AppSettings:
     backend_engine: str
     backend_health_check_sec: int
     backend_auto_restart_max: int
+    mihomo_binary: str = "mihomo"
+    mihomo_runtime_dir: Path = Path("data/runtime/mihomo")
     resin_binary: str = "resin"
     resin_port: int = 2260
     resin_admin_token: str = ""
@@ -53,6 +55,14 @@ def load_settings() -> AppSettings:
     backend_engine = os.getenv("PROXYPOOL_BACKEND_ENGINE", "singbox").strip().lower() or "singbox"
     backend_health_check_sec = max(5, int(os.getenv("PROXYPOOL_BACKEND_HEALTH_CHECK_SEC", "30")))
     backend_auto_restart_max = max(0, int(os.getenv("PROXYPOOL_BACKEND_AUTO_RESTART_MAX", "3")))
+    local_mihomo = project_root / "bin" / "mihomo"
+    mihomo_binary = os.getenv(
+        "PROXYPOOL_MIHOMO_BINARY",
+        str(local_mihomo if local_mihomo.exists() else "mihomo"),
+    )
+    mihomo_runtime_dir = Path(
+        os.getenv("PROXYPOOL_MIHOMO_RUNTIME_DIR", str(project_root / "data" / "runtime" / "mihomo"))
+    )
 
     local_resin = project_root / "bin" / "resin"
     resin_binary = os.getenv(
@@ -80,6 +90,8 @@ def load_settings() -> AppSettings:
         backend_engine=backend_engine,
         backend_health_check_sec=backend_health_check_sec,
         backend_auto_restart_max=backend_auto_restart_max,
+        mihomo_binary=mihomo_binary,
+        mihomo_runtime_dir=mihomo_runtime_dir,
         resin_binary=resin_binary,
         resin_port=resin_port,
         resin_admin_token=resin_admin_token,

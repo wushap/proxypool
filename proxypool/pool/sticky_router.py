@@ -13,12 +13,13 @@ from proxypool.pool.node_pool import NodeEntry, NodePool
 @dataclass
 class Lease:
     """Represents a sticky session lease."""
-    account: str
+    session_id: str
     pool_id: int
     exit_node_key: str
     egress_ip: str
     expires_at: datetime
     last_accessed: datetime
+    instance_id: str = ""
 
 
 @dataclass
@@ -42,7 +43,7 @@ class StickyRouter:
         self.exit_pool = exit_pool
         self.sticky_ttl_sec = sticky_ttl_sec
         
-        # Lease table: (account, pool_id) -> Lease
+        # Lease table: (session_id, pool_id) -> Lease
         self._leases: dict[tuple[str, int], Lease] = {}
         # IP load stats: egress_ip -> count
         self._ip_load: dict[str, int] = {}
@@ -50,7 +51,7 @@ class StickyRouter:
     
     def route(
         self,
-        account: str,
+        session_id: str,
         pool_id: int,
         target_domain: str = "",
     ) -> RouteResult | None:
@@ -65,8 +66,8 @@ class StickyRouter:
             return None
         
         # Try sticky session
-        if account:
-            lease = self._get_lease(account, pool_id, now)
+        if session_id:
+            lease = self._get_lease(session_id, pool_id, now)
             if lease:
                 result = self._try_reuse_lease(lease, front_nodes, exit_nodes, now)
                 if result:
@@ -81,8 +82,8 @@ class StickyRouter:
         
         # Create lease if account provided
         lease_created = False
-        if account:
-            self._create_lease(account, pool_id, exit_node, now)
+        if session_id:
+            self._create_lease(session_id, pool_id, exit_node, now)
             lease_created = True
         
         return RouteResult(
@@ -91,9 +92,9 @@ class StickyRouter:
             lease_created=lease_created,
         )
     
-    def _get_lease(self, account: str, pool_id: int, now: datetime) -> Lease | None:
+    def _get_lease(self, session_id: str, pool_id: int, now: datetime) -> Lease | None:
         """Get existing lease if valid."""
-        key = (account, pool_id)
+        key = (session_id, pool_id)
         lease = self._leases.get(key)
         
         if lease is None:
@@ -101,7 +102,7 @@ class StickyRouter:
         
         # Check expiry
         if now >= lease.expires_at:
-            self._remove_lease(account, pool_id)
+            self._remove_lease(session_id, pool_id)
             return None
         
         return lease
@@ -177,32 +178,33 @@ class StickyRouter:
         
         return (lease_count + 1) * latency
     
-    def _create_lease(self, account: str, pool_id: int, exit_node: NodeEntry, now: datetime) -> None:
+    def _create_lease(self, session_id: str, pool_id: int, exit_node: NodeEntry, now: datetime) -> None:
         """Create a new sticky lease."""
         # Remove old lease if exists
-        self._remove_lease(account, pool_id)
+        self._remove_lease(session_id, pool_id)
         
         egress_ip = exit_node.egress_ip or ""
         expires_at = now + timedelta(seconds=self.sticky_ttl_sec)
         
         lease = Lease(
-            account=account,
+            session_id=session_id,
             pool_id=pool_id,
+            instance_id="",
             exit_node_key=exit_node.key,
             egress_ip=egress_ip,
             expires_at=expires_at,
             last_accessed=now,
         )
         
-        key = (account, pool_id)
+        key = (session_id, pool_id)
         self._leases[key] = lease
         
         # Update IP load stats
         self._ip_load[egress_ip] = self._ip_load.get(egress_ip, 0) + 1
     
-    def _remove_lease(self, account: str, pool_id: int) -> None:
+    def _remove_lease(self, session_id: str, pool_id: int) -> None:
         """Remove a lease and update IP load stats."""
-        key = (account, pool_id)
+        key = (session_id, pool_id)
         lease = self._leases.pop(key, None)
         
         if lease and lease.egress_ip:
@@ -223,8 +225,8 @@ class StickyRouter:
                 if now >= lease.expires_at
             ]
             for key in expired_keys:
-                account, pool_id = key
-                self._remove_lease(account, pool_id)
+                session_id, pool_id = key
+                self._remove_lease(session_id, pool_id)
                 removed += 1
         
         return removed
@@ -233,12 +235,13 @@ class StickyRouter:
         """Get all leases, optionally filtered by pool_id."""
         with self._lock:
             result = []
-            for (account, pid), lease in self._leases.items():
+            for (session_id, pid), lease in self._leases.items():
                 if pool_id is not None and pid != pool_id:
                     continue
                 result.append({
-                    "account": account,
+                    "session_id": session_id,
                     "pool_id": pid,
+                    "instance_id": lease.instance_id,
                     "exit_node_key": lease.exit_node_key,
                     "egress_ip": lease.egress_ip,
                     "expires_at": lease.expires_at.isoformat(),

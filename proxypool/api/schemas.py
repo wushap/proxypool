@@ -131,3 +131,21 @@ class ProxyPoolUpdateRequest(BaseModel):
     filters: dict[str, str] | None = None
     listen: str | None = None
     inbound_type: str | None = None
+
+
+class ProxyPoolChainConfigRequest(BaseModel):
+    chain_enabled: bool = False
+    sticky_ttl_sec: int = Field(default=3600, ge=1, le=7 * 24 * 3600)
+    session_missing_action: str = "RANDOM"
+    session_header_names: list[str] = Field(default_factory=list)
+    session_query_param_names: list[str] = Field(default_factory=list)
+    gateway_path_prefix: str = ""
+
+
+class ChainInstanceCreateRequest(BaseModel):
+    instance_id: str
+    front_node_key: str
+    exit_node_key: str
+    listen: str = "127.0.0.1"
+    port: int = Field(ge=1, le=65535)
+    inbound_type: str = "http"

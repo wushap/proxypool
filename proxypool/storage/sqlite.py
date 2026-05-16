@@ -127,6 +127,12 @@ class SQLiteProxyStorage:
             filters_json TEXT NOT NULL DEFAULT '{}',
             listen TEXT NOT NULL DEFAULT '0.0.0.0',
             inbound_type TEXT NOT NULL DEFAULT 'http',
+            chain_enabled INTEGER NOT NULL DEFAULT 0,
+            sticky_ttl_sec INTEGER NOT NULL DEFAULT 3600,
+            session_missing_action TEXT NOT NULL DEFAULT 'RANDOM',
+            session_header_names_json TEXT NOT NULL DEFAULT '[]',
+            session_query_param_names_json TEXT NOT NULL DEFAULT '[]',
+            gateway_path_prefix TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'stopped',
             last_synced_at TEXT,
             last_error TEXT NOT NULL DEFAULT '',
@@ -160,14 +166,34 @@ class SQLiteProxyStorage:
             latency_avg_ms INTEGER,
             updated_at TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS sticky_leases (
-            account TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS chain_egress_instances (
+            instance_id TEXT PRIMARY KEY,
             pool_id INTEGER NOT NULL,
+            backend_type TEXT NOT NULL DEFAULT 'mihomo',
+            front_node_key TEXT NOT NULL DEFAULT '',
+            exit_node_key TEXT NOT NULL DEFAULT '',
+            listen TEXT NOT NULL DEFAULT '127.0.0.1',
+            port INTEGER NOT NULL DEFAULT 0,
+            inbound_type TEXT NOT NULL DEFAULT 'http',
+            status TEXT NOT NULL DEFAULT 'stopped',
+            pid INTEGER NOT NULL DEFAULT -1,
+            config_file TEXT NOT NULL DEFAULT '',
+            log_file TEXT NOT NULL DEFAULT '',
+            egress_ip TEXT NOT NULL DEFAULT '',
+            last_error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_chain_egress_instances_pool ON chain_egress_instances(pool_id, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS sticky_leases (
+            session_id TEXT NOT NULL,
+            pool_id INTEGER NOT NULL,
+            instance_id TEXT NOT NULL DEFAULT '',
             exit_node_key TEXT NOT NULL,
             egress_ip TEXT NOT NULL,
             expires_at TEXT NOT NULL,
             last_accessed TEXT NOT NULL,
-            PRIMARY KEY (account, pool_id)
+            PRIMARY KEY (session_id, pool_id)
         );
         """
         with self._connect() as conn:
@@ -211,6 +237,80 @@ class SQLiteProxyStorage:
         }
         if "update_proxy_key" not in sub_columns:
             conn.execute("ALTER TABLE subscriptions ADD COLUMN update_proxy_key TEXT NOT NULL DEFAULT ''")
+
+        pool_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(proxy_pools)").fetchall()
+        }
+        if "chain_enabled" not in pool_columns:
+            conn.execute("ALTER TABLE proxy_pools ADD COLUMN chain_enabled INTEGER NOT NULL DEFAULT 0")
+        if "sticky_ttl_sec" not in pool_columns:
+            conn.execute("ALTER TABLE proxy_pools ADD COLUMN sticky_ttl_sec INTEGER NOT NULL DEFAULT 3600")
+        if "session_missing_action" not in pool_columns:
+            conn.execute("ALTER TABLE proxy_pools ADD COLUMN session_missing_action TEXT NOT NULL DEFAULT 'RANDOM'")
+        if "session_header_names_json" not in pool_columns:
+            conn.execute("ALTER TABLE proxy_pools ADD COLUMN session_header_names_json TEXT NOT NULL DEFAULT '[]'")
+        if "session_query_param_names_json" not in pool_columns:
+            conn.execute("ALTER TABLE proxy_pools ADD COLUMN session_query_param_names_json TEXT NOT NULL DEFAULT '[]'")
+        if "gateway_path_prefix" not in pool_columns:
+            conn.execute("ALTER TABLE proxy_pools ADD COLUMN gateway_path_prefix TEXT NOT NULL DEFAULT ''")
+
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS chain_egress_instances (
+                instance_id TEXT PRIMARY KEY,
+                pool_id INTEGER NOT NULL,
+                backend_type TEXT NOT NULL DEFAULT 'mihomo',
+                front_node_key TEXT NOT NULL DEFAULT '',
+                exit_node_key TEXT NOT NULL DEFAULT '',
+                listen TEXT NOT NULL DEFAULT '127.0.0.1',
+                port INTEGER NOT NULL DEFAULT 0,
+                inbound_type TEXT NOT NULL DEFAULT 'http',
+                status TEXT NOT NULL DEFAULT 'stopped',
+                pid INTEGER NOT NULL DEFAULT -1,
+                config_file TEXT NOT NULL DEFAULT '',
+                log_file TEXT NOT NULL DEFAULT '',
+                egress_ip TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chain_egress_instances_pool
+                ON chain_egress_instances(pool_id, updated_at DESC);
+            """
+        )
+
+        sticky_columns = [
+            row["name"] for row in conn.execute("PRAGMA table_info(sticky_leases)").fetchall()
+        ]
+        sticky_column_set = set(sticky_columns)
+        if sticky_columns and "session_id" not in sticky_column_set and "account" in sticky_column_set:
+            conn.execute("ALTER TABLE sticky_leases RENAME TO sticky_leases_legacy")
+            conn.execute(
+                """
+                CREATE TABLE sticky_leases (
+                    session_id TEXT NOT NULL,
+                    pool_id INTEGER NOT NULL,
+                    instance_id TEXT NOT NULL DEFAULT '',
+                    exit_node_key TEXT NOT NULL,
+                    egress_ip TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    last_accessed TEXT NOT NULL,
+                    PRIMARY KEY (session_id, pool_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO sticky_leases (
+                    session_id, pool_id, instance_id, exit_node_key, egress_ip, expires_at, last_accessed
+                )
+                SELECT account, pool_id, '', exit_node_key, egress_ip, expires_at, last_accessed
+                FROM sticky_leases_legacy
+                """
+            )
+            conn.execute("DROP TABLE sticky_leases_legacy")
+        elif sticky_columns and "instance_id" not in sticky_column_set:
+            conn.execute("ALTER TABLE sticky_leases ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''")
 
     def upsert_proxy(self, node: ProxyNode, source: str = "") -> str:
         now = _utc_now()
@@ -1015,20 +1115,49 @@ class SQLiteProxyStorage:
         filters: dict[str, Any] | None = None,
         listen: str = "0.0.0.0",
         inbound_type: str = "http",
+        chain_enabled: bool = False,
+        sticky_ttl_sec: int = 3600,
+        session_missing_action: str = "RANDOM",
+        session_header_names: list[str] | None = None,
+        session_query_param_names: list[str] | None = None,
+        gateway_path_prefix: str = "",
     ) -> dict[str, Any]:
         now = _utc_now()
         filters_json = json.dumps(_normalize_pool_filters(filters), ensure_ascii=False, separators=(",", ":"))
         safe_name = (str(name or "").strip() or "proxy-pool")[:120]
         safe_listen = str(listen or "0.0.0.0").strip() or "0.0.0.0"
         safe_type = str(inbound_type or "http").strip().lower() or "http"
+        header_names_json = json.dumps(_normalize_string_list(session_header_names), ensure_ascii=False, separators=(",", ":"))
+        query_names_json = json.dumps(_normalize_string_list(session_query_param_names), ensure_ascii=False, separators=(",", ":"))
+        sticky_ttl = max(1, int(sticky_ttl_sec))
+        missing_action = _normalize_session_missing_action(session_missing_action)
+        safe_gateway_path_prefix = str(gateway_path_prefix or "").strip()[:200]
         with self._write_lock:
             with self._connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO proxy_pools (name, filters_json, listen, inbound_type, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, 'stopped', ?, ?)
+                    INSERT INTO proxy_pools (
+                        name, filters_json, listen, inbound_type,
+                        chain_enabled, sticky_ttl_sec, session_missing_action,
+                        session_header_names_json, session_query_param_names_json, gateway_path_prefix,
+                        status, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?)
                     """,
-                    (safe_name, filters_json, safe_listen, safe_type, now, now),
+                    (
+                        safe_name,
+                        filters_json,
+                        safe_listen,
+                        safe_type,
+                        1 if chain_enabled else 0,
+                        sticky_ttl,
+                        missing_action,
+                        header_names_json,
+                        query_names_json,
+                        safe_gateway_path_prefix,
+                        now,
+                        now,
+                    ),
                 )
                 pool_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                 row = conn.execute("SELECT * FROM proxy_pools WHERE id = ?", (pool_id,)).fetchone()
@@ -1047,6 +1176,12 @@ class SQLiteProxyStorage:
         published_subscription_id: int | None = None,
         resin_subscription_id: str | None = None,
         resin_platform_id: str | None = None,
+        chain_enabled: bool | None = None,
+        sticky_ttl_sec: int | None = None,
+        session_missing_action: str | None = None,
+        session_header_names: list[str] | None = None,
+        session_query_param_names: list[str] | None = None,
+        gateway_path_prefix: str | None = None,
     ) -> dict[str, Any]:
         updates: list[str] = []
         params: list[Any] = []
@@ -1071,6 +1206,24 @@ class SQLiteProxyStorage:
         if resin_platform_id is not None:
             updates.append("resin_platform_id = ?")
             params.append(str(resin_platform_id))
+        if chain_enabled is not None:
+            updates.append("chain_enabled = ?")
+            params.append(1 if chain_enabled else 0)
+        if sticky_ttl_sec is not None:
+            updates.append("sticky_ttl_sec = ?")
+            params.append(max(1, int(sticky_ttl_sec)))
+        if session_missing_action is not None:
+            updates.append("session_missing_action = ?")
+            params.append(_normalize_session_missing_action(session_missing_action))
+        if session_header_names is not None:
+            updates.append("session_header_names_json = ?")
+            params.append(json.dumps(_normalize_string_list(session_header_names), ensure_ascii=False, separators=(",", ":")))
+        if session_query_param_names is not None:
+            updates.append("session_query_param_names_json = ?")
+            params.append(json.dumps(_normalize_string_list(session_query_param_names), ensure_ascii=False, separators=(",", ":")))
+        if gateway_path_prefix is not None:
+            updates.append("gateway_path_prefix = ?")
+            params.append(str(gateway_path_prefix or "").strip()[:200])
         if not updates:
             return self.get_proxy_pool(pool_id) or {}
         updates.append("updated_at = ?")
@@ -1135,7 +1288,15 @@ class SQLiteProxyStorage:
     def _pool_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
         data["filters"] = _normalize_pool_filters(_loads_json_object(data.get("filters_json")))
+        data["chain_enabled"] = bool(data.get("chain_enabled"))
+        data["sticky_ttl_sec"] = int(data.get("sticky_ttl_sec") or 3600)
+        data["session_missing_action"] = _normalize_session_missing_action(data.get("session_missing_action"))
+        data["session_header_names"] = _loads_json_array(data.get("session_header_names_json"))
+        data["session_query_param_names"] = _loads_json_array(data.get("session_query_param_names_json"))
+        data["gateway_path_prefix"] = str(data.get("gateway_path_prefix") or "")
         data.pop("filters_json", None)
+        data.pop("session_header_names_json", None)
+        data.pop("session_query_param_names_json", None)
         data["match_count"] = len(
             self.list_proxies_filtered(limit=20000, **_pool_filters_to_list_kwargs(data.get("filters") or {}))
         )
@@ -1536,8 +1697,15 @@ class SQLiteProxyStorage:
         """Convert a proxy_pools_v2 row to dict."""
         data = dict(row)
         data["enabled"] = bool(data.get("enabled"))
-        data["regex_filters"] = json.loads(data.get("regex_filters_json", "[]"))
+        data["regex_filters"] = _loads_json_array(data.get("regex_filters_json"))
         data.pop("regex_filters_json", None)
+        return data
+
+    def _chain_egress_instance_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["pool_id"] = int(data.get("pool_id") or 0)
+        data["port"] = int(data.get("port") or 0)
+        data["pid"] = int(data.get("pid") or -1)
         return data
 
     # ------------------------------------------------------------------
@@ -1646,10 +1814,125 @@ class SQLiteProxyStorage:
     # Sticky Lease Methods
     # ------------------------------------------------------------------
 
+    def upsert_chain_egress_instance(
+        self,
+        instance_id: str,
+        pool_id: int,
+        backend_type: str,
+        front_node_key: str,
+        exit_node_key: str,
+        listen: str,
+        port: int,
+        inbound_type: str,
+        status: str,
+        pid: int,
+        config_file: str,
+        log_file: str,
+        egress_ip: str,
+        last_error: str = "",
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        safe_id = str(instance_id or "").strip() or "chain-instance"
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO chain_egress_instances (
+                        instance_id, pool_id, backend_type, front_node_key, exit_node_key,
+                        listen, port, inbound_type, status, pid, config_file, log_file,
+                        egress_ip, last_error, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(instance_id) DO UPDATE SET
+                        pool_id = excluded.pool_id,
+                        backend_type = excluded.backend_type,
+                        front_node_key = excluded.front_node_key,
+                        exit_node_key = excluded.exit_node_key,
+                        listen = excluded.listen,
+                        port = excluded.port,
+                        inbound_type = excluded.inbound_type,
+                        status = excluded.status,
+                        pid = excluded.pid,
+                        config_file = excluded.config_file,
+                        log_file = excluded.log_file,
+                        egress_ip = excluded.egress_ip,
+                        last_error = excluded.last_error,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        safe_id,
+                        int(pool_id),
+                        str(backend_type or "mihomo").strip()[:32] or "mihomo",
+                        str(front_node_key or "").strip()[:300],
+                        str(exit_node_key or "").strip()[:300],
+                        str(listen or "127.0.0.1").strip()[:80] or "127.0.0.1",
+                        max(0, int(port)),
+                        str(inbound_type or "http").strip().lower()[:32] or "http",
+                        str(status or "stopped").strip()[:32] or "stopped",
+                        int(pid),
+                        str(config_file or "")[:500],
+                        str(log_file or "")[:500],
+                        str(egress_ip or "").strip()[:120],
+                        str(last_error or "")[:1000],
+                        now,
+                        now,
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM chain_egress_instances WHERE instance_id = ?",
+                    (safe_id,),
+                ).fetchone()
+                conn.commit()
+        if row is None:
+            raise RuntimeError("failed to upsert chain egress instance")
+        return self._chain_egress_instance_row_to_dict(row)
+
+    def get_chain_egress_instance(self, instance_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM chain_egress_instances WHERE instance_id = ? LIMIT 1",
+                (str(instance_id or "").strip(),),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._chain_egress_instance_row_to_dict(row)
+
+    def list_chain_egress_instances(self, pool_id: int | None = None) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            if pool_id is None:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM chain_egress_instances
+                    ORDER BY updated_at DESC, instance_id ASC
+                    """
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM chain_egress_instances
+                    WHERE pool_id = ?
+                    ORDER BY updated_at DESC, instance_id ASC
+                    """,
+                    (int(pool_id),),
+                ).fetchall()
+        return [self._chain_egress_instance_row_to_dict(row) for row in rows]
+
+    def delete_chain_egress_instance(self, instance_id: str) -> int:
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM chain_egress_instances WHERE instance_id = ?",
+                    (str(instance_id or "").strip(),),
+                )
+                conn.commit()
+        return int(cursor.rowcount or 0)
+
     def upsert_sticky_lease(
         self,
-        account: str,
+        session_id: str,
         pool_id: int,
+        instance_id: str,
         exit_node_key: str,
         egress_ip: str,
         expires_at: str,
@@ -1660,25 +1943,36 @@ class SQLiteProxyStorage:
             with self._connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO sticky_leases (account, pool_id, exit_node_key, egress_ip, expires_at, last_accessed)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(account, pool_id) DO UPDATE SET
+                    INSERT INTO sticky_leases (
+                        session_id, pool_id, instance_id, exit_node_key, egress_ip, expires_at, last_accessed
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id, pool_id) DO UPDATE SET
+                        instance_id = excluded.instance_id,
                         exit_node_key = excluded.exit_node_key,
                         egress_ip = excluded.egress_ip,
                         expires_at = excluded.expires_at,
                         last_accessed = excluded.last_accessed
                     """,
-                    (account, pool_id, exit_node_key, egress_ip, expires_at, last_accessed),
+                    (
+                        str(session_id or "").strip(),
+                        int(pool_id),
+                        str(instance_id or "").strip()[:120],
+                        str(exit_node_key or "").strip()[:300],
+                        str(egress_ip or "").strip()[:120],
+                        str(expires_at),
+                        str(last_accessed),
+                    ),
                 )
                 conn.commit()
-        return self.get_sticky_lease(account, pool_id) or {}
+        return self.get_sticky_lease(session_id, pool_id) or {}
 
-    def get_sticky_lease(self, account: str, pool_id: int) -> dict[str, Any] | None:
+    def get_sticky_lease(self, session_id: str, pool_id: int) -> dict[str, Any] | None:
         """Get a sticky lease."""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM sticky_leases WHERE account = ? AND pool_id = ?",
-                (account, pool_id),
+                "SELECT * FROM sticky_leases WHERE session_id = ? AND pool_id = ?",
+                (str(session_id or "").strip(), int(pool_id)),
             ).fetchone()
             return dict(row) if row else None
 
@@ -1687,25 +1981,25 @@ class SQLiteProxyStorage:
         with self._connect() as conn:
             if pool_id is not None:
                 rows = conn.execute(
-                    "SELECT * FROM sticky_leases WHERE pool_id = ? ORDER BY account",
-                    (pool_id,),
+                    "SELECT * FROM sticky_leases WHERE pool_id = ? ORDER BY session_id",
+                    (int(pool_id),),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM sticky_leases ORDER BY pool_id, account"
+                    "SELECT * FROM sticky_leases ORDER BY pool_id, session_id"
                 ).fetchall()
             return [dict(row) for row in rows]
 
-    def delete_sticky_lease(self, account: str, pool_id: int) -> int:
+    def delete_sticky_lease(self, session_id: str, pool_id: int) -> int:
         """Delete a sticky lease."""
         with self._write_lock:
             with self._connect() as conn:
                 cursor = conn.execute(
-                    "DELETE FROM sticky_leases WHERE account = ? AND pool_id = ?",
-                    (account, pool_id),
+                    "DELETE FROM sticky_leases WHERE session_id = ? AND pool_id = ?",
+                    (str(session_id or "").strip(), int(pool_id)),
                 )
                 conn.commit()
-                return cursor.rowcount
+                return int(cursor.rowcount or 0)
 
     def cleanup_expired_leases(self) -> int:
         """Delete expired sticky leases."""
@@ -1717,7 +2011,7 @@ class SQLiteProxyStorage:
                     (now,),
                 )
                 conn.commit()
-                return cursor.rowcount
+                return int(cursor.rowcount or 0)
 
 
 def _utc_now() -> str:
@@ -1730,6 +2024,16 @@ def _loads_json_object(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _loads_json_array(value: Any) -> list[str]:
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return _normalize_string_list(parsed)
 
 
 def _normalize_pool_filters(filters: dict[str, Any] | None) -> dict[str, str]:
@@ -1745,6 +2049,32 @@ def _normalize_pool_filters(filters: dict[str, Any] | None) -> dict[str, str]:
             except (ValueError, TypeError):
                 pass
     return out
+
+
+def _normalize_string_list(values: Any, max_items: int = 16, max_length: int = 120) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        text = text[:max_length]
+        if text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _normalize_session_missing_action(value: Any) -> str:
+    text = str(value or "RANDOM").strip().upper() or "RANDOM"
+    if text not in {"RANDOM", "REJECT"}:
+        return "RANDOM"
+    return text
 
 
 def _pool_filters_to_list_kwargs(filters: dict[str, Any]) -> dict[str, Any]:

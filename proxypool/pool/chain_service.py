@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime
 from typing import Any
 
 from proxypool.pool.chain_builder import ChainBuilder
 from proxypool.pool.health_manager import HealthConfig, HealthManager
 from proxypool.pool.node_pool import NodeEntry, NodePool
-from proxypool.pool.sticky_router import StickyRouter
+from proxypool.pool.sticky_router import Lease, StickyRouter
 from proxypool.storage.sqlite import SQLiteProxyStorage
 from proxypool.tester.singbox import SingboxProber
 
@@ -60,6 +61,7 @@ class ProxyChainService:
                 return
             self._load_pool_configs()
             self._refresh_pools_locked()
+            self._load_sticky_leases()
             self._initialized = True
             logger.info("ProxyChainService initialized")
 
@@ -85,6 +87,28 @@ class ProxyChainService:
         """Rebuild pools and reapply persisted health state."""
         self._rebuild_pools()
         self._load_health_state()
+
+    def _load_sticky_leases(self) -> None:
+        self.sticky_router._leases.clear()
+        self.sticky_router._ip_load.clear()
+        for item in self.storage.list_sticky_leases():
+            expires_at = _parse_datetime(item.get("expires_at"))
+            last_accessed = _parse_datetime(item.get("last_accessed"))
+            if expires_at is None or last_accessed is None:
+                continue
+            lease = Lease(
+                session_id=str(item.get("session_id") or ""),
+                pool_id=int(item.get("pool_id") or 0),
+                instance_id=str(item.get("instance_id") or ""),
+                exit_node_key=str(item.get("exit_node_key") or ""),
+                egress_ip=str(item.get("egress_ip") or ""),
+                expires_at=expires_at,
+                last_accessed=last_accessed,
+            )
+            key = (lease.session_id, lease.pool_id)
+            self.sticky_router._leases[key] = lease
+            if lease.egress_ip:
+                self.sticky_router._ip_load[lease.egress_ip] = self.sticky_router._ip_load.get(lease.egress_ip, 0) + 1
 
     def _rebuild_pools(self) -> None:
         """Rebuild both pools from all proxies in storage."""
@@ -210,16 +234,32 @@ class ProxyChainService:
 
     def route_request(
         self,
-        account: str = "",
+        session_id: str = "",
         pool_id: int = 0,
         target_domain: str = "",
     ) -> dict[str, Any] | None:
         """Route a request and return the chain configuration."""
         self.refresh_pools()
-        result = self.sticky_router.route(account, pool_id, target_domain)
+        result = self.sticky_router.route(session_id, pool_id, target_domain)
 
         if result is None:
             return None
+
+        if session_id and result.lease_created:
+            leases = self.sticky_router.get_leases(pool_id)
+            for lease in leases:
+                if lease["session_id"] != session_id:
+                    continue
+                self.storage.upsert_sticky_lease(
+                    session_id=lease["session_id"],
+                    pool_id=int(lease["pool_id"]),
+                    instance_id=str(lease.get("instance_id") or ""),
+                    exit_node_key=str(lease["exit_node_key"]),
+                    egress_ip=str(lease["egress_ip"]),
+                    expires_at=str(lease["expires_at"]),
+                    last_accessed=str(lease["last_accessed"]),
+                )
+                break
 
         return {
             "front_node": self._node_summary(result.front_node),
@@ -233,7 +273,9 @@ class ProxyChainService:
 
     def cleanup_leases(self) -> int:
         """Cleanup expired leases."""
-        return self.sticky_router.cleanup_expired_leases()
+        removed = self.sticky_router.cleanup_expired_leases()
+        self.storage.cleanup_expired_leases()
+        return removed
 
     def get_health_status(self) -> dict[str, Any]:
         """Get health manager status."""
@@ -250,3 +292,13 @@ class ProxyChainService:
 def health_manager_running(manager: HealthManager) -> bool:
     """Check if health manager is running."""
     return manager._running
+
+
+def _parse_datetime(value: Any) -> Any:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None

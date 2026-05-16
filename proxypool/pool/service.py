@@ -45,6 +45,18 @@ class ProxyPoolService:
     def update_pool(self, pool_id: int, **kwargs: Any) -> dict[str, Any]:
         return self.storage.update_proxy_pool(pool_id, **kwargs)
 
+    def get_pool_chain_config(self, pool_id: int) -> dict[str, Any] | None:
+        pool = self.storage.get_proxy_pool(pool_id)
+        if pool is None:
+            return None
+        return self._enrich_pool(pool)
+
+    def update_pool_chain_config(self, pool_id: int, **kwargs: Any) -> dict[str, Any]:
+        pool = self.storage.get_proxy_pool(pool_id)
+        if pool is None:
+            raise ValueError("proxy pool not found")
+        return self._enrich_pool(self.storage.update_proxy_pool(pool_id, **kwargs))
+
     def get_pool(self, pool_id: int) -> dict[str, Any] | None:
         pool = self.storage.get_proxy_pool(pool_id)
         if pool is None:
