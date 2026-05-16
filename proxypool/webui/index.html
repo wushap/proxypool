@@ -1027,7 +1027,7 @@
                     <table class="data-table data-table-compact">
                       <thead>
                         <tr>
-                          <th>账号</th>
+                          <th>会话ID</th>
                           <th>池ID</th>
                           <th>出口节点</th>
                           <th>出口IP</th>
@@ -1036,8 +1036,8 @@
                         </tr>
                       </thead>
                       <tbody>
-                        <tr v-for="lease in chainLeases" :key="lease.account + '-' + lease.pool_id">
-                          <td class="mono text-xs">{{ lease.account }}</td>
+                        <tr v-for="lease in chainLeases" :key="lease.session_id + '-' + lease.pool_id">
+                          <td class="mono text-xs">{{ lease.session_id }}</td>
                           <td class="text-xs">{{ lease.pool_id }}</td>
                           <td class="mono text-xs truncate" style="max-width: 150px;">{{ lease.exit_node_key }}</td>
                           <td class="mono text-xs">{{ lease.egress_ip }}</td>
@@ -1055,8 +1055,8 @@
                   <div class="card-body">
                     <div class="settings-row">
                       <div class="form-group" style="flex: 1;">
-                        <label class="form-label">账号</label>
-                        <input v-model="chainRouteTest.account" type="text" placeholder="留空则随机路由" class="input" />
+                        <label class="form-label">会话ID</label>
+                        <input v-model="chainRouteTest.session_id" type="text" placeholder="留空则随机路由" class="input" />
                       </div>
                       <div class="form-group" style="flex: 1;">
                         <label class="form-label">池ID</label>

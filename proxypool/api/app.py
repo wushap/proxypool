@@ -30,6 +30,7 @@ from proxypool.api.schemas import (
     RunTestRequest,
     SetSingboxRoutesRequest,
     SingleProxyTestRequest,
+    StickyLeaseInheritRequest,
     SubscriptionCreateRequest,
     SubscriptionRefreshRequest,
     SubscriptionUpdateProxyRequest,
@@ -964,6 +965,84 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             inbound_type=body.inbound_type,
         )
         return {"item": created, "items": chain_instance_manager.list_instances(pool_id=pool_id)}
+
+    @app.post("/api/pools/{pool_id}/chain/instances/{instance_id}/start")
+    async def start_pool_chain_instance(pool_id: int, instance_id: str) -> dict:
+        item = pool_service.get_pool(pool_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="pool not found")
+        instance = chain_instance_manager.get_instance(instance_id)
+        if instance is None or int(instance.get("pool_id") or 0) != pool_id:
+            raise HTTPException(status_code=404, detail="chain instance not found")
+        try:
+            started = chain_instance_manager.start_instance(instance_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": started, "items": chain_instance_manager.list_instances(pool_id=pool_id)}
+
+    @app.post("/api/pools/{pool_id}/chain/instances/{instance_id}/stop")
+    async def stop_pool_chain_instance(pool_id: int, instance_id: str) -> dict:
+        item = pool_service.get_pool(pool_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="pool not found")
+        instance = chain_instance_manager.get_instance(instance_id)
+        if instance is None or int(instance.get("pool_id") or 0) != pool_id:
+            raise HTTPException(status_code=404, detail="chain instance not found")
+        stopped = chain_instance_manager.stop_instance(instance_id)
+        return {"item": stopped, "items": chain_instance_manager.list_instances(pool_id=pool_id)}
+
+    @app.post("/api/pools/{pool_id}/chain/instances/{instance_id}/rebuild")
+    async def rebuild_pool_chain_instance(
+        pool_id: int,
+        instance_id: str,
+        front_node_key: str | None = None,
+        exit_node_key: str | None = None,
+    ) -> dict:
+        item = pool_service.get_pool(pool_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="pool not found")
+        instance = chain_instance_manager.get_instance(instance_id)
+        if instance is None or int(instance.get("pool_id") or 0) != pool_id:
+            raise HTTPException(status_code=404, detail="chain instance not found")
+        try:
+            rebuilt = chain_instance_manager.rebuild_instance(
+                instance_id,
+                front_node_key=front_node_key,
+                exit_node_key=exit_node_key,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": rebuilt, "items": chain_instance_manager.list_instances(pool_id=pool_id)}
+
+    @app.get("/api/pools/{pool_id}/chain/leases")
+    async def list_pool_chain_leases(pool_id: int) -> dict:
+        try:
+            items = pool_service.list_pool_chain_leases(pool_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"items": items}
+
+    @app.delete("/api/pools/{pool_id}/chain/leases/{session_id}")
+    async def delete_pool_chain_lease(pool_id: int, session_id: str) -> dict:
+        try:
+            deleted = pool_service.delete_pool_chain_lease(pool_id, session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="sticky lease not found")
+        return {"deleted": True}
+
+    @app.post("/api/pools/{pool_id}/chain/leases/inherit")
+    async def inherit_pool_chain_lease(pool_id: int, body: StickyLeaseInheritRequest) -> dict:
+        try:
+            item = pool_service.inherit_pool_chain_lease(
+                pool_id,
+                from_session_id=body.from_session_id,
+                to_session_id=body.to_session_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"item": item}
 
     @app.delete("/api/pools/{pool_id}")
     async def delete_pool(pool_id: int) -> dict:

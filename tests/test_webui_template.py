@@ -120,6 +120,16 @@ def test_webui_should_render_published_subscription_management_page() -> None:
     assert "/api/published-subscriptions" in content
 
 
+def test_webui_chain_view_should_use_session_id_instead_of_account() -> None:
+    content = _read_webui()
+    assert "chainRouteTest.session_id" in content
+    assert "session_id" in content
+    assert "lease.session_id" in content
+    assert "chainRouteTest.account" not in content
+    assert "lease.account" not in content
+    assert "params.set('account'" not in content
+
+
 def test_webui_should_surface_backend_instances_default_listen_and_replacement() -> None:
     content = _read_webui()
     assert "backendDefaultListen" in content

@@ -57,6 +57,40 @@ class ProxyPoolService:
             raise ValueError("proxy pool not found")
         return self._enrich_pool(self.storage.update_proxy_pool(pool_id, **kwargs))
 
+    def list_pool_chain_leases(self, pool_id: int) -> list[dict[str, Any]]:
+        pool = self.storage.get_proxy_pool(pool_id)
+        if pool is None:
+            raise ValueError("proxy pool not found")
+        return self.storage.list_sticky_leases(pool_id=pool_id)
+
+    def delete_pool_chain_lease(self, pool_id: int, session_id: str) -> bool:
+        pool = self.storage.get_proxy_pool(pool_id)
+        if pool is None:
+            raise ValueError("proxy pool not found")
+        deleted = self.storage.delete_sticky_lease(session_id, pool_id)
+        return deleted > 0
+
+    def inherit_pool_chain_lease(self, pool_id: int, from_session_id: str, to_session_id: str) -> dict[str, Any]:
+        pool = self.storage.get_proxy_pool(pool_id)
+        if pool is None:
+            raise ValueError("proxy pool not found")
+        lease = self.storage.get_sticky_lease(from_session_id, pool_id)
+        if lease is None:
+            raise ValueError("source sticky lease not found")
+        self.storage.upsert_sticky_lease(
+            session_id=to_session_id,
+            pool_id=pool_id,
+            instance_id=str(lease.get("instance_id") or ""),
+            exit_node_key=str(lease["exit_node_key"]),
+            egress_ip=str(lease["egress_ip"]),
+            expires_at=str(lease["expires_at"]),
+            last_accessed=str(lease["last_accessed"]),
+        )
+        inherited = self.storage.get_sticky_lease(to_session_id, pool_id)
+        if inherited is None:
+            raise RuntimeError("failed to inherit sticky lease")
+        return inherited
+
     def get_pool(self, pool_id: int) -> dict[str, Any] | None:
         pool = self.storage.get_proxy_pool(pool_id)
         if pool is None:

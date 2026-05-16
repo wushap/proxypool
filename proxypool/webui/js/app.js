@@ -113,7 +113,7 @@ const app = createApp({
         exit_filters: '',
       },
       chainRouteTest: {
-        account: '',
+        session_id: '',
         pool_id: 0,
         target_domain: '',
       },
@@ -1040,7 +1040,7 @@ const app = createApp({
     async testChainRoute() {
       await this.runWithButtonState("testChainRoute", async () => {
         const params = new URLSearchParams();
-        if (this.chainRouteTest.account) params.set('account', this.chainRouteTest.account);
+        if (this.chainRouteTest.session_id) params.set('session_id', this.chainRouteTest.session_id);
         if (this.chainRouteTest.pool_id) params.set('pool_id', this.chainRouteTest.pool_id);
         if (this.chainRouteTest.target_domain) params.set('target_domain', this.chainRouteTest.target_domain);
         const resp = await fetch(`/api/chain/route?${params}`);

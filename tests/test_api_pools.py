@@ -234,3 +234,38 @@ async def test_pool_chain_instance_lifecycle(tmp_path: Path) -> None:
         resp = await client.get(f"/api/pools/{pool_id}/chain/instances")
         assert resp.status_code == 200
         assert resp.json()["items"][0]["instance_id"] == "chain-a"
+
+
+@pytest.mark.anyio
+async def test_pool_chain_lease_endpoints_and_chain_route_session_id(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
+    storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
+    storage.upsert_proxy(ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"))
+    storage.upsert_proxy(ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080"))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post("/api/pools", json={"name": "pool-a"})
+        pool_id = create_resp.json()["item"]["id"]
+
+        route_resp = await client.get(f"/api/chain/route?session_id=sess-1&pool_id={pool_id}")
+        assert route_resp.status_code == 200
+        assert route_resp.json()["lease_created"] is True
+
+        leases_resp = await client.get(f"/api/pools/{pool_id}/chain/leases")
+        assert leases_resp.status_code == 200
+        assert leases_resp.json()["items"][0]["session_id"] == "sess-1"
+
+        inherit_resp = await client.post(
+            f"/api/pools/{pool_id}/chain/leases/inherit",
+            json={"from_session_id": "sess-1", "to_session_id": "sess-2"},
+        )
+        assert inherit_resp.status_code == 200
+        assert inherit_resp.json()["item"]["session_id"] == "sess-2"
+
+        delete_resp = await client.delete(f"/api/pools/{pool_id}/chain/leases/sess-1")
+        assert delete_resp.status_code == 200
+        assert delete_resp.json()["deleted"] is True

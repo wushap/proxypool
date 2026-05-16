@@ -149,3 +149,8 @@ class ChainInstanceCreateRequest(BaseModel):
     listen: str = "127.0.0.1"
     port: int = Field(ge=1, le=65535)
     inbound_type: str = "http"
+
+
+class StickyLeaseInheritRequest(BaseModel):
+    from_session_id: str
+    to_session_id: str

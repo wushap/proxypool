@@ -45,6 +45,9 @@ class ChainInstanceManager:
     def list_instances(self, pool_id: int | None = None) -> list[dict[str, Any]]:
         return self.storage.list_chain_egress_instances(pool_id=pool_id)
 
+    def get_instance(self, instance_id: str) -> dict[str, Any] | None:
+        return self.storage.get_chain_egress_instance(instance_id)
+
     def start_instance(self, instance_id: str) -> dict[str, Any]:
         item = self.storage.get_chain_egress_instance(instance_id)
         if item is None:
@@ -105,3 +108,41 @@ class ChainInstanceManager:
             egress_ip=str(item.get("egress_ip") or ""),
             last_error="",
         )
+
+    def rebuild_instance(
+        self,
+        instance_id: str,
+        front_node_key: str | None = None,
+        exit_node_key: str | None = None,
+    ) -> dict[str, Any]:
+        item = self.storage.get_chain_egress_instance(instance_id)
+        if item is None:
+            raise ValueError("chain instance not found")
+        next_front = str(front_node_key or item["front_node_key"])
+        next_exit = str(exit_node_key or item["exit_node_key"])
+        if self.storage.get_proxy_by_key(next_front) is None:
+            raise ValueError("front proxy not found")
+        if self.storage.get_proxy_by_key(next_exit) is None:
+            raise ValueError("exit proxy not found")
+        was_running = str(item.get("status") or "") == "running"
+        if was_running:
+            self.backend.stop(instance_id)
+        updated = self.storage.upsert_chain_egress_instance(
+            instance_id=str(item["instance_id"]),
+            pool_id=int(item["pool_id"]),
+            backend_type=str(item.get("backend_type") or self.backend.backend_type),
+            front_node_key=next_front,
+            exit_node_key=next_exit,
+            listen=str(item["listen"]),
+            port=int(item["port"]),
+            inbound_type=str(item["inbound_type"]),
+            status="stopped",
+            pid=-1,
+            config_file=str(item.get("config_file") or ""),
+            log_file=str(item.get("log_file") or ""),
+            egress_ip=str(item.get("egress_ip") or ""),
+            last_error="",
+        )
+        if not was_running:
+            return updated
+        return self.start_instance(instance_id)
