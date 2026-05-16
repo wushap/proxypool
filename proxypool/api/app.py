@@ -24,6 +24,7 @@ from proxypool.api.schemas import (
     ImportUrlsRequest,
     ProxyPoolChainConfigRequest,
     ProxyPoolCreateRequest,
+    PoolSessionRuleUpsertRequest,
     ProxyPoolUpdateRequest,
     PublishedSubscriptionCreateRequest,
     PublishedSubscriptionUpdateRequest,
@@ -38,6 +39,7 @@ from proxypool.api.schemas import (
 )
 from proxypool.api.security import is_request_authorized
 from proxypool.backend.chain_instance_manager import ChainInstanceManager
+from proxypool.gateway.http_gateway import GatewayError, UnifiedHttpGateway
 from proxypool.backend.mihomo_manager import MihomoEgressBackend
 from proxypool.backend.singbox_manager import SingBoxBackendManager, SingBoxRoute
 from proxypool.backend.resin_manager import ResinBackendManager
@@ -107,6 +109,12 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         runtime_dir=cfg.mihomo_runtime_dir,
     )
     chain_instance_manager = ChainInstanceManager(storage=storage, backend=chain_backend)
+    unified_gateway = UnifiedHttpGateway(
+        storage=storage,
+        pool_service=pool_service,
+        chain_service=chain_service,
+        chain_instance_manager=chain_instance_manager,
+    )
 
     app = FastAPI(title="Proxy Pool", version="0.1.0")
     app.state.settings = cfg
@@ -122,6 +130,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.pool_service = pool_service
     app.state.chain_service = chain_service
     app.state.chain_instance_manager = chain_instance_manager
+    app.state.unified_gateway = unified_gateway
     app.state.backend_health_task = None
 
     async def _backend_health_loop() -> None:
@@ -943,6 +952,47 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"item": item}
 
+    @app.put("/api/pools/{pool_id}/chain/session-rules/{url_prefix:path}")
+    async def upsert_pool_chain_session_rule(pool_id: int, url_prefix: str, body: PoolSessionRuleUpsertRequest) -> dict:
+        try:
+            item = pool_service.upsert_pool_session_rule(pool_id, url_prefix=url_prefix, headers=body.headers)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"item": item}
+
+    @app.get("/api/pools/{pool_id}/chain/session-rules")
+    async def list_pool_chain_session_rules(pool_id: int) -> dict:
+        try:
+            items = pool_service.list_pool_session_rules(pool_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"items": items}
+
+    @app.delete("/api/pools/{pool_id}/chain/session-rules/{url_prefix:path}")
+    async def delete_pool_chain_session_rule(pool_id: int, url_prefix: str) -> dict:
+        try:
+            deleted = pool_service.delete_pool_session_rule(pool_id, url_prefix=url_prefix)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="session rule not found")
+        return {"deleted": True}
+
+    @app.get("/api/pools/{pool_id}/chain/route-test")
+    async def pool_chain_route_test(
+        pool_id: int,
+        session_id: str = "",
+        target_domain: str = "",
+    ) -> dict:
+        item = pool_service.get_pool(pool_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="pool not found")
+        chain_service.initialize()
+        result = chain_service.route_request(session_id=session_id, pool_id=pool_id, target_domain=target_domain)
+        if result is None:
+            raise HTTPException(status_code=503, detail="No available nodes for routing")
+        return result
+
     @app.get("/api/pools/{pool_id}/chain/instances")
     async def list_pool_chain_instances(pool_id: int) -> dict:
         item = pool_service.get_pool(pool_id)
@@ -1306,6 +1356,45 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             nodes = [n for n in nodes if n["healthy"]]
 
         return {"nodes": nodes, "total": len(nodes)}
+
+    @app.api_route(
+        "/proxy/{pool_name}/{scheme}/{target_host}/{target_path:path}",
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+    )
+    async def unified_http_gateway_route(
+        pool_name: str,
+        scheme: str,
+        target_host: str,
+        target_path: str,
+        request: Request,
+    ) -> Response:
+        pool = pool_service.get_pool_by_name(pool_name)
+        if pool is None:
+            raise HTTPException(status_code=404, detail="pool not found")
+        expected_prefix = str(pool.get("gateway_path_prefix") or "").strip()
+        if expected_prefix != f"/proxy/{pool_name}":
+            raise HTTPException(status_code=404, detail="gateway path not enabled for pool")
+        try:
+            response = await unified_gateway.handle(
+                method=request.method,
+                pool_name=pool_name,
+                scheme=scheme,
+                target_host=target_host,
+                target_path="/" + str(target_path or "").lstrip("/"),
+                headers=request.headers,
+                query_params=request.query_params,
+                body=await request.body(),
+            )
+        except GatewayError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        skip_headers = {"content-encoding", "transfer-encoding", "connection"}
+        response_headers = {k: v for k, v in response.headers.items() if k.lower() not in skip_headers}
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            headers=response_headers,
+            media_type=response.headers.get("content-type"),
+        )
 
     return app
 

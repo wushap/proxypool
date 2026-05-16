@@ -195,6 +195,13 @@ class SQLiteProxyStorage:
             last_accessed TEXT NOT NULL,
             PRIMARY KEY (session_id, pool_id)
         );
+        CREATE TABLE IF NOT EXISTS pool_session_header_rules (
+            pool_id INTEGER NOT NULL,
+            url_prefix TEXT NOT NULL,
+            headers_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (pool_id, url_prefix)
+        );
         """
         with self._connect() as conn:
             conn.executescript(sql)
@@ -276,6 +283,17 @@ class SQLiteProxyStorage:
             );
             CREATE INDEX IF NOT EXISTS idx_chain_egress_instances_pool
                 ON chain_egress_instances(pool_id, updated_at DESC);
+            """
+        )
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS pool_session_header_rules (
+                pool_id INTEGER NOT NULL,
+                url_prefix TEXT NOT NULL,
+                headers_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (pool_id, url_prefix)
+            );
             """
         )
 
@@ -1708,6 +1726,14 @@ class SQLiteProxyStorage:
         data["pid"] = int(data.get("pid") or -1)
         return data
 
+    def _pool_session_rule_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["pool_id"] = int(data.get("pool_id") or 0)
+        data["url_prefix"] = str(data.get("url_prefix") or "")
+        data["headers"] = _loads_json_array(data.get("headers_json"))
+        data.pop("headers_json", None)
+        return data
+
     # ------------------------------------------------------------------
     # Node Health Methods
     # ------------------------------------------------------------------
@@ -1924,6 +1950,72 @@ class SQLiteProxyStorage:
                 cursor = conn.execute(
                     "DELETE FROM chain_egress_instances WHERE instance_id = ?",
                     (str(instance_id or "").strip(),),
+                )
+                conn.commit()
+        return int(cursor.rowcount or 0)
+
+    def upsert_pool_session_rule(
+        self,
+        pool_id: int,
+        url_prefix: str,
+        headers: list[str] | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        safe_prefix = str(url_prefix or "").strip().strip("/")[:500]
+        if not safe_prefix:
+            raise ValueError("url_prefix is required")
+        headers_json = json.dumps(_normalize_string_list(headers), ensure_ascii=False, separators=(",", ":"))
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO pool_session_header_rules (
+                        pool_id, url_prefix, headers_json, updated_at
+                    )
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(pool_id, url_prefix) DO UPDATE SET
+                        headers_json = excluded.headers_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (int(pool_id), safe_prefix, headers_json, now),
+                )
+                row = conn.execute(
+                    """
+                    SELECT *
+                    FROM pool_session_header_rules
+                    WHERE pool_id = ? AND url_prefix = ?
+                    LIMIT 1
+                    """,
+                    (int(pool_id), safe_prefix),
+                ).fetchone()
+                conn.commit()
+        if row is None:
+            raise RuntimeError("failed to upsert pool session rule")
+        return self._pool_session_rule_row_to_dict(row)
+
+    def list_pool_session_rules(self, pool_id: int) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM pool_session_header_rules
+                WHERE pool_id = ?
+                ORDER BY LENGTH(url_prefix) DESC, url_prefix ASC
+                """,
+                (int(pool_id),),
+            ).fetchall()
+        return [self._pool_session_rule_row_to_dict(row) for row in rows]
+
+    def delete_pool_session_rule(self, pool_id: int, url_prefix: str) -> int:
+        safe_prefix = str(url_prefix or "").strip().strip("/")[:500]
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    """
+                    DELETE FROM pool_session_header_rules
+                    WHERE pool_id = ? AND url_prefix = ?
+                    """,
+                    (int(pool_id), safe_prefix),
                 )
                 conn.commit()
         return int(cursor.rowcount or 0)

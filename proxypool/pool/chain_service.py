@@ -245,7 +245,7 @@ class ProxyChainService:
         if result is None:
             return None
 
-        if session_id and result.lease_created:
+        if session_id:
             leases = self.sticky_router.get_leases(pool_id)
             for lease in leases:
                 if lease["session_id"] != session_id:
@@ -266,6 +266,36 @@ class ProxyChainService:
             "exit_node": self._node_summary(result.exit_node),
             "lease_created": result.lease_created,
         }
+
+    def bind_instance_to_session(self, session_id: str, pool_id: int, instance_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        lease = self.sticky_router._leases.get((session_id, pool_id))
+        if lease is None:
+            persisted = self.storage.get_sticky_lease(session_id, pool_id)
+            if persisted is None:
+                return None
+            self.storage.upsert_sticky_lease(
+                session_id=session_id,
+                pool_id=pool_id,
+                instance_id=instance_id,
+                exit_node_key=str(persisted.get("exit_node_key") or ""),
+                egress_ip=str(persisted.get("egress_ip") or ""),
+                expires_at=str(persisted.get("expires_at") or ""),
+                last_accessed=str(persisted.get("last_accessed") or ""),
+            )
+            return self.storage.get_sticky_lease(session_id, pool_id)
+
+        lease.instance_id = str(instance_id or "")
+        self.storage.upsert_sticky_lease(
+            session_id=session_id,
+            pool_id=pool_id,
+            instance_id=lease.instance_id,
+            exit_node_key=lease.exit_node_key,
+            egress_ip=lease.egress_ip,
+            expires_at=lease.expires_at.isoformat(),
+            last_accessed=lease.last_accessed.isoformat(),
+        )
+        return self.storage.get_sticky_lease(session_id, pool_id)
 
     def get_leases(self, pool_id: int | None = None) -> list[dict[str, Any]]:
         """Get sticky leases."""

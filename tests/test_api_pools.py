@@ -269,3 +269,109 @@ async def test_pool_chain_lease_endpoints_and_chain_route_session_id(tmp_path: P
         delete_resp = await client.delete(f"/api/pools/{pool_id}/chain/leases/sess-1")
         assert delete_resp.status_code == 200
         assert delete_resp.json()["deleted"] is True
+
+
+@pytest.mark.anyio
+async def test_pool_chain_session_rule_crud(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post("/api/pools", json={"name": "pool-a"})
+        pool_id = create_resp.json()["item"]["id"]
+
+        put_resp = await client.put(
+            f"/api/pools/{pool_id}/chain/session-rules/api.example.com/v1",
+            json={"headers": ["Authorization", "X-Biz-Session"]},
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.json()["item"]["url_prefix"] == "api.example.com/v1"
+
+        list_resp = await client.get(f"/api/pools/{pool_id}/chain/session-rules")
+        assert list_resp.status_code == 200
+        assert list_resp.json()["items"][0]["headers"] == ["Authorization", "X-Biz-Session"]
+
+        delete_resp = await client.delete(f"/api/pools/{pool_id}/chain/session-rules/api.example.com/v1")
+        assert delete_resp.status_code == 200
+        assert delete_resp.json()["deleted"] is True
+
+
+@pytest.mark.anyio
+async def test_pool_chain_route_test_endpoint_uses_session_id(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
+    storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
+    storage.upsert_proxy(ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"))
+    storage.upsert_proxy(ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080"))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post("/api/pools", json={"name": "pool-a"})
+        pool_id = create_resp.json()["item"]["id"]
+
+        resp = await client.get(f"/api/pools/{pool_id}/chain/route-test?session_id=sess-1&target_domain=api.example.com")
+        assert resp.status_code == 200
+        assert resp.json()["lease_created"] is True
+        assert resp.json()["front_node"]["key"] != ""
+
+
+@pytest.mark.anyio
+async def test_unified_gateway_rejects_missing_session_when_pool_requires_it(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
+    storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
+    storage.upsert_proxy(ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"))
+    storage.upsert_proxy(ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080"))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post("/api/pools", json={"name": "pool-a"})
+        pool_id = create_resp.json()["item"]["id"]
+        update_resp = await client.put(
+            f"/api/pools/{pool_id}/chain",
+            json={
+                "chain_enabled": True,
+                "session_missing_action": "REJECT",
+                "session_header_names": ["X-ProxyPool-Session"],
+                "gateway_path_prefix": "/proxy/pool-a",
+            },
+        )
+        assert update_resp.status_code == 200
+
+        resp = await client.get("/proxy/pool-a/https/api.example.com/v1/chat")
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "session_id is required"
+
+
+@pytest.mark.anyio
+async def test_unified_gateway_requires_configured_gateway_prefix(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
+    storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
+    storage.upsert_proxy(ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"))
+    storage.upsert_proxy(ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080"))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post("/api/pools", json={"name": "pool-a"})
+        pool_id = create_resp.json()["item"]["id"]
+        update_resp = await client.put(
+            f"/api/pools/{pool_id}/chain",
+            json={
+                "chain_enabled": True,
+                "session_header_names": ["X-ProxyPool-Session"],
+            },
+        )
+        assert update_resp.status_code == 200
+
+        resp = await client.get(
+            "/proxy/pool-a/https/api.example.com/v1/chat",
+            headers={"X-ProxyPool-Session": "sess-1"},
+        )
+        assert resp.status_code == 404
