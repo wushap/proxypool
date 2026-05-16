@@ -17,6 +17,8 @@ class AppSettings:
     singbox_binary: str
     test_url: str
     api_key: str
+    http_gateway_default_host: str
+    http_gateway_default_port: int
     backend_engine: str
     backend_health_check_sec: int
     backend_auto_restart_max: int
@@ -52,6 +54,8 @@ def load_settings() -> AppSettings:
     )
     test_url = os.getenv("PROXYPOOL_TEST_URL", "https://www.cloudflare.com/cdn-cgi/trace")
     api_key = os.getenv("PROXYPOOL_API_KEY", "")
+    http_gateway_default_host = os.getenv("PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    http_gateway_default_port = max(1, min(65535, int(os.getenv("PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT", "8899"))))
     backend_engine = os.getenv("PROXYPOOL_BACKEND_ENGINE", "singbox").strip().lower() or "singbox"
     backend_health_check_sec = max(5, int(os.getenv("PROXYPOOL_BACKEND_HEALTH_CHECK_SEC", "30")))
     backend_auto_restart_max = max(0, int(os.getenv("PROXYPOOL_BACKEND_AUTO_RESTART_MAX", "3")))
@@ -87,6 +91,8 @@ def load_settings() -> AppSettings:
         singbox_binary=singbox_binary,
         test_url=test_url,
         api_key=api_key,
+        http_gateway_default_host=http_gateway_default_host,
+        http_gateway_default_port=http_gateway_default_port,
         backend_engine=backend_engine,
         backend_health_check_sec=backend_health_check_sec,
         backend_auto_restart_max=backend_auto_restart_max,

@@ -142,6 +142,18 @@ class ProxyPoolChainConfigRequest(BaseModel):
     gateway_path_prefix: str = ""
 
 
+class HttpGatewayConfigRequest(BaseModel):
+    enabled: bool = False
+    listen_host: str = "127.0.0.1"
+    listen_port: int = Field(default=8899, ge=1, le=65535)
+    default_pool_id: int = Field(default=0, ge=0)
+    sticky_ttl_sec: int = Field(default=3600, ge=1, le=7 * 24 * 3600)
+    session_missing_action: str = "RANDOM"
+    http_session_header_names: list[str] = Field(default_factory=list)
+    http_session_query_names: list[str] = Field(default_factory=list)
+    connect_session_header_names: list[str] = Field(default_factory=list)
+
+
 class ChainInstanceCreateRequest(BaseModel):
     instance_id: str
     front_node_key: str
