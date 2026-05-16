@@ -222,6 +222,23 @@ async def test_http_gateway_status_api_exposes_runtime_state(tmp_path: Path) -> 
 
 
 @pytest.mark.anyio
+async def test_http_gateway_test_api_returns_result_shape(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/gateway/http-test",
+            json={"target_url": "https://example.com", "session_id": "sess-1"},
+        )
+
+    assert resp.status_code == 200
+    assert "ok" in resp.json()
+    assert "detail" in resp.json()
+
+
+@pytest.mark.anyio
 async def test_pool_chain_config_round_trip(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     app = create_app(settings)

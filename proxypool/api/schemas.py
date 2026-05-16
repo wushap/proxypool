@@ -154,6 +154,11 @@ class HttpGatewayConfigRequest(BaseModel):
     connect_session_header_names: list[str] = Field(default_factory=list)
 
 
+class HttpGatewayTestRequest(BaseModel):
+    target_url: str
+    session_id: str = ""
+
+
 class ChainInstanceCreateRequest(BaseModel):
     instance_id: str
     front_node_key: str

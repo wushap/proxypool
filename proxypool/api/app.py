@@ -23,6 +23,7 @@ from proxypool.api.schemas import (
     ImportSourcesRequest,
     ImportUrlsRequest,
     HttpGatewayConfigRequest,
+    HttpGatewayTestRequest,
     ProxyPoolChainConfigRequest,
     ProxyPoolCreateRequest,
     PoolSessionRuleUpsertRequest,
@@ -256,6 +257,26 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             "runtime": gateway_runtime.status(),
             "leases": pool_service.list_pool_chain_leases(config.default_pool_id) if config.default_pool_id else [],
             "instances": chain_instance_manager.list_instances(pool_id=config.default_pool_id or None),
+        }
+
+    @app.post("/api/gateway/http-test")
+    async def run_http_gateway_test(body: HttpGatewayTestRequest) -> dict:
+        target = str(body.target_url or "").strip()
+        if not target:
+            raise HTTPException(status_code=400, detail="target_url is required")
+        headers = {}
+        if body.session_id:
+            headers["X-ProxyPool-Session"] = body.session_id
+        try:
+            route = app.state.forward_gateway.resolve_route_for_http(target, headers=headers)
+        except Exception as exc:
+            return {"ok": False, "detail": str(exc)}
+        return {
+            "ok": True,
+            "detail": "route resolved",
+            "session_id": route["session_id"],
+            "instance_id": route["instance"]["instance_id"],
+            "target_host": route["target"].netloc,
         }
 
     @app.get("/api/backend/default-port-range")
