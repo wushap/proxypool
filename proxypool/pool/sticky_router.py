@@ -28,6 +28,8 @@ class RouteResult:
     front_node: NodeEntry
     exit_node: NodeEntry
     lease_created: bool = False
+    bound_instance_id: str = ""
+    instance_reused: bool = False
 
 
 class StickyRouter:
@@ -54,6 +56,7 @@ class StickyRouter:
         session_id: str,
         pool_id: int,
         target_domain: str = "",
+        live_instance_ids: set[str] | None = None,
     ) -> RouteResult | None:
         """Route a request, using sticky session if available."""
         now = datetime.now(timezone.utc)
@@ -69,7 +72,13 @@ class StickyRouter:
         if session_id:
             lease = self._get_lease(session_id, pool_id, now)
             if lease:
-                result = self._try_reuse_lease(lease, front_nodes, exit_nodes, now)
+                result = self._try_reuse_lease(
+                    lease,
+                    front_nodes,
+                    exit_nodes,
+                    now,
+                    live_instance_ids=live_instance_ids,
+                )
                 if result:
                     return result
         
@@ -113,6 +122,7 @@ class StickyRouter:
         front_nodes: list[NodeEntry],
         exit_nodes: list[NodeEntry],
         now: datetime,
+        live_instance_ids: set[str] | None = None,
     ) -> RouteResult | None:
         """Try to reuse existing lease."""
         # Find the exit node in healthy nodes
@@ -132,17 +142,29 @@ class StickyRouter:
         
         if exit_node is None:
             return None
-        
+
         # Select a front node
         front = self._p2c_select(front_nodes, "")
         if front is None:
             return None
-        
+
         # Update lease access time
         lease.last_accessed = now
         self._ip_load[lease.egress_ip] = self._ip_load.get(lease.egress_ip, 0)
-        
-        return RouteResult(front_node=front, exit_node=exit_node)
+        if lease.instance_id and lease.instance_id in set(live_instance_ids or set()):
+            return RouteResult(
+                front_node=front,
+                exit_node=exit_node,
+                lease_created=False,
+                bound_instance_id=lease.instance_id,
+                instance_reused=True,
+            )
+
+        return RouteResult(
+            front_node=front,
+            exit_node=exit_node,
+            bound_instance_id=lease.instance_id,
+        )
     
     def _find_same_ip_exit(self, egress_ip: str, exit_nodes: list[NodeEntry]) -> NodeEntry | None:
         """Find an exit node with the same egress IP."""
@@ -213,6 +235,16 @@ class StickyRouter:
                 self._ip_load[lease.egress_ip] = count - 1
             else:
                 self._ip_load.pop(lease.egress_ip, None)
+
+    def bind_instance(self, session_id: str, pool_id: int, instance_id: str) -> None:
+        lease = self._leases.get((session_id, pool_id))
+        if lease is not None:
+            lease.instance_id = str(instance_id or "")
+
+    def delete_lease(self, session_id: str, pool_id: int) -> bool:
+        exists = (session_id, pool_id) in self._leases
+        self._remove_lease(session_id, pool_id)
+        return exists
     
     def cleanup_expired_leases(self) -> int:
         """Remove expired leases. Returns count of removed leases."""

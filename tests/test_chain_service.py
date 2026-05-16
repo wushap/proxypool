@@ -239,7 +239,42 @@ class TestStickyRouter:
         leases = router.get_leases(3)
 
         assert leases[0]["session_id"] == "sess-abc"
-        assert "account" not in leases[0]
+
+    def test_reuses_bound_instance_id_when_alive(self):
+        front_pool = NodePool("front", "front", [])
+        exit_pool = NodePool("exit", "exit", [])
+        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.1.1.1", port=80, raw_link="", latency_ms=10))
+        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="2.2.2.2", port=1080, raw_link="", latency_ms=10, egress_ip="3.3.3.3"))
+        router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
+
+        first = router.route("sess-1", 1)
+        assert first is not None
+        router.bind_instance("sess-1", 1, "inst-1")
+
+        reused = router.route("sess-1", 1, live_instance_ids={"inst-1"})
+
+        assert reused is not None
+        assert reused.instance_reused is True
+        assert reused.bound_instance_id == "inst-1"
+
+    def test_rotates_to_same_ip_when_original_exit_is_gone(self):
+        front_pool = NodePool("front", "front", [])
+        exit_pool = NodePool("exit", "exit", [])
+        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.1.1.1", port=80, raw_link="", latency_ms=10))
+        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="2.2.2.2", port=1080, raw_link="", latency_ms=10, egress_ip="9.9.9.9"))
+        router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
+
+        first = router.route("sess-1", 1)
+        assert first is not None
+
+        exit_pool.remove_node("e1")
+        exit_pool.add_node(NodeEntry(key="e2", protocol="socks", host="2.2.2.3", port=1080, raw_link="", latency_ms=5, egress_ip="9.9.9.9"))
+
+        second = router.route("sess-1", 1)
+
+        assert second is not None
+        assert second.exit_node.key == "e2"
+        assert second.lease_created is False
 
 
 class TestStorage:

@@ -237,10 +237,16 @@ class ProxyChainService:
         session_id: str = "",
         pool_id: int = 0,
         target_domain: str = "",
+        live_instance_ids: set[str] | None = None,
     ) -> dict[str, Any] | None:
         """Route a request and return the chain configuration."""
         self.refresh_pools()
-        result = self.sticky_router.route(session_id, pool_id, target_domain)
+        result = self.sticky_router.route(
+            session_id,
+            pool_id,
+            target_domain,
+            live_instance_ids=live_instance_ids,
+        )
 
         if result is None:
             return None
@@ -265,6 +271,8 @@ class ProxyChainService:
             "front_node": self._node_summary(result.front_node),
             "exit_node": self._node_summary(result.exit_node),
             "lease_created": result.lease_created,
+            "bound_instance_id": result.bound_instance_id,
+            "instance_reused": result.instance_reused,
         }
 
     def bind_instance_to_session(self, session_id: str, pool_id: int, instance_id: str) -> dict[str, Any] | None:
@@ -285,7 +293,10 @@ class ProxyChainService:
             )
             return self.storage.get_sticky_lease(session_id, pool_id)
 
-        lease.instance_id = str(instance_id or "")
+        self.sticky_router.bind_instance(session_id, pool_id, instance_id)
+        lease = self.sticky_router._leases.get((session_id, pool_id))
+        if lease is None:
+            return self.storage.get_sticky_lease(session_id, pool_id)
         self.storage.upsert_sticky_lease(
             session_id=session_id,
             pool_id=pool_id,

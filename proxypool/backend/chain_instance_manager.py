@@ -45,6 +45,13 @@ class ChainInstanceManager:
     def list_instances(self, pool_id: int | None = None) -> list[dict[str, Any]]:
         return self.storage.list_chain_egress_instances(pool_id=pool_id)
 
+    def list_running_instance_ids(self, pool_id: int | None = None) -> set[str]:
+        return {
+            str(item.get("instance_id") or "")
+            for item in self.list_instances(pool_id=pool_id)
+            if str(item.get("status") or "") == "running" and str(item.get("instance_id") or "")
+        }
+
     def get_instance(self, instance_id: str) -> dict[str, Any] | None:
         return self.storage.get_chain_egress_instance(instance_id)
 
