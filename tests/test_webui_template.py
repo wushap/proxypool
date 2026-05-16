@@ -159,6 +159,16 @@ def test_webui_should_use_pool_route_test_and_gateway_preview() -> None:
     assert "/proxy/${encodeURIComponent(poolName)}" in content
 
 
+def test_webui_should_clear_selected_pool_chain_state_when_pool_disappears() -> None:
+    content = _read_webui()
+    assert "resetSelectedPoolForChainState" in content
+    assert "this.selectPoolForChain(null);" in content
+    assert "selectedPoolIdForChain: 0" in content
+    assert "selectedPoolNameForChain: \"\"" in content
+    assert "this.poolSessionRules = [];" in content
+    assert "this.poolRouteTestResult = null;" in content
+
+
 def test_webui_should_surface_backend_instances_default_listen_and_replacement() -> None:
     content = _read_webui()
     assert "backendDefaultListen" in content

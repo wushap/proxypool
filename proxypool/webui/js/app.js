@@ -867,6 +867,9 @@ const app = createApp({
         } else if (this.selectedPoolIdForChain) {
           const selected = this.proxyPools.find(item => Number(item.id) === Number(this.selectedPoolIdForChain));
           if (selected) this.selectPoolForChain(selected);
+          else this.selectPoolForChain(null);
+        } else {
+          this.resetSelectedPoolForChainState();
         }
         this.resetPage("proxyPools");
       } catch (err) { this.setMessage("加载代理池失败: " + err, true); }
@@ -944,7 +947,30 @@ const app = createApp({
     gatewayPoolPath(poolName) {
       return `/proxy/${encodeURIComponent(poolName)}`;
     },
+    resetSelectedPoolForChainState() {
+      this.selectedPoolIdForChain = 0;
+      this.selectedPoolNameForChain = "";
+      this.poolChainForm = {
+        chain_enabled: false,
+        sticky_ttl_sec: 3600,
+        session_missing_action: "RANDOM",
+        session_header_names_text: "X-ProxyPool-Session",
+        session_query_param_names_text: "session",
+        gateway_path_prefix: "",
+      };
+      this.poolSessionRuleForm = { url_prefix: "", headers_text: "" };
+      this.poolSessionRules = [];
+      this.poolRouteTest = {
+        session_id: "",
+        target_domain: "",
+      };
+      this.poolRouteTestResult = null;
+    },
     selectPoolForChain(item) {
+      if (!item) {
+        this.resetSelectedPoolForChainState();
+        return;
+      }
       const poolId = Number(item?.id || 0);
       this.selectedPoolIdForChain = poolId;
       this.selectedPoolNameForChain = String(item?.name || "").trim();
