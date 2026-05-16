@@ -22,6 +22,7 @@ from proxypool.api.schemas import (
     ImportTextsRequest,
     ImportSourcesRequest,
     ImportUrlsRequest,
+    HttpGatewayConfigRequest,
     ProxyPoolChainConfigRequest,
     ProxyPoolCreateRequest,
     PoolSessionRuleUpsertRequest,
@@ -39,7 +40,10 @@ from proxypool.api.schemas import (
 )
 from proxypool.api.security import is_request_authorized
 from proxypool.backend.chain_instance_manager import ChainInstanceManager
+from proxypool.gateway.config_service import HttpGatewayConfigService
+from proxypool.gateway.forward_proxy import ForwardProxyGateway
 from proxypool.gateway.http_gateway import GatewayError, UnifiedHttpGateway
+from proxypool.gateway.runtime import ForwardProxyGatewayRuntime
 from proxypool.backend.mihomo_manager import MihomoEgressBackend
 from proxypool.backend.singbox_manager import SingBoxBackendManager, SingBoxRoute
 from proxypool.backend.resin_manager import ResinBackendManager
@@ -115,6 +119,15 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         chain_service=chain_service,
         chain_instance_manager=chain_instance_manager,
     )
+    gateway_config_service = HttpGatewayConfigService(storage)
+    forward_gateway = ForwardProxyGateway(
+        storage=storage,
+        pool_service=pool_service,
+        chain_service=chain_service,
+        chain_instance_manager=chain_instance_manager,
+        config=gateway_config_service.get_config(),
+    )
+    gateway_runtime = ForwardProxyGatewayRuntime(forward_gateway)
 
     app = FastAPI(title="Proxy Pool", version="0.1.0")
     app.state.settings = cfg
@@ -131,6 +144,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.chain_service = chain_service
     app.state.chain_instance_manager = chain_instance_manager
     app.state.unified_gateway = unified_gateway
+    app.state.gateway_config_service = gateway_config_service
+    app.state.forward_gateway = forward_gateway
+    app.state.gateway_runtime = gateway_runtime
     app.state.backend_health_task = None
 
     async def _backend_health_loop() -> None:
@@ -146,6 +162,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     @app.on_event("startup")
     async def on_startup() -> None:
         app.state.backend_health_task = asyncio.create_task(_backend_health_loop())
+        if gateway_config_service.get_config().enabled:
+            await gateway_runtime.start()
         # Start Resin if it was running before (persisted) or resin_auto_start is set.
         if resin_manager.get_desired_running() or cfg.resin_auto_start:
             if not resin_manager.is_running():
@@ -219,6 +237,26 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     @app.get("/api/backend/routes")
     async def backend_routes() -> dict:
         return {"routes": singbox_manager.status()["routes"]}
+
+    @app.get("/api/gateway/http-config")
+    async def get_http_gateway_config() -> dict:
+        return {"item": asdict(gateway_config_service.get_config())}
+
+    @app.put("/api/gateway/http-config")
+    async def update_http_gateway_config(body: HttpGatewayConfigRequest) -> dict:
+        item = gateway_config_service.update_config(**body.model_dump())
+        app.state.forward_gateway.config = item
+        return {"item": asdict(item)}
+
+    @app.get("/api/gateway/http-status")
+    async def get_http_gateway_status() -> dict:
+        config = gateway_config_service.get_config()
+        return {
+            "config": asdict(config),
+            "runtime": gateway_runtime.status(),
+            "leases": pool_service.list_pool_chain_leases(config.default_pool_id) if config.default_pool_id else [],
+            "instances": chain_instance_manager.list_instances(pool_id=config.default_pool_id or None),
+        }
 
     @app.get("/api/backend/default-port-range")
     async def backend_default_port_range() -> dict:

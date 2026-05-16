@@ -22,6 +22,8 @@ def _make_settings(tmp_path: Path) -> AppSettings:
         singbox_binary="sing-box",
         test_url="https://www.cloudflare.com/cdn-cgi/trace",
         api_key="",
+        http_gateway_default_host="127.0.0.1",
+        http_gateway_default_port=8899,
         backend_engine="singbox",
         backend_health_check_sec=30,
         backend_auto_restart_max=3,
@@ -171,6 +173,52 @@ async def test_app_exposes_chain_instance_manager(tmp_path: Path) -> None:
     app = create_app(settings)
     assert hasattr(app.state, "chain_instance_manager")
     assert app.state.chain_instance_manager.backend.backend_type == "mihomo"
+
+
+@pytest.mark.anyio
+async def test_http_gateway_config_api_round_trip(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post("/api/pools", json={"name": "pool-a"})
+        pool_id = create_resp.json()["item"]["id"]
+
+        put_resp = await client.put(
+            "/api/gateway/http-config",
+            json={
+                "enabled": True,
+                "listen_host": "127.0.0.1",
+                "listen_port": 18899,
+                "default_pool_id": pool_id,
+                "sticky_ttl_sec": 7200,
+                "session_missing_action": "RANDOM",
+                "http_session_header_names": ["X-ProxyPool-Session"],
+                "http_session_query_names": ["session"],
+                "connect_session_header_names": ["X-ProxyPool-Session"],
+            },
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.json()["item"]["enabled"] is True
+
+        get_resp = await client.get("/api/gateway/http-config")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["item"]["listen_port"] == 18899
+
+
+@pytest.mark.anyio
+async def test_http_gateway_status_api_exposes_runtime_state(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/gateway/http-status")
+
+    assert resp.status_code == 200
+    assert "runtime" in resp.json()
+    assert "config" in resp.json()
 
 
 @pytest.mark.anyio
