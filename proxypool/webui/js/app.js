@@ -103,6 +103,26 @@ const app = createApp({
           source: "", protocol: "", latency_min: "", latency_max: "", freshness_hours: "",
         },
       },
+      selectedPoolIdForChain: 0,
+      selectedPoolNameForChain: "",
+      poolChainForm: {
+        chain_enabled: false,
+        sticky_ttl_sec: 3600,
+        session_missing_action: "RANDOM",
+        session_header_names_text: "X-ProxyPool-Session",
+        session_query_param_names_text: "session",
+        gateway_path_prefix: "",
+      },
+      poolSessionRuleForm: {
+        url_prefix: "",
+        headers_text: "",
+      },
+      poolSessionRules: [],
+      poolRouteTest: {
+        session_id: "",
+        target_domain: "",
+      },
+      poolRouteTestResult: null,
       resinStatus: {},
       chainStatus: {},
       chainHealth: {},
@@ -273,6 +293,12 @@ const app = createApp({
     paginatedBackendEvents() { return this.paginateItems(this.backendEvents || [], "backendEvents"); },
     backendInstances() { return Array.isArray(this.backendStatus?.instances) ? this.backendStatus.instances : []; },
     paginatedProxies() { return this.paginateItems(this.proxies || [], "proxies"); },
+    gatewayPreviewUrl() {
+      const poolName = String(this.selectedPoolNameForChain || "").trim();
+      const prefix = String(this.poolChainForm.gateway_path_prefix || "").trim();
+      if (!poolName || !prefix) return "";
+      return `${this.gatewayPoolPath(poolName)}/https/example.com/path/to/resource`;
+    },
   },
 
   methods: {
@@ -836,6 +862,12 @@ const app = createApp({
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "加载代理池失败");
         this.proxyPools = data.items || [];
+        if (!this.selectedPoolIdForChain && this.proxyPools.length) {
+          this.selectPoolForChain(this.proxyPools[0]);
+        } else if (this.selectedPoolIdForChain) {
+          const selected = this.proxyPools.find(item => Number(item.id) === Number(this.selectedPoolIdForChain));
+          if (selected) this.selectPoolForChain(selected);
+        }
         this.resetPage("proxyPools");
       } catch (err) { this.setMessage("加载代理池失败: " + err, true); }
     },
@@ -896,6 +928,117 @@ const app = createApp({
         ...(item?.filters || {}),
       };
       this.setMessage("已套用代理池筛选,可修改后保存");
+    },
+    listTextToMultiline(value) {
+      return Array.isArray(value) ? value.map(item => String(item || "").trim()).filter(Boolean).join("\n") : "";
+    },
+    parseMultilineList(value) {
+      return String(value || "").split(/[\n,]+/g).map(item => item.trim()).filter(Boolean);
+    },
+    poolSessionRulesApiBase(poolId) {
+      return `/api/pools/${poolId}/chain/session-rules`;
+    },
+    poolRouteTestApiUrl(poolId, params = "") {
+      return `/api/pools/${poolId}/chain/route-test${params ? `?${params}` : ""}`;
+    },
+    gatewayPoolPath(poolName) {
+      return `/proxy/${encodeURIComponent(poolName)}`;
+    },
+    selectPoolForChain(item) {
+      const poolId = Number(item?.id || 0);
+      this.selectedPoolIdForChain = poolId;
+      this.selectedPoolNameForChain = String(item?.name || "").trim();
+      this.poolChainForm = {
+        chain_enabled: item?.chain_enabled === true,
+        sticky_ttl_sec: Number(item?.sticky_ttl_sec || 3600),
+        session_missing_action: String(item?.session_missing_action || "RANDOM"),
+        session_header_names_text: this.listTextToMultiline(item?.session_header_names),
+        session_query_param_names_text: this.listTextToMultiline(item?.session_query_param_names),
+        gateway_path_prefix: String(item?.gateway_path_prefix || ""),
+      };
+      this.poolRouteTestResult = null;
+      this.poolSessionRuleForm = { url_prefix: "", headers_text: "" };
+      if (poolId > 0) this.loadPoolSessionRules(poolId);
+      else this.poolSessionRules = [];
+    },
+    async loadPoolSessionRules(poolId = this.selectedPoolIdForChain) {
+      const id = Number(poolId || 0);
+      if (!id) {
+        this.poolSessionRules = [];
+        return;
+      }
+      const resp = await fetch(this.poolSessionRulesApiBase(id));
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "加载会话规则失败");
+      this.poolSessionRules = data.items || [];
+    },
+    async savePoolChainConfig(poolId = this.selectedPoolIdForChain) {
+      const id = Number(poolId || 0);
+      if (!id) throw new Error("请先选择代理池");
+      const payload = {
+        chain_enabled: this.poolChainForm.chain_enabled === true,
+        sticky_ttl_sec: Math.max(1, Number(this.poolChainForm.sticky_ttl_sec || 3600)),
+        session_missing_action: String(this.poolChainForm.session_missing_action || "RANDOM").trim() || "RANDOM",
+        session_header_names: this.parseMultilineList(this.poolChainForm.session_header_names_text),
+        session_query_param_names: this.parseMultilineList(this.poolChainForm.session_query_param_names_text),
+        gateway_path_prefix: String(this.poolChainForm.gateway_path_prefix || "").trim(),
+      };
+      const resp = await fetch(`/api/pools/${id}/chain`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "保存链路配置失败");
+      this.selectPoolForChain(data.item || {});
+      await this.loadProxyPools();
+      this.setMessage("池级链路配置已保存");
+    },
+    async savePoolSessionRule(poolId = this.selectedPoolIdForChain) {
+      const id = Number(poolId || 0);
+      if (!id) throw new Error("请先选择代理池");
+      const urlPrefix = String(this.poolSessionRuleForm.url_prefix || "").trim();
+      if (!urlPrefix) throw new Error("请输入 URL 前缀");
+      const headers = this.parseMultilineList(this.poolSessionRuleForm.headers_text);
+      const resp = await fetch(`${this.poolSessionRulesApiBase(id)}/${encodeURIComponent(urlPrefix)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ headers }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "保存会话规则失败");
+      this.poolSessionRuleForm = { url_prefix: "", headers_text: "" };
+      await this.loadPoolSessionRules(id);
+      this.setMessage(`会话规则已保存: ${data.item?.url_prefix || urlPrefix}`);
+    },
+    async deletePoolSessionRule(urlPrefix, poolId = this.selectedPoolIdForChain) {
+      const id = Number(poolId || 0);
+      if (!id) throw new Error("请先选择代理池");
+      const resp = await fetch(`${this.poolSessionRulesApiBase(id)}/${encodeURIComponent(String(urlPrefix || "").trim())}`, {
+        method: "DELETE",
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "删除会话规则失败");
+      await this.loadPoolSessionRules(id);
+      this.setMessage("会话规则已删除");
+    },
+    usePoolSessionRule(item) {
+      this.poolSessionRuleForm = {
+        url_prefix: String(item?.url_prefix || ""),
+        headers_text: this.listTextToMultiline(item?.headers),
+      };
+    },
+    async testPoolRoute(poolId = this.selectedPoolIdForChain) {
+      const id = Number(poolId || 0);
+      if (!id) throw new Error("请先选择代理池");
+      const params = new URLSearchParams();
+      if (this.poolRouteTest.session_id) params.set("session_id", this.poolRouteTest.session_id);
+      if (this.poolRouteTest.target_domain) params.set("target_domain", this.poolRouteTest.target_domain);
+      const resp = await fetch(this.poolRouteTestApiUrl(id, params.toString()));
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "池级路由测试失败");
+      this.poolRouteTestResult = data;
+      this.setMessage("池级路由测试成功");
     },
     async createProxyPool() {
       const name = String(this.proxyPoolForm.name || "").trim();
@@ -972,6 +1115,12 @@ const app = createApp({
     async onSyncPool(poolId) { await this.runWithButtonState(`syncPool-${poolId}`, () => this.syncPool(poolId)); },
     async onResinStart() { await this.runWithButtonState("resinStart", () => this.resinStart()); },
     async onResinStop() { await this.runWithButtonState("resinStop", () => this.resinStop()); },
+    async onSelectPoolForChain(item) { this.selectPoolForChain(item); },
+    async onSavePoolChainConfig(poolId) { await this.runWithButtonState(`savePoolChain-${poolId || this.selectedPoolIdForChain}`, () => this.savePoolChainConfig(poolId)); },
+    async onLoadPoolSessionRules(poolId) { await this.runWithButtonState(`loadPoolSessionRules-${poolId || this.selectedPoolIdForChain}`, () => this.loadPoolSessionRules(poolId)); },
+    async onSavePoolSessionRule(poolId) { await this.runWithButtonState(`savePoolSessionRule-${poolId || this.selectedPoolIdForChain}`, () => this.savePoolSessionRule(poolId)); },
+    async onDeletePoolSessionRule(urlPrefix, poolId) { await this.runWithButtonState(`deletePoolSessionRule-${poolId || this.selectedPoolIdForChain}-${urlPrefix}`, () => this.deletePoolSessionRule(urlPrefix, poolId)); },
+    async onTestPoolRoute(poolId) { await this.runWithButtonState(`testPoolRoute-${poolId || this.selectedPoolIdForChain}`, () => this.testPoolRoute(poolId)); },
 
     // --- Chain Service ---
     async loadChainStatus() {
