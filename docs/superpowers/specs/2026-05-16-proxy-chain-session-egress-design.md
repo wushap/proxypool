@@ -7,7 +7,9 @@ This design turns the current proxy-chain manager from a route-selection tool in
 1. durable chained egress instances that listen on real local ports and carry traffic through `front -> exit`
 2. a unified HTTP reverse-proxy gateway that extracts `session_id`, applies sticky routing, and forwards traffic through those chained instances
 
-The design keeps route selection, health management, and sticky leasing in Python control-plane code, while using sing-box-backed chained instances as the data plane.
+The design keeps route selection, health management, and sticky leasing in Python control-plane code, while using backend-managed chained proxy instances as the data plane.
+
+The preferred data-plane backend is Mihomo. The control plane must keep a backend abstraction so that sing-box can remain available as a compatibility backend during migration.
 
 This design explicitly does not make the first unified entry point a generic forward proxy with arbitrary per-request session routing. The first unified entry point is an HTTP reverse-proxy gateway.
 
@@ -25,7 +27,7 @@ This design explicitly does not make the first unified entry point a generic for
 - Do not make the first unified entry point a full generic HTTP forward proxy with dynamic per-request chain selection.
 - Do not make `header/query`-based sticky routing work for SOCKS5 clients.
 - Do not overload `proxy_pools_v2` with unified gateway configuration.
-- Do not couple sing-box runtime config generation to HTTP request parsing.
+- Do not couple backend runtime config generation to HTTP request parsing.
 
 ## Current State
 
@@ -33,9 +35,17 @@ The repository already contains the main building blocks, but they are not yet a
 
 - `ProxyChainService` selects `front` and `exit` nodes and maintains sticky routing state.
 - `StickyRouter` performs in-memory sticky routing keyed by `(account, pool_id)`.
-- `ChainBuilder` can build a real sing-box config for a chained route.
-- `SingBoxBackendManager` already knows how to manage durable sing-box instances and multi-hop routes.
+- `ChainBuilder` can already build a real sing-box config for a chained route.
+- `SingBoxBackendManager` already knows how to manage durable backend instances and multi-hop routes in the existing sing-box path.
 - `ProxyPoolService` and `proxy_pools` already represent the business-facing pool control plane.
+
+Mihomo has also been validated as a strong candidate for the data plane because it supports:
+
+- multiple inbound and outbound proxy protocols
+- chained proxy execution through `dialer-proxy`
+- health-checks, `url-test`, and `fallback`
+
+Mihomo does not, however, replace the Python control plane's session-oriented sticky lease semantics.
 
 The main gap is that current `/api/chain/route` returns a routing result, but not a durable, client-usable chained proxy endpoint.
 
@@ -70,7 +80,16 @@ The control-plane core is split into these units:
   - owns sticky lease creation, hit, expiry, same-IP rotation, and fallback reroute
 - `ChainEgressManager`
   - new component
-  - creates, starts, stops, rebuilds, and restores durable chained sing-box instances
+  - creates, starts, stops, rebuilds, and restores durable chained backend instances
+- `EgressBackend`
+  - new backend abstraction
+  - defines the runtime contract for chain-instance config generation and process management
+- `MihomoEgressBackend`
+  - preferred backend implementation
+  - renders Mihomo config and manages Mihomo-backed chained instances
+- `SingBoxEgressBackend`
+  - compatibility backend implementation
+  - preserves the current sing-box execution path during migration
 - `SessionExtractor`
   - new HTTP-facing component
   - extracts `session_id` from request metadata for the unified gateway
@@ -82,9 +101,10 @@ The control-plane core is split into these units:
 
 The data plane has two layers:
 
-- chained sing-box egress instances
+- chained proxy egress instances
   - real listening ports
   - each instance binds one `front_node + exit_node + inbound_type + listen + port`
+  - preferred runtime backend is Mihomo
 - unified HTTP gateway
   - accepts business traffic
   - extracts `session_id`
@@ -103,7 +123,7 @@ Each instance:
 
 - has a stable `instance_id`
 - listens on a real local address and port
-- is backed by a sing-box process
+- is backed by a managed runtime process
 - is built from a selected `front` and `exit` node pair
 - can be started, stopped, rebuilt, and restored after restart
 
@@ -166,7 +186,7 @@ This is intentionally limited to the HTTP gateway because:
 
 - SOCKS5 has no request headers or query parameters
 - forward-proxy `CONNECT` traffic cannot reliably expose the target application's later headers to the proxy
-- the existing sing-box data plane cannot see per-request HTTP metadata once clients connect directly to a port
+- the direct proxy data plane cannot see per-request HTTP metadata once clients connect directly to a port
 
 This design therefore keeps `header/query` session extraction only at the gateway edge.
 
@@ -209,6 +229,55 @@ The router remains responsible for:
 
 The router should not parse HTTP headers or query parameters.
 
+### EgressBackend
+
+`EgressBackend` is a new runtime abstraction for data-plane execution.
+
+Responsibilities:
+
+- generate backend-specific config for a chained egress instance
+- define process start and stop behavior
+- define runtime health probing hooks when backend-native status is available
+- define log and state file layout
+
+The control plane depends on this abstraction instead of depending directly on sing-box.
+
+### MihomoEgressBackend
+
+`MihomoEgressBackend` is the preferred implementation of `EgressBackend`.
+
+Responsibilities:
+
+- render a Mihomo config for each chained instance
+- encode `front -> exit` behavior using Mihomo-supported chaining, preferring `dialer-proxy`
+- support multiple inbound protocols where needed
+- expose Mihomo process state back to `ChainEgressManager`
+
+Why Mihomo is preferred:
+
+- stronger built-in support for multiple inbound and outbound protocols
+- native health-check, `url-test`, and `fallback` features
+- practical chain execution via `dialer-proxy`
+
+What Mihomo does not replace:
+
+- session extraction
+- session-oriented sticky leasing
+- same-egress-IP restoration policy
+
+Those remain Python control-plane responsibilities.
+
+### SingBoxEgressBackend
+
+`SingBoxEgressBackend` is the compatibility implementation of `EgressBackend`.
+
+Responsibilities:
+
+- preserve the current chain-building path during migration
+- keep the old backend available until Mihomo-backed instances are verified
+
+This backend should be optional after migration, but not removed in the first implementation wave.
+
 ### ChainEgressManager
 
 `ChainEgressManager` is a new manager responsible for real chained instance lifecycle.
@@ -216,14 +285,16 @@ The router should not parse HTTP headers or query parameters.
 Responsibilities:
 
 - allocate or validate listen ports
-- build config through `ChainBuilder`
-- start and stop sing-box child processes
+- delegate config generation to `EgressBackend`
+- start and stop backend child processes
 - persist instance metadata
 - restore instances after API restart
 - rebuild an instance to a new `front/exit` pair
 - report liveness and last error
 
 It should follow the style of `SingBoxBackendManager`, but manage chain instances as first-class objects rather than generic static route files.
+
+`ChainBuilder` should either evolve into a backend-neutral route description builder or be split into backend-specific builders behind the `EgressBackend` interface.
 
 ### SessionExtractor
 
@@ -343,6 +414,11 @@ Fields:
 Purpose:
 
 - durable catalog of chained egress instances
+- records which backend implementation owns the instance
+
+Additional field:
+
+- `backend_type`
 
 ## API Design
 
@@ -409,7 +485,7 @@ The gateway:
 
 1. control-plane client creates or requests a chain instance
 2. `ProxyChainService` selects `front + exit`
-3. `ChainEgressManager` builds config and starts sing-box
+3. `ChainEgressManager` delegates to the selected backend and starts the runtime process
 4. instance listens on a real local port
 5. external clients can connect directly to that port
 
@@ -462,6 +538,18 @@ On API restart:
 
 Recovery should be lazy for stale leases. Do not full-scan and eagerly rebuild all leases at startup.
 
+### Backend-Specific Recovery Notes
+
+For Mihomo-backed instances:
+
+- Python still owns desired state and lease state
+- Mihomo only owns runtime execution of the chained instance
+- backend-native health-check and fallback features may improve node liveness, but they do not replace lease validation
+
+For sing-box-backed instances:
+
+- keep existing restoration behavior until Mihomo parity is verified
+
 ### Header Safety
 
 Any internal session header used for routing must be stripped before the upstream request is sent.
@@ -492,6 +580,8 @@ This mirrors Resin’s behavior and avoids leaking control-plane routing metadat
 ### Service Tests
 
 - `ProxyChainService` plus `ChainEgressManager` integration
+- `ChainEgressManager` plus `MihomoEgressBackend` integration
+- optional parity checks between `MihomoEgressBackend` and `SingBoxEgressBackend`
 - instance crash and rebuild
 - restore instance catalog after restart
 - restore sticky leases after restart
@@ -520,18 +610,22 @@ This design intentionally chooses these boundaries:
 - `proxy_pools` is the control-plane anchor for business-facing chain gateway config
 - `proxy_pools_v2` remains front/exit classification only
 - Phase 2 first supports HTTP reverse proxy, not a generic dynamic forward proxy
+- Mihomo is the preferred data-plane backend, not the owner of session semantics
+- Python remains the system of record for leases, pool state, and egress-IP-preserving reroute policy
 
 ## Recommended Implementation Order
 
-1. introduce `chain_egress_instances` and `ChainEgressManager`
-2. expose durable chained instance APIs
-3. convert sticky routing from `account` to `session_id`
-4. attach sticky lease persistence to runtime behavior
-5. extend `proxy_pools` with session-gateway config
-6. add session-rule storage and matching
-7. add the unified HTTP gateway
-8. add lease inheritance API
-9. complete restart recovery and end-to-end verification
+1. introduce `EgressBackend` abstraction and add `backend_type` to instance state
+2. implement `MihomoEgressBackend`
+3. introduce `chain_egress_instances` and `ChainEgressManager`
+4. expose durable chained instance APIs
+5. convert sticky routing from `account` to `session_id`
+6. attach sticky lease persistence to runtime behavior
+7. extend `proxy_pools` with session-gateway config
+8. add session-rule storage and matching
+9. add the unified HTTP gateway
+10. add lease inheritance API
+11. complete restart recovery and end-to-end verification
 
 ## Open Decisions Resolved
 
@@ -544,6 +638,7 @@ These decisions are fixed by this design:
 - Resin-style header-rule fallback is included
 - same-IP rotation is required behavior
 - control-plane config lives under `proxy_pools`
+- data-plane execution is backend-abstracted, with Mihomo preferred
 
 ## References
 
