@@ -45,6 +45,15 @@ class ProxyPoolService:
     def update_pool(self, pool_id: int, **kwargs: Any) -> dict[str, Any]:
         return self.storage.update_proxy_pool(pool_id, **kwargs)
 
+    def get_pool_by_name(self, name: str) -> dict[str, Any] | None:
+        safe_name = str(name or "").strip()
+        if not safe_name:
+            return None
+        for pool in self.storage.list_proxy_pools(limit=1000):
+            if str(pool.get("name") or "") == safe_name:
+                return self._enrich_pool(pool)
+        return None
+
     def get_pool_chain_config(self, pool_id: int) -> dict[str, Any] | None:
         pool = self.storage.get_proxy_pool(pool_id)
         if pool is None:
@@ -56,6 +65,24 @@ class ProxyPoolService:
         if pool is None:
             raise ValueError("proxy pool not found")
         return self._enrich_pool(self.storage.update_proxy_pool(pool_id, **kwargs))
+
+    def upsert_pool_session_rule(self, pool_id: int, url_prefix: str, headers: list[str] | None = None) -> dict[str, Any]:
+        pool = self.storage.get_proxy_pool(pool_id)
+        if pool is None:
+            raise ValueError("proxy pool not found")
+        return self.storage.upsert_pool_session_rule(pool_id=pool_id, url_prefix=url_prefix, headers=headers)
+
+    def list_pool_session_rules(self, pool_id: int) -> list[dict[str, Any]]:
+        pool = self.storage.get_proxy_pool(pool_id)
+        if pool is None:
+            raise ValueError("proxy pool not found")
+        return self.storage.list_pool_session_rules(pool_id)
+
+    def delete_pool_session_rule(self, pool_id: int, url_prefix: str) -> bool:
+        pool = self.storage.get_proxy_pool(pool_id)
+        if pool is None:
+            raise ValueError("proxy pool not found")
+        return self.storage.delete_pool_session_rule(pool_id, url_prefix) > 0
 
     def list_pool_chain_leases(self, pool_id: int) -> list[dict[str, Any]]:
         pool = self.storage.get_proxy_pool(pool_id)

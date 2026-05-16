@@ -154,3 +154,7 @@ class ChainInstanceCreateRequest(BaseModel):
 class StickyLeaseInheritRequest(BaseModel):
     from_session_id: str
     to_session_id: str
+
+
+class PoolSessionRuleUpsertRequest(BaseModel):
+    headers: list[str] = Field(default_factory=list)

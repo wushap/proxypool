@@ -130,6 +130,45 @@ def test_webui_chain_view_should_use_session_id_instead_of_account() -> None:
     assert "params.set('account'" not in content
 
 
+def test_webui_should_support_pool_level_gateway_config_and_session_rules() -> None:
+    content = _read_webui()
+    assert "poolChainForm.chain_enabled" in content
+    assert "poolChainForm.sticky_ttl_sec" in content
+    assert "poolChainForm.session_missing_action" in content
+    assert "poolChainForm.session_header_names_text" in content
+    assert "poolChainForm.session_query_param_names_text" in content
+    assert "poolChainForm.gateway_path_prefix" in content
+    assert "poolSessionRuleForm.url_prefix" in content
+    assert "poolSessionRuleForm.headers_text" in content
+    assert "poolSessionRules" in content
+    assert "loadPoolSessionRules" in content
+    assert "savePoolSessionRule" in content
+    assert "deletePoolSessionRule" in content
+    assert "/api/pools/${poolId}/chain/session-rules" in content
+
+
+def test_webui_should_use_pool_route_test_and_gateway_preview() -> None:
+    content = _read_webui()
+    assert "selectedPoolIdForChain" in content
+    assert "selectedPoolNameForChain" in content
+    assert "poolRouteTest.session_id" in content
+    assert "poolRouteTest.target_domain" in content
+    assert "poolRouteTestResult" in content
+    assert "gatewayPreviewUrl" in content
+    assert "/api/pools/${poolId}/chain/route-test" in content
+    assert "/proxy/${encodeURIComponent(poolName)}" in content
+
+
+def test_webui_should_clear_selected_pool_chain_state_when_pool_disappears() -> None:
+    content = _read_webui()
+    assert "resetSelectedPoolForChainState" in content
+    assert "this.selectPoolForChain(null);" in content
+    assert "selectedPoolIdForChain: 0" in content
+    assert "selectedPoolNameForChain: \"\"" in content
+    assert "this.poolSessionRules = [];" in content
+    assert "this.poolRouteTestResult = null;" in content
+
+
 def test_webui_should_surface_backend_instances_default_listen_and_replacement() -> None:
     content = _read_webui()
     assert "backendDefaultListen" in content

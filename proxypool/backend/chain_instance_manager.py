@@ -48,6 +48,56 @@ class ChainInstanceManager:
     def get_instance(self, instance_id: str) -> dict[str, Any] | None:
         return self.storage.get_chain_egress_instance(instance_id)
 
+    def ensure_instance(
+        self,
+        pool_id: int,
+        front_node_key: str,
+        exit_node_key: str,
+        inbound_type: str = "http",
+        listen: str | None = None,
+    ) -> dict[str, Any]:
+        instance_id = self.build_instance_id(
+            pool_id=pool_id,
+            front_node_key=front_node_key,
+            exit_node_key=exit_node_key,
+            inbound_type=inbound_type,
+        )
+        item = self.storage.get_chain_egress_instance(instance_id)
+        if item is None:
+            item = self.create_instance(
+                instance_id=instance_id,
+                pool_id=pool_id,
+                front_node_key=front_node_key,
+                exit_node_key=exit_node_key,
+                listen=listen or self.storage.get_backend_default_listen(),
+                port=self._allocate_port(),
+                inbound_type=inbound_type,
+            )
+        if str(item.get("status") or "") == "running":
+            return item
+        return self.start_instance(instance_id)
+
+    def build_instance_id(
+        self,
+        pool_id: int,
+        front_node_key: str,
+        exit_node_key: str,
+        inbound_type: str,
+    ) -> str:
+        return f"gw-{int(pool_id)}-{str(front_node_key)[:10]}-{str(exit_node_key)[:10]}-{str(inbound_type or 'http').lower()}"
+
+    def _allocate_port(self) -> int:
+        port_range = self.storage.get_backend_default_port_range()
+        used_ports = {
+            int(item.get("port") or 0)
+            for item in self.storage.list_chain_egress_instances()
+            if int(item.get("port") or 0) > 0
+        }
+        for port in range(int(port_range["start"]), int(port_range["end"]) + 1):
+            if port not in used_ports:
+                return port
+        raise RuntimeError("no available backend port")
+
     def start_instance(self, instance_id: str) -> dict[str, Any]:
         item = self.storage.get_chain_egress_instance(instance_id)
         if item is None:
