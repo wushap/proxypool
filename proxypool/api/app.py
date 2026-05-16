@@ -7,8 +7,10 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from proxypool.api.schemas import (
     BackendInstanceCreateRequest,
@@ -72,8 +74,11 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         binary=cfg.resin_binary,
         port=cfg.resin_port,
         admin_token=cfg.resin_admin_token,
+        proxy_token=cfg.resin_proxy_token,
+        auth_version=cfg.resin_auth_version,
         data_dir=cfg.resin_data_dir,
         log_file=Path(str(cfg.singbox_runtime_log_file).replace("singbox", "resin")),
+        runtime_dir=cfg.singbox_runtime_config_file.parent,
     )
     resin_base_url = f"http://127.0.0.1:{cfg.resin_port}"
     resin_client = ResinClient(base_url=resin_base_url, admin_token=cfg.resin_admin_token)
@@ -81,6 +86,16 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         storage=storage,
         resin_manager=resin_manager,
         resin_client=resin_client,
+    )
+
+    # Initialize ProxyChainService
+    from proxypool.pool.chain_service import ProxyChainService
+    from proxypool.pool.health_manager import HealthConfig
+    chain_service = ProxyChainService(
+        storage=storage,
+        singbox_binary=cfg.singbox_binary,
+        test_url=cfg.test_url,
+        health_config=HealthConfig(),
     )
 
     app = FastAPI(title="Proxy Pool", version="0.1.0")
@@ -95,6 +110,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.resin_manager = resin_manager
     app.state.resin_client = resin_client
     app.state.pool_service = pool_service
+    app.state.chain_service = chain_service
     app.state.backend_health_task = None
 
     async def _backend_health_loop() -> None:
@@ -110,11 +126,13 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     @app.on_event("startup")
     async def on_startup() -> None:
         app.state.backend_health_task = asyncio.create_task(_backend_health_loop())
-        if cfg.resin_auto_start:
-            try:
-                resin_manager.start()
-            except Exception:
-                pass
+        # Start Resin if it was running before (persisted) or resin_auto_start is set.
+        if resin_manager.get_desired_running() or cfg.resin_auto_start:
+            if not resin_manager.is_running():
+                try:
+                    resin_manager.start()
+                except Exception:
+                    pass
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
@@ -972,12 +990,195 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="resin not running")
         return resin_client.list_nodes(limit=limit, offset=offset)
 
+    # ---- Resin reverse proxy ----
+    # The Resin UI is a Vite SPA with base="/ui/".  Its compiled JS
+    # checks ``window.location.pathname`` at startup and refuses to
+    # render unless the path begins with "/ui/".  We therefore
+    # expose the Resin UI at ``/ui/`` (not ``/resin/ui/``) and
+    # redirect ``/resin`` → ``/ui/`` for convenience.
+    #
+    # API calls from the SPA (``fetch("/api/v1/...")``) are routed
+    # to the Resin backend via a dedicated ``/api/v1/{path}`` route.
+    # The Proxy Pool's own API lives at ``/api/...`` (no ``v1``)
+    # so there is no conflict.
+
+    @app.get("/resin")
+    async def resin_root_redirect():
+        return RedirectResponse(url="/ui/")
+
+    @app.get("/resin/")
+    async def resin_slash_redirect():
+        return RedirectResponse(url="/ui/")
+
+    _RESIN_PROXY_SKIP_HEADERS = frozenset({"host", "transfer-encoding", "connection", "keep-alive"})
+
+    async def _resin_proxy_rewrite(prefix: str, path: str, request: Request) -> Response:
+        """Forward *request* to ``http://127.0.0.1:{port}/{prefix}/{path}``."""
+        full_path = f"{prefix}/{path}" if prefix else path
+        target = f"http://127.0.0.1:{cfg.resin_port}/{full_path}"
+        qs = str(request.url.query)
+        if qs:
+            target += f"?{qs}"
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in _RESIN_PROXY_SKIP_HEADERS}
+        body = await request.body()
+        async with httpx.AsyncClient() as client:
+            resp = await client.request(
+                method=request.method,
+                url=target,
+                headers=headers,
+                content=body,
+                follow_redirects=True,
+            )
+        resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _RESIN_PROXY_SKIP_HEADERS}
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=resp_headers,
+            media_type=resp.headers.get("content-type"),
+        )
+
+    @app.api_route("/resin/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
+    async def resin_api_proxy(path: str, request: Request) -> Response:
+        return await _resin_proxy_rewrite("api", path, request)
+
+    @app.api_route("/resin/healthz", methods=["GET", "HEAD"])
+    async def resin_healthz_proxy(request: Request) -> Response:
+        return await _resin_proxy_rewrite("", "healthz", request)
+
+    @app.api_route("/ui/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
+    async def resin_ui_proxy(path: str, request: Request) -> Response:
+        """Proxy Resin Web UI.  Must live at ``/ui/...`` so that the
+        Vite SPA's pathname check passes."""
+        return await _proxy_to_resin(f"ui/{path}", request)
+
+    @app.api_route("/api/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
+    async def resin_api_v1_proxy(path: str, request: Request) -> Response:
+        """Proxy Resin REST API (``/api/v1/...``) so that the Resin
+        SPA can fetch data when loaded at ``/ui/..."."""
+        return await _proxy_to_resin(f"api/v1/{path}", request)
+
+    async def _proxy_to_resin(path: str, request: Request) -> Response:
+        target = f"http://127.0.0.1:{cfg.resin_port}/{path}"
+        qs = str(request.url.query)
+        if qs:
+            target += f"?{qs}"
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in _RESIN_PROXY_SKIP_HEADERS}
+        body = await request.body()
+        async with httpx.AsyncClient() as client:
+            resp = await client.request(
+                method=request.method,
+                url=target,
+                headers=headers,
+                content=body,
+                follow_redirects=True,
+            )
+        resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _RESIN_PROXY_SKIP_HEADERS}
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=resp_headers,
+            media_type=resp.headers.get("content-type"),
+        )
+
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
         html_path = cfg.project_root / "proxypool" / "webui" / "index.html"
         if not html_path.exists():
             raise HTTPException(status_code=404, detail="WebUI not found")
         return html_path.read_text(encoding="utf-8")
+
+    # Serve webui static assets (css/, js/)
+    _webui_dir = cfg.project_root / "proxypool" / "webui"
+    if _webui_dir.is_dir():
+        app.mount("/css", StaticFiles(directory=str(_webui_dir / "css")), name="webui-css")
+        app.mount("/js", StaticFiles(directory=str(_webui_dir / "js")), name="webui-js")
+
+    # ------------------------------------------------------------------
+    # Proxy Chain API Routes
+    # ------------------------------------------------------------------
+
+    @app.get("/api/chain/status")
+    async def chain_status() -> dict:
+        """Get proxy chain service status."""
+        chain_service.initialize()
+        return chain_service.get_pool_status(refresh=True)
+
+    @app.get("/api/chain/health")
+    async def chain_health() -> dict:
+        """Get health manager status."""
+        return chain_service.get_health_status()
+
+    @app.post("/api/chain/pools/{pool_type}")
+    async def update_chain_pool(
+        pool_type: str,
+        regex_filters: list[str] | None = Query(default=None, description="Regex filters for pool"),
+    ) -> dict:
+        """Update proxy chain pool configuration."""
+        if pool_type not in ("front", "exit"):
+            raise HTTPException(status_code=400, detail="pool_type must be 'front' or 'exit'")
+        chain_service.initialize()
+        return chain_service.update_pool_config(pool_type, list(regex_filters or []))
+
+    @app.get("/api/chain/route")
+    async def chain_route(
+        account: str = "",
+        pool_id: int = 0,
+        target_domain: str = "",
+    ) -> dict:
+        """Route a request through the proxy chain."""
+        chain_service.initialize()
+        result = chain_service.route_request(account, pool_id, target_domain)
+        if result is None:
+            raise HTTPException(status_code=503, detail="No available nodes for routing")
+        return result
+
+    @app.get("/api/chain/leases")
+    async def chain_leases(
+        pool_id: int | None = None,
+    ) -> dict:
+        """Get sticky leases."""
+        chain_service.initialize()
+        return {"leases": chain_service.get_leases(pool_id)}
+
+    @app.post("/api/chain/leases/cleanup")
+    async def chain_leases_cleanup() -> dict:
+        """Cleanup expired sticky leases."""
+        chain_service.initialize()
+        removed = chain_service.cleanup_leases()
+        return {"removed": removed}
+
+    @app.post("/api/chain/start")
+    async def chain_start() -> dict:
+        """Start the proxy chain service."""
+        chain_service.start()
+        return {"status": "started"}
+
+    @app.post("/api/chain/stop")
+    async def chain_stop() -> dict:
+        """Stop the proxy chain service."""
+        chain_service.stop()
+        return {"status": "stopped"}
+
+    @app.get("/api/chain/nodes")
+    async def chain_nodes(
+        pool_type: str = "all",
+        healthy_only: bool = False,
+    ) -> dict:
+        """Get nodes from pools."""
+        chain_service.initialize()
+        status = chain_service.get_pool_status(refresh=True)
+
+        if pool_type == "front":
+            nodes = status["front_pool"]["nodes"]
+        elif pool_type == "exit":
+            nodes = status["exit_pool"]["nodes"]
+        else:
+            nodes = status["front_pool"]["nodes"] + status["exit_pool"]["nodes"]
+
+        if healthy_only:
+            nodes = [n for n in nodes if n["healthy"]]
+
+        return {"nodes": nodes, "total": len(nodes)}
 
     return app
 

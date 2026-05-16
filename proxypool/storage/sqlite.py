@@ -139,6 +139,36 @@ class SQLiteProxyStorage:
             value TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS proxy_pools_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            pool_type TEXT NOT NULL CHECK(pool_type IN ('front', 'exit')),
+            regex_filters_json TEXT NOT NULL DEFAULT '[]',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS node_health (
+            node_key TEXT PRIMARY KEY,
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            circuit_open_since TEXT,
+            last_success_at TEXT,
+            last_failure_at TEXT,
+            egress_ip TEXT NOT NULL DEFAULT '',
+            egress_region TEXT NOT NULL DEFAULT '',
+            last_egress_check TEXT,
+            latency_avg_ms INTEGER,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sticky_leases (
+            account TEXT NOT NULL,
+            pool_id INTEGER NOT NULL,
+            exit_node_key TEXT NOT NULL,
+            egress_ip TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            last_accessed TEXT NOT NULL,
+            PRIMARY KEY (account, pool_id)
+        );
         """
         with self._connect() as conn:
             conn.executescript(sql)
@@ -1440,6 +1470,254 @@ class SQLiteProxyStorage:
         data["match_count"] = len(self.list_proxies_filtered(limit=20000, **_filters_to_proxy_list_kwargs(filters)))
         data.pop("filters_json", None)
         return data
+
+    # ------------------------------------------------------------------
+    # Proxy Chain Pool Methods
+    # ------------------------------------------------------------------
+
+    def list_proxy_pools_v2(self) -> list[dict[str, Any]]:
+        """List all proxy chain pool configurations."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM proxy_pools_v2 ORDER BY name"
+            ).fetchall()
+            return [self._proxy_pool_v2_row_to_dict(row) for row in rows]
+
+    def get_proxy_pool_v2(self, name: str) -> dict[str, Any] | None:
+        """Get a proxy chain pool by name."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM proxy_pools_v2 WHERE name = ?",
+                (name,),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._proxy_pool_v2_row_to_dict(row)
+
+    def upsert_proxy_pool_v2(
+        self,
+        name: str,
+        pool_type: str,
+        regex_filters: list[str],
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        """Create or update a proxy chain pool configuration."""
+        now = _utc_now()
+        filters_json = json.dumps(regex_filters, ensure_ascii=False)
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO proxy_pools_v2 (name, pool_type, regex_filters_json, enabled, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        pool_type = excluded.pool_type,
+                        regex_filters_json = excluded.regex_filters_json,
+                        enabled = excluded.enabled,
+                        updated_at = excluded.updated_at
+                    """,
+                    (name, pool_type, filters_json, int(enabled), now, now),
+                )
+                conn.commit()
+        return self.get_proxy_pool_v2(name) or {}
+
+    def delete_proxy_pool_v2(self, name: str) -> int:
+        """Delete a proxy chain pool configuration."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM proxy_pools_v2 WHERE name = ?",
+                    (name,),
+                )
+                conn.commit()
+                return cursor.rowcount
+
+    def _proxy_pool_v2_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        """Convert a proxy_pools_v2 row to dict."""
+        data = dict(row)
+        data["enabled"] = bool(data.get("enabled"))
+        data["regex_filters"] = json.loads(data.get("regex_filters_json", "[]"))
+        data.pop("regex_filters_json", None)
+        return data
+
+    # ------------------------------------------------------------------
+    # Node Health Methods
+    # ------------------------------------------------------------------
+
+    def upsert_node_health(
+        self,
+        node_key: str,
+        success: bool,
+        egress_ip: str = "",
+        latency_ms: int | None = None,
+        timestamp: str = "",
+        max_failures: int = 5,
+    ) -> dict[str, Any]:
+        """Update node health state."""
+        now = timestamp or _utc_now()
+        with self._write_lock:
+            with self._connect() as conn:
+                # Get current state
+                row = conn.execute(
+                    "SELECT * FROM node_health WHERE node_key = ?",
+                    (node_key,),
+                ).fetchone()
+
+                if row is None:
+                    # Create new record
+                    failure_count = 0 if success else 1
+                    circuit_open = None if success else (now if failure_count >= max_failures else None)
+                    conn.execute(
+                        """
+                        INSERT INTO node_health (node_key, failure_count, circuit_open_since, 
+                            last_success_at, last_failure_at, egress_ip, latency_avg_ms, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (node_key, failure_count, circuit_open,
+                         now if success else None, None if success else now,
+                         egress_ip, latency_ms, now),
+                    )
+                else:
+                    # Update existing record
+                    failure_count = int(row["failure_count"])
+                    if success:
+                        failure_count = 0
+                        circuit_open = None
+                    else:
+                        failure_count += 1
+                        circuit_open = now if failure_count >= max_failures else row["circuit_open_since"]
+
+                    conn.execute(
+                        """
+                        UPDATE node_health SET
+                            failure_count = ?,
+                            circuit_open_since = ?,
+                            last_success_at = CASE WHEN ? THEN ? ELSE last_success_at END,
+                            last_failure_at = CASE WHEN NOT ? THEN ? ELSE last_failure_at END,
+                            egress_ip = CASE WHEN ? != '' THEN ? ELSE egress_ip END,
+                            latency_avg_ms = CASE WHEN ? IS NOT NULL THEN ? ELSE latency_avg_ms END,
+                            updated_at = ?
+                        WHERE node_key = ?
+                        """,
+                        (failure_count, circuit_open,
+                         success, now, success, now,
+                         egress_ip, egress_ip,
+                         latency_ms, latency_ms,
+                         now, node_key),
+                    )
+                conn.commit()
+
+                # Return updated record
+                row = conn.execute(
+                    "SELECT * FROM node_health WHERE node_key = ?",
+                    (node_key,),
+                ).fetchone()
+                return dict(row) if row else {}
+
+    def get_node_health(self, node_key: str) -> dict[str, Any] | None:
+        """Get node health state."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM node_health WHERE node_key = ?",
+                (node_key,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_node_health(self) -> list[dict[str, Any]]:
+        """List all node health records."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM node_health ORDER BY node_key"
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def delete_node_health(self, node_key: str) -> int:
+        """Delete a node health record."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM node_health WHERE node_key = ?",
+                    (node_key,),
+                )
+                conn.commit()
+                return cursor.rowcount
+
+    # ------------------------------------------------------------------
+    # Sticky Lease Methods
+    # ------------------------------------------------------------------
+
+    def upsert_sticky_lease(
+        self,
+        account: str,
+        pool_id: int,
+        exit_node_key: str,
+        egress_ip: str,
+        expires_at: str,
+        last_accessed: str,
+    ) -> dict[str, Any]:
+        """Create or update a sticky lease."""
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO sticky_leases (account, pool_id, exit_node_key, egress_ip, expires_at, last_accessed)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(account, pool_id) DO UPDATE SET
+                        exit_node_key = excluded.exit_node_key,
+                        egress_ip = excluded.egress_ip,
+                        expires_at = excluded.expires_at,
+                        last_accessed = excluded.last_accessed
+                    """,
+                    (account, pool_id, exit_node_key, egress_ip, expires_at, last_accessed),
+                )
+                conn.commit()
+        return self.get_sticky_lease(account, pool_id) or {}
+
+    def get_sticky_lease(self, account: str, pool_id: int) -> dict[str, Any] | None:
+        """Get a sticky lease."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM sticky_leases WHERE account = ? AND pool_id = ?",
+                (account, pool_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_sticky_leases(self, pool_id: int | None = None) -> list[dict[str, Any]]:
+        """List all sticky leases, optionally filtered by pool_id."""
+        with self._connect() as conn:
+            if pool_id is not None:
+                rows = conn.execute(
+                    "SELECT * FROM sticky_leases WHERE pool_id = ? ORDER BY account",
+                    (pool_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM sticky_leases ORDER BY pool_id, account"
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+    def delete_sticky_lease(self, account: str, pool_id: int) -> int:
+        """Delete a sticky lease."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM sticky_leases WHERE account = ? AND pool_id = ?",
+                    (account, pool_id),
+                )
+                conn.commit()
+                return cursor.rowcount
+
+    def cleanup_expired_leases(self) -> int:
+        """Delete expired sticky leases."""
+        now = _utc_now()
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM sticky_leases WHERE expires_at < ?",
+                    (now,),
+                )
+                conn.commit()
+                return cursor.rowcount
 
 
 def _utc_now() -> str:

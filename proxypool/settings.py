@@ -23,6 +23,8 @@ class AppSettings:
     resin_binary: str = "resin"
     resin_port: int = 2260
     resin_admin_token: str = ""
+    resin_proxy_token: str = ""
+    resin_auth_version: str = "V1"
     resin_data_dir: Path = Path("data/resin")
     resin_auto_start: bool = False
 
@@ -59,6 +61,8 @@ def load_settings() -> AppSettings:
     )
     resin_port = max(1, int(os.getenv("PROXYPOOL_RESIN_PORT", "2260")))
     resin_admin_token = os.getenv("PROXYPOOL_RESIN_ADMIN_TOKEN", "")
+    resin_proxy_token = os.getenv("PROXYPOOL_RESIN_PROXY_TOKEN", "")
+    resin_auth_version = os.getenv("PROXYPOOL_RESIN_AUTH_VERSION", "V1").strip().upper() or "V1"
     resin_data_dir = Path(os.getenv("PROXYPOOL_RESIN_DATA_DIR", str(project_root / "data" / "resin")))
     resin_auto_start = os.getenv("PROXYPOOL_RESIN_AUTO_START", "").strip().lower() in {"1", "true", "yes"}
 
@@ -79,6 +83,8 @@ def load_settings() -> AppSettings:
         resin_binary=resin_binary,
         resin_port=resin_port,
         resin_admin_token=resin_admin_token,
+        resin_proxy_token=resin_proxy_token,
+        resin_auth_version=resin_auth_version,
         resin_data_dir=resin_data_dir,
         resin_auto_start=resin_auto_start,
     )

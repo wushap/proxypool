@@ -51,15 +51,14 @@ class ResinClient:
         self,
         name: str,
         url: str,
-        format: str = "uri-lines",
-        interval_sec: int = 60,
+        update_interval: str = "5m0s",
     ) -> dict[str, Any]:
-        body = {
+        body: dict[str, Any] = {
             "name": name,
             "url": url,
-            "format": format,
-            "interval_sec": interval_sec,
         }
+        if update_interval:
+            body["update_interval"] = update_interval
         return self._request("POST", "/api/v1/subscriptions", body)
 
     def delete_subscription(self, sub_id: str) -> dict[str, Any]:
@@ -79,14 +78,11 @@ class ResinClient:
     def create_platform(
         self,
         name: str,
-        subscription_ids: list[str] | None = None,
         regex_filters: list[str] | None = None,
         region_filters: list[str] | None = None,
         allocation_policy: str = "BALANCED",
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"name": name}
-        if subscription_ids:
-            body["subscription_ids"] = subscription_ids
         if regex_filters:
             body["regex_filters"] = regex_filters
         if region_filters:

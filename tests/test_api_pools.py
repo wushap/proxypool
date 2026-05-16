@@ -134,3 +134,30 @@ async def test_resin_info_when_not_running(tmp_path: Path) -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/api/resin/info")
         assert resp.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_chain_status_uses_persisted_filters(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    app.state.storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/chain/status")
+
+    assert resp.status_code == 200
+    assert resp.json()["front_pool"]["regex_filters"] == ["front-.*"]
+
+
+@pytest.mark.anyio
+async def test_chain_pool_update_accepts_empty_filters_list(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/api/chain/pools/front")
+
+    assert resp.status_code == 200
+    assert resp.json()["front_pool"]["regex_filters"] == []

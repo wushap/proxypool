@@ -96,8 +96,6 @@ class ProxyPoolService:
             result = self.resin_client.create_subscription(
                 name=f"pool-{pool_id}",
                 url=pub_sub_url,
-                format="uri-lines",
-                interval_sec=60,
             )
             resin_sub_id = str(result.get("id") or result.get("subscription_id") or "")
             if resin_sub_id:
@@ -107,9 +105,10 @@ class ProxyPoolService:
 
         # Ensure Resin platform exists
         if not resin_platform_id:
+            region_filters = self._pool_to_region_filters(pool)
             result = self.resin_client.create_platform(
                 name=f"pool-{pool_id}",
-                subscription_ids=[resin_sub_id] if resin_sub_id else [],
+                region_filters=region_filters or None,
                 allocation_policy="BALANCED",
             )
             resin_platform_id = str(result.get("id") or result.get("platform_id") or "")
@@ -158,6 +157,13 @@ class ProxyPoolService:
                 self.storage.delete_published_subscription(int(pub_sub_id))
             except Exception:
                 pass
+
+    def _pool_to_region_filters(self, pool: dict[str, Any]) -> list[str]:
+        """Map pool geo_country filter to Resin region_filters (ISO 3166-1 alpha-2)."""
+        geo = str(pool.get("filters", {}).get("geo_country") or "").strip().lower()
+        if not geo or len(geo) != 2:
+            return []
+        return [geo]
 
     def _enrich_pool(self, pool: dict[str, Any]) -> dict[str, Any]:
         out = dict(pool)

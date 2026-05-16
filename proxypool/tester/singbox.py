@@ -326,6 +326,87 @@ class SingboxProber:
             finally:
                 _stop_process(proc)
 
+    def probe_with_front_proxy(
+        self,
+        node: dict[str, Any],
+        front_proxy: dict[str, Any],
+    ) -> ProbeResult:
+        key = str(node.get("normalized_key") or "")
+        if not key:
+            return ProbeResult(normalized_key="", available=False, error="missing normalized_key")
+
+        target_outbound = build_singbox_outbound(node, tag="probe-target")
+        if target_outbound is None:
+            return ProbeResult(normalized_key=key, available=False, error="unsupported target protocol")
+        front_outbound = build_singbox_outbound(front_proxy, tag="probe-front")
+        if front_outbound is None:
+            return ProbeResult(normalized_key=key, available=False, error="unsupported front protocol")
+        target_outbound["detour"] = "probe-front"
+
+        if shutil.which(self.binary) is None:
+            return ProbeResult(normalized_key=key, available=False, error="sing-box not found")
+
+        try:
+            local_port = _find_free_port()
+        except OSError as exc:
+            return ProbeResult(normalized_key=key, available=False, error=f"local socket unavailable: {exc}")
+
+        config = self._build_runtime_config_with_chain(
+            outbounds=[front_outbound, target_outbound],
+            final_tag="probe-target",
+            local_port=local_port,
+        )
+        with tempfile.TemporaryDirectory(prefix="pp-singbox-") as td:
+            config_path = Path(td) / "config.json"
+            config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+
+            proc = subprocess.Popen(
+                [self.binary, "run", "-c", str(config_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                if not self._wait_port("127.0.0.1", local_port, self.startup_timeout_sec):
+                    return ProbeResult(normalized_key=key, available=False, error="sing-box startup timeout")
+
+                curl = shutil.which("curl")
+                if curl is None:
+                    return ProbeResult(normalized_key=key, available=False, error="curl not found")
+
+                started = time.perf_counter()
+                cmd = [
+                    curl,
+                    "-sS",
+                    "-o",
+                    "/dev/null",
+                    "-w",
+                    "%{time_total}",
+                    "--max-time",
+                    str(int(self.timeout_sec)),
+                    "--proxy",
+                    f"socks5h://127.0.0.1:{local_port}",
+                    self.test_url,
+                ]
+                completed = subprocess.run(cmd, check=False, capture_output=True, text=True)
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+                if completed.returncode == 0:
+                    text = (completed.stdout or "").strip()
+                    latency_ms = _parse_curl_time_ms(text) or elapsed_ms
+                    unlocked, unlock_status = self._check_openai_unlock(local_port)
+                    return ProbeResult(
+                        normalized_key=key,
+                        available=True,
+                        latency_ms=latency_ms,
+                        openai_unlocked=unlocked,
+                        openai_status=unlock_status,
+                    )
+
+                error = (completed.stderr or "").strip() or f"curl exit={completed.returncode}"
+                return ProbeResult(normalized_key=key, available=False, error=error[:1000])
+            finally:
+                _stop_process(proc)
+
     async def probe_async(self, node: dict[str, Any]) -> ProbeResult:
         key = str(node.get("normalized_key") or "")
         if not key:
