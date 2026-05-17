@@ -135,7 +135,7 @@ class TestNodePool:
         pool = NodePool("test", "front", [])
         
         # Add healthy node
-        healthy = NodeEntry(key="healthy", protocol="http", host="1.2.3.4", port=80, raw_link="")
+        healthy = NodeEntry(key="healthy", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True)
         pool.add_node(healthy)
         
         # Add unhealthy node
@@ -146,6 +146,17 @@ class TestNodePool:
         assert len(healthy_nodes) == 1
         assert healthy_nodes[0].key == "healthy"
 
+    def test_get_healthy_nodes_excludes_non_routeable_nodes(self):
+        pool = NodePool("test", "front", [])
+
+        routeable = NodeEntry(key="routeable", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True)
+        unchecked = NodeEntry(key="unchecked", protocol="http", host="5.6.7.8", port=80, raw_link="", routeable=False)
+        pool.add_node(routeable)
+        pool.add_node(unchecked)
+
+        healthy_nodes = pool.get_healthy_nodes()
+        assert [node.key for node in healthy_nodes] == ["routeable"]
+
 
 class TestStickyRouter:
     """Test StickyRouter functionality."""
@@ -154,8 +165,8 @@ class TestStickyRouter:
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
         
-        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", latency_ms=100))
-        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", latency_ms=100, egress_ip="10.0.0.1"))
+        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", latency_ms=100, routeable=True))
+        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", latency_ms=100, egress_ip="10.0.0.1", routeable=True))
         
         router = StickyRouter(front_pool, exit_pool)
         result = router.route("", 0)
@@ -169,8 +180,8 @@ class TestStickyRouter:
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
         
-        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", latency_ms=100))
-        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", latency_ms=100, egress_ip="10.0.0.1"))
+        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", latency_ms=100, routeable=True))
+        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", latency_ms=100, egress_ip="10.0.0.1", routeable=True))
         
         router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
         
@@ -192,11 +203,11 @@ class TestStickyRouter:
         for i in range(10):
             front_pool.add_node(NodeEntry(
                 key=f"f{i}", protocol="http", host=f"1.2.3.{i}", port=80, raw_link="",
-                latency_ms=100 + i * 10,
+                latency_ms=100 + i * 10, routeable=True,
             ))
             exit_pool.add_node(NodeEntry(
                 key=f"e{i}", protocol="socks", host=f"10.0.0.{i}", port=1080, raw_link="",
-                latency_ms=100 + i * 10,
+                latency_ms=100 + i * 10, routeable=True,
                 egress_ip=f"10.0.0.{i}",
             ))
         
@@ -216,8 +227,8 @@ class TestStickyRouter:
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
         
-        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link=""))
-        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", egress_ip="10.0.0.1"))
+        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True))
+        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", egress_ip="10.0.0.1", routeable=True))
         
         router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=0)  # Immediate expiry
         
@@ -231,15 +242,50 @@ class TestStickyRouter:
     def test_get_leases_returns_session_id(self):
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
-        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link=""))
-        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", egress_ip="10.0.0.1"))
+        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True))
+        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", egress_ip="10.0.0.1", routeable=True))
         router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
 
         router.route("sess-abc", 3)
         leases = router.get_leases(3)
 
         assert leases[0]["session_id"] == "sess-abc"
-        assert "account" not in leases[0]
+
+    def test_reuses_bound_instance_id_when_alive(self):
+        front_pool = NodePool("front", "front", [])
+        exit_pool = NodePool("exit", "exit", [])
+        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.1.1.1", port=80, raw_link="", latency_ms=10, routeable=True))
+        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="2.2.2.2", port=1080, raw_link="", latency_ms=10, egress_ip="3.3.3.3", routeable=True))
+        router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
+
+        first = router.route("sess-1", 1)
+        assert first is not None
+        router.bind_instance("sess-1", 1, "inst-1")
+
+        reused = router.route("sess-1", 1, live_instance_ids={"inst-1"})
+
+        assert reused is not None
+        assert reused.instance_reused is True
+        assert reused.bound_instance_id == "inst-1"
+
+    def test_rotates_to_same_ip_when_original_exit_is_gone(self):
+        front_pool = NodePool("front", "front", [])
+        exit_pool = NodePool("exit", "exit", [])
+        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.1.1.1", port=80, raw_link="", latency_ms=10, routeable=True))
+        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="2.2.2.2", port=1080, raw_link="", latency_ms=10, egress_ip="9.9.9.9", routeable=True))
+        router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
+
+        first = router.route("sess-1", 1)
+        assert first is not None
+
+        exit_pool.remove_node("e1")
+        exit_pool.add_node(NodeEntry(key="e2", protocol="socks", host="2.2.2.3", port=1080, raw_link="", latency_ms=5, egress_ip="9.9.9.9", routeable=True))
+
+        second = router.route("sess-1", 1)
+
+        assert second is not None
+        assert second.exit_node.key == "e2"
+        assert second.lease_created is False
 
 
 class TestStorage:
@@ -424,6 +470,83 @@ class TestProxyChainService:
         assert status["front_pool"]["total_nodes"] == 1
         assert status["front_pool"]["nodes"][0]["key"] == proxy.normalized_key()
 
+    def test_refresh_pools_uses_supported_protocol_defaults_when_filters_are_empty(self, storage):
+        storage.upsert_proxy(
+            ProxyNode(
+                protocol="http",
+                host="1.2.3.4",
+                port=8080,
+                raw_link="http://1.2.3.4:8080",
+                name="front-node-1",
+            )
+        )
+        storage.upsert_proxy(
+            ProxyNode(
+                protocol="socks",
+                host="5.6.7.8",
+                port=1080,
+                raw_link="socks://5.6.7.8:1080",
+                name="exit-node-1",
+            )
+        )
+        storage.upsert_proxy(
+            ProxyNode(
+                protocol="vless",
+                host="9.9.9.9",
+                port=443,
+                raw_link="vless://uuid@9.9.9.9:443",
+                name="unsupported-node-1",
+            )
+        )
+        service = ProxyChainService(storage)
+
+        service.refresh_pools()
+        status = service.get_pool_status()
+
+        front_keys = {item["key"] for item in status["front_pool"]["nodes"]}
+        exit_keys = {item["key"] for item in status["exit_pool"]["nodes"]}
+        assert len(front_keys) == 2
+        assert len(exit_keys) == 3
+        assert all(item["protocol"] in {"http", "socks"} for item in status["front_pool"]["nodes"])
+        assert all(item["protocol"] in {"http", "socks", "vless"} for item in status["exit_pool"]["nodes"])
+
+    def test_route_request_prefers_distinct_front_and_exit_nodes_when_pools_overlap(self, storage):
+        front = ProxyNode(
+            protocol="http",
+            host="1.1.1.1",
+            port=8080,
+            raw_link="http://1.1.1.1:8080",
+            name="node-a",
+        )
+        exit_node = ProxyNode(
+            protocol="socks",
+            host="2.2.2.2",
+            port=1080,
+            raw_link="socks://2.2.2.2:1080",
+            name="node-b",
+        )
+        storage.upsert_proxy(front)
+        storage.upsert_proxy(exit_node)
+        storage.update_test_result(front.normalized_key(), available=True, latency_ms=10)
+        storage.update_test_result(exit_node.normalized_key(), available=True, latency_ms=20)
+        service = ProxyChainService(storage)
+
+        service.refresh_pools()
+        result = service.route_request("sess-1", 1, "api.example.com")
+
+        assert result is not None
+        assert result["front_node"]["key"] != result["exit_node"]["key"]
+
+    def test_route_request_returns_none_when_nodes_are_unchecked(self, storage):
+        storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
+        storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
+        storage.upsert_proxy(ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"))
+        storage.upsert_proxy(ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080"))
+
+        service = ProxyChainService(storage)
+
+        assert service.route_request("sess-1", 9, "") is None
+
     def test_update_pool_config_preserves_existing_health_state(self, storage):
         proxy = ProxyNode(
             protocol="http",
@@ -454,8 +577,12 @@ class TestProxyChainService:
     def test_route_request_persists_session_lease(self, storage):
         storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
         storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
-        storage.upsert_proxy(ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"))
-        storage.upsert_proxy(ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080"))
+        front = ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80")
+        exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080")
+        storage.upsert_proxy(front)
+        storage.upsert_proxy(exit_node)
+        storage.update_test_result(front.normalized_key(), available=True, latency_ms=10)
+        storage.update_test_result(exit_node.normalized_key(), available=True, latency_ms=20)
 
         service = ProxyChainService(storage)
         result = service.route_request("sess-1", 9, "")

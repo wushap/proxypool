@@ -6,6 +6,11 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+DEFAULT_PROTOCOLS_BY_POOL_TYPE: dict[str, set[str]] = {
+    "front": {"http", "socks", "ss"},
+    "exit": {"http", "socks", "ss", "trojan", "vless", "vmess", "hysteria2"},
+}
+
 
 @dataclass
 class NodeEntry:
@@ -24,6 +29,7 @@ class NodeEntry:
     egress_ip: str = ""
     egress_region: str = ""
     latency_ms: int | None = None
+    routeable: bool = False
     
     # Timestamps
     last_success_at: str = ""
@@ -59,6 +65,10 @@ class NodePool:
                     return True
         return False
 
+    def should_include_by_default(self, node_data: dict[str, Any]) -> bool:
+        protocol = str(node_data.get("protocol") or "").strip().lower()
+        return protocol in DEFAULT_PROTOCOLS_BY_POOL_TYPE.get(self.pool_type, set())
+
     def add_node(self, entry: NodeEntry) -> None:
         """Add a node to the pool."""
         with self._lock:
@@ -77,7 +87,7 @@ class NodePool:
     def get_healthy_nodes(self) -> list[NodeEntry]:
         """Get all healthy (non-circuit-open) nodes."""
         with self._lock:
-            return [n for n in self._nodes.values() if not n.circuit_open]
+            return [n for n in self._nodes.values() if not n.circuit_open and n.routeable]
     
     def get_all_nodes(self) -> list[NodeEntry]:
         """Get all nodes."""
@@ -125,7 +135,9 @@ class NodePool:
             for key, node_data in all_nodes.items():
                 name = node_data.get("name", "")
                 tags = node_data.get("tags", [])
-                if self.matches_node(key, name, tags):
+                if self.matches_node(key, name, tags) or (
+                    not self._compiled_filters and self.should_include_by_default(node_data)
+                ):
                     entry = NodeEntry(
                         key=key,
                         protocol=node_data.get("protocol", ""),

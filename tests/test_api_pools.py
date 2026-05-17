@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 
 import httpx
@@ -8,6 +9,12 @@ import pytest
 from proxypool.api.app import create_app
 from proxypool.models import ProxyNode
 from proxypool.settings import AppSettings
+
+
+def _pick_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def _make_settings(tmp_path: Path) -> AppSettings:
@@ -22,6 +29,8 @@ def _make_settings(tmp_path: Path) -> AppSettings:
         singbox_binary="sing-box",
         test_url="https://www.cloudflare.com/cdn-cgi/trace",
         api_key="",
+        http_gateway_default_host="127.0.0.1",
+        http_gateway_default_port=8899,
         backend_engine="singbox",
         backend_health_check_sec=30,
         backend_auto_restart_max=3,
@@ -174,6 +183,167 @@ async def test_app_exposes_chain_instance_manager(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_http_gateway_config_api_round_trip(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post("/api/pools", json={"name": "pool-a"})
+        pool_id = create_resp.json()["item"]["id"]
+
+        put_resp = await client.put(
+            "/api/gateway/http-config",
+            json={
+                "enabled": True,
+                "listen_host": "127.0.0.1",
+                "listen_port": 18899,
+                "default_pool_id": pool_id,
+                "sticky_ttl_sec": 7200,
+                "session_missing_action": "RANDOM",
+                "http_session_header_names": ["X-ProxyPool-Session"],
+                "http_session_query_names": ["session"],
+                "connect_session_header_names": ["X-ProxyPool-Session"],
+            },
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.json()["item"]["enabled"] is True
+
+        get_resp = await client.get("/api/gateway/http-config")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["item"]["listen_port"] == 18899
+
+
+@pytest.mark.anyio
+async def test_http_gateway_status_api_exposes_runtime_state(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/gateway/http-status")
+
+    assert resp.status_code == 200
+    assert "runtime" in resp.json()
+    assert "config" in resp.json()
+
+
+@pytest.mark.anyio
+async def test_http_gateway_config_update_starts_and_stops_runtime(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    transport = httpx.ASGITransport(app=app)
+    listen_port = _pick_free_port()
+
+    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
+    exit_node = ProxyNode(
+        protocol="socks",
+        host="2.2.2.2",
+        port=1080,
+        raw_link="socks://2.2.2.2:1080",
+        name="exit-1",
+    )
+    storage.upsert_proxy(front)
+    storage.upsert_proxy(exit_node)
+    storage.update_test_result(front.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(exit_node.normalized_key(), available=True, latency_ms=20)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post("/api/pools", json={"name": "pool-a"})
+        pool_id = create_resp.json()["item"]["id"]
+
+        put_resp = await client.put(
+            "/api/gateway/http-config",
+            json={
+                "enabled": True,
+                "listen_host": "127.0.0.1",
+                "listen_port": listen_port,
+                "default_pool_id": pool_id,
+                "sticky_ttl_sec": 3600,
+                "session_missing_action": "RANDOM",
+                "http_session_header_names": ["X-ProxyPool-Session"],
+                "http_session_query_names": ["session"],
+                "connect_session_header_names": ["X-ProxyPool-Session"],
+            },
+        )
+        assert put_resp.status_code == 200
+
+        status_resp = await client.get("/api/gateway/http-status")
+        assert status_resp.status_code == 200
+        assert status_resp.json()["runtime"]["running"] is True
+
+        disable_resp = await client.put(
+            "/api/gateway/http-config",
+            json={
+                "enabled": False,
+                "listen_host": "127.0.0.1",
+                "listen_port": listen_port,
+                "default_pool_id": pool_id,
+                "sticky_ttl_sec": 3600,
+                "session_missing_action": "RANDOM",
+                "http_session_header_names": ["X-ProxyPool-Session"],
+                "http_session_query_names": ["session"],
+                "connect_session_header_names": ["X-ProxyPool-Session"],
+            },
+        )
+        assert disable_resp.status_code == 200
+
+        stopped_resp = await client.get("/api/gateway/http-status")
+        assert stopped_resp.status_code == 200
+        assert stopped_resp.json()["runtime"]["running"] is False
+
+
+@pytest.mark.anyio
+async def test_http_gateway_start_failure_does_not_break_control_plane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+
+    pool = storage.create_proxy_pool(name="pool-a")
+    storage.set_app_setting(
+        "http_gateway_config_v1",
+        '{"enabled":true,"listen_host":"127.0.0.1","listen_port":18899,"default_pool_id":'
+        + str(pool["id"])
+        + ',"sticky_ttl_sec":3600,"session_missing_action":"RANDOM","http_session_header_names":["X-ProxyPool-Session"],"http_session_query_names":["session"],"connect_session_header_names":["X-ProxyPool-Session"]}',
+    )
+    app.state.forward_gateway.config = app.state.gateway_config_service.get_config()
+
+    async def broken_start() -> None:
+        app.state.gateway_runtime.last_error = "address already in use"
+        raise OSError("address already in use")
+
+    monkeypatch.setattr(app.state.gateway_runtime, "start", broken_start)
+    startup = next(handler for handler in app.router.on_startup if getattr(handler, "__name__", "") == "on_startup")
+    await startup()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/gateway/http-status")
+
+    assert resp.status_code == 200
+    assert resp.json()["runtime"]["running"] is False
+    assert "address already in use" in resp.json()["runtime"]["last_error"]
+
+
+@pytest.mark.anyio
+async def test_http_gateway_test_api_returns_result_shape(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/gateway/http-test",
+            json={"target_url": "https://example.com", "session_id": "sess-1"},
+        )
+
+    assert resp.status_code == 200
+    assert "ok" in resp.json()
+    assert "detail" in resp.json()
+
+
+@pytest.mark.anyio
 async def test_pool_chain_config_round_trip(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     app = create_app(settings)
@@ -243,8 +413,12 @@ async def test_pool_chain_lease_endpoints_and_chain_route_session_id(tmp_path: P
     storage = app.state.storage
     storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
     storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
-    storage.upsert_proxy(ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"))
-    storage.upsert_proxy(ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080"))
+    front = ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80")
+    exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080")
+    storage.upsert_proxy(front)
+    storage.upsert_proxy(exit_node)
+    storage.update_test_result(front.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(exit_node.normalized_key(), available=True, latency_ms=20)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -303,8 +477,12 @@ async def test_pool_chain_route_test_endpoint_uses_session_id(tmp_path: Path) ->
     storage = app.state.storage
     storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
     storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
-    storage.upsert_proxy(ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"))
-    storage.upsert_proxy(ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080"))
+    front = ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80")
+    exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080")
+    storage.upsert_proxy(front)
+    storage.upsert_proxy(exit_node)
+    storage.update_test_result(front.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(exit_node.normalized_key(), available=True, latency_ms=20)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

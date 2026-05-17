@@ -113,6 +113,15 @@ class ProxyChainService:
     def _rebuild_pools(self) -> None:
         """Rebuild both pools from all proxies in storage."""
         all_proxies = self.storage.list_proxies(limit=100000)
+        proxy_status = {
+            str(proxy.get("normalized_key") or ""): {
+                "available": bool(proxy.get("available")),
+                "latency_ms": proxy.get("latency_ms"),
+                "egress_ip": str(proxy.get("resolved_ip") or ""),
+            }
+            for proxy in all_proxies
+            if str(proxy.get("normalized_key") or "")
+        }
 
         # Convert to dict format for pool rebuild
         nodes_dict = {}
@@ -130,6 +139,8 @@ class ProxyChainService:
         
         front_matched = self.front_pool.rebuild(nodes_dict)
         exit_matched = self.exit_pool.rebuild(nodes_dict)
+        self._apply_probe_status(self.front_pool, proxy_status)
+        self._apply_probe_status(self.exit_pool, proxy_status)
         
         logger.info("Pools rebuilt: front=%s, exit=%s", len(front_matched), len(exit_matched))
 
@@ -154,6 +165,16 @@ class ProxyChainService:
                 exit_node.circuit_open = bool(record.get("circuit_open_since"))
                 exit_node.egress_ip = record.get("egress_ip", "")
                 exit_node.latency_ms = record.get("latency_avg_ms")
+                exit_node.routeable = exit_node.routeable or bool(record.get("last_success_at"))
+
+    def _apply_probe_status(self, pool: NodePool, proxy_status: dict[str, dict[str, Any]]) -> None:
+        for node in pool.get_all_nodes():
+            status = proxy_status.get(node.key, {})
+            node.routeable = bool(status.get("available"))
+            if status.get("latency_ms") is not None:
+                node.latency_ms = int(status["latency_ms"])
+            if status.get("egress_ip"):
+                node.egress_ip = str(status["egress_ip"])
 
     def _probe_exit_chain(self, front_node: NodeEntry, exit_node: NodeEntry) -> tuple[bool, str, int | None]:
         """Probe an exit node through a specific front node using sing-box."""
@@ -237,10 +258,16 @@ class ProxyChainService:
         session_id: str = "",
         pool_id: int = 0,
         target_domain: str = "",
+        live_instance_ids: set[str] | None = None,
     ) -> dict[str, Any] | None:
         """Route a request and return the chain configuration."""
         self.refresh_pools()
-        result = self.sticky_router.route(session_id, pool_id, target_domain)
+        result = self.sticky_router.route(
+            session_id,
+            pool_id,
+            target_domain,
+            live_instance_ids=live_instance_ids,
+        )
 
         if result is None:
             return None
@@ -265,6 +292,8 @@ class ProxyChainService:
             "front_node": self._node_summary(result.front_node),
             "exit_node": self._node_summary(result.exit_node),
             "lease_created": result.lease_created,
+            "bound_instance_id": result.bound_instance_id,
+            "instance_reused": result.instance_reused,
         }
 
     def bind_instance_to_session(self, session_id: str, pool_id: int, instance_id: str) -> dict[str, Any] | None:
@@ -285,7 +314,10 @@ class ProxyChainService:
             )
             return self.storage.get_sticky_lease(session_id, pool_id)
 
-        lease.instance_id = str(instance_id or "")
+        self.sticky_router.bind_instance(session_id, pool_id, instance_id)
+        lease = self.sticky_router._leases.get((session_id, pool_id))
+        if lease is None:
+            return self.storage.get_sticky_lease(session_id, pool_id)
         self.storage.upsert_sticky_lease(
             session_id=session_id,
             pool_id=pool_id,

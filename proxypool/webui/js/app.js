@@ -103,6 +103,23 @@ const app = createApp({
           source: "", protocol: "", latency_min: "", latency_max: "", freshness_hours: "",
         },
       },
+      gatewayConfigForm: {
+        enabled: false,
+        listen_host: "127.0.0.1",
+        listen_port: 8899,
+        default_pool_id: 0,
+        sticky_ttl_sec: 3600,
+        session_missing_action: "RANDOM",
+        http_session_header_names_text: "X-ProxyPool-Session",
+        http_session_query_names_text: "session",
+        connect_session_header_names_text: "X-ProxyPool-Session",
+      },
+      gatewayStatus: null,
+      gatewayTestForm: {
+        target_url: "https://www.cloudflare.com/cdn-cgi/trace",
+        session_id: "",
+      },
+      gatewayTestResult: null,
       selectedPoolIdForChain: 0,
       selectedPoolNameForChain: "",
       poolChainForm: {
@@ -293,12 +310,6 @@ const app = createApp({
     paginatedBackendEvents() { return this.paginateItems(this.backendEvents || [], "backendEvents"); },
     backendInstances() { return Array.isArray(this.backendStatus?.instances) ? this.backendStatus.instances : []; },
     paginatedProxies() { return this.paginateItems(this.proxies || [], "proxies"); },
-    gatewayPreviewUrl() {
-      const poolName = String(this.selectedPoolNameForChain || "").trim();
-      const prefix = String(this.poolChainForm.gateway_path_prefix || "").trim();
-      if (!poolName || !prefix) return "";
-      return `${this.gatewayPoolPath(poolName)}/https/example.com/path/to/resource`;
-    },
   },
 
   methods: {
@@ -944,6 +955,9 @@ const app = createApp({
     poolRouteTestApiUrl(poolId, params = "") {
       return `/api/pools/${poolId}/chain/route-test${params ? `?${params}` : ""}`;
     },
+    gatewayApiBase() {
+      return "/api/gateway";
+    },
     gatewayPoolPath(poolName) {
       return `/proxy/${encodeURIComponent(poolName)}`;
     },
@@ -1019,6 +1033,67 @@ const app = createApp({
       this.selectPoolForChain(data.item || {});
       await this.loadProxyPools();
       this.setMessage("池级链路配置已保存");
+    },
+    async loadGatewayConfig() {
+      const resp = await fetch(`${this.gatewayApiBase()}/http-config`);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "加载网关配置失败");
+      const item = data.item || {};
+      this.gatewayConfigForm = {
+        enabled: item.enabled === true,
+        listen_host: String(item.listen_host || "127.0.0.1"),
+        listen_port: Number(item.listen_port || 8899),
+        default_pool_id: Number(item.default_pool_id || 0),
+        sticky_ttl_sec: Number(item.sticky_ttl_sec || 3600),
+        session_missing_action: String(item.session_missing_action || "RANDOM"),
+        http_session_header_names_text: this.listTextToMultiline(item.http_session_header_names),
+        http_session_query_names_text: this.listTextToMultiline(item.http_session_query_names),
+        connect_session_header_names_text: this.listTextToMultiline(item.connect_session_header_names),
+      };
+    },
+    async saveGatewayConfig() {
+      const payload = {
+        enabled: this.gatewayConfigForm.enabled === true,
+        listen_host: String(this.gatewayConfigForm.listen_host || "").trim() || "127.0.0.1",
+        listen_port: Math.max(1, Number(this.gatewayConfigForm.listen_port || 8899)),
+        default_pool_id: Math.max(0, Number(this.gatewayConfigForm.default_pool_id || 0)),
+        sticky_ttl_sec: Math.max(1, Number(this.gatewayConfigForm.sticky_ttl_sec || 3600)),
+        session_missing_action: String(this.gatewayConfigForm.session_missing_action || "RANDOM").trim() || "RANDOM",
+        http_session_header_names: this.parseMultilineList(this.gatewayConfigForm.http_session_header_names_text),
+        http_session_query_names: this.parseMultilineList(this.gatewayConfigForm.http_session_query_names_text),
+        connect_session_header_names: this.parseMultilineList(this.gatewayConfigForm.connect_session_header_names_text),
+      };
+      const resp = await fetch(`${this.gatewayApiBase()}/http-config`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "保存网关配置失败");
+      await this.loadGatewayConfig();
+      await this.loadGatewayStatus();
+      this.setMessage("HTTP 网关配置已保存");
+    },
+    async loadGatewayStatus() {
+      const resp = await fetch(`${this.gatewayApiBase()}/http-status`);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "加载网关状态失败");
+      this.gatewayStatus = data;
+    },
+    async runGatewayTest() {
+      const resp = await fetch(`${this.gatewayApiBase()}/http-test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target_url: String(this.gatewayTestForm.target_url || "").trim(),
+          session_id: String(this.gatewayTestForm.session_id || "").trim(),
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "执行网关测试失败");
+      this.gatewayTestResult = data;
+      if (data.ok) this.setMessage("HTTP 网关测试成功");
+      else this.setMessage(data.detail || "HTTP 网关测试失败", true);
     },
     async savePoolSessionRule(poolId = this.selectedPoolIdForChain) {
       const id = Number(poolId || 0);
@@ -1147,6 +1222,10 @@ const app = createApp({
     async onSavePoolSessionRule(poolId) { await this.runWithButtonState(`savePoolSessionRule-${poolId || this.selectedPoolIdForChain}`, () => this.savePoolSessionRule(poolId)); },
     async onDeletePoolSessionRule(urlPrefix, poolId) { await this.runWithButtonState(`deletePoolSessionRule-${poolId || this.selectedPoolIdForChain}-${urlPrefix}`, () => this.deletePoolSessionRule(urlPrefix, poolId)); },
     async onTestPoolRoute(poolId) { await this.runWithButtonState(`testPoolRoute-${poolId || this.selectedPoolIdForChain}`, () => this.testPoolRoute(poolId)); },
+    async onSaveGatewayConfig() { await this.runWithButtonState("saveGatewayConfig", () => this.saveGatewayConfig()); },
+    async onLoadGatewayConfig() { await this.runWithButtonState("loadGatewayConfig", () => this.loadGatewayConfig()); },
+    async onLoadGatewayStatus() { await this.runWithButtonState("loadGatewayStatus", () => this.loadGatewayStatus()); },
+    async onRunGatewayTest() { await this.runWithButtonState("runGatewayTest", () => this.runGatewayTest()); },
 
     // --- Chain Service ---
     async loadChainStatus() {
@@ -2201,6 +2280,8 @@ const app = createApp({
     await this.loadPublishedSubscriptions();
     await this.loadSubscriptionUpdateProxy();
     await this.loadBackendStatus();
+    await this.loadGatewayConfig();
+    await this.loadGatewayStatus();
   },
 
   unmounted() { this.stopTaskPolling(); },

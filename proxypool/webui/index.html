@@ -594,146 +594,102 @@
                   </div>
                 </div>
 
-                <h3 class="section-divider">池级链路与统一网关</h3>
-                <p class="form-hint" style="margin-bottom: 12px;">为单个代理池配置粘性会话、统一网关入口和业务会话头规则。只有配置了精确网关前缀的池才会响应统一 HTTP 网关。</p>
+                <h3 class="section-divider">全局 HTTP 代理网关</h3>
+                <p class="form-hint" style="margin-bottom: 12px;">用户只需要配置一个标准 HTTP/HTTPS 代理地址，网关内部决定默认池和粘性路由。</p>
 
                 <div class="card" style="margin-bottom: 12px;">
                   <div class="card-body">
                     <div class="settings-row">
-                      <div class="form-group" style="flex: 2;">
-                        <label class="form-label">选择代理池</label>
-                        <select :value="selectedPoolIdForChain" @change="onSelectPoolForChain(proxyPools.find(item => Number(item.id) === Number($event.target.value)) || null)" class="select">
-                          <option value="0">请选择</option>
-                          <option v-for="item in proxyPools" :key="'chain-pool-' + item.id" :value="item.id">{{ item.id }} · {{ item.name }}</option>
-                        </select>
-                      </div>
-                      <div class="form-group" style="flex: 2;">
-                        <label class="form-label">统一网关预览</label>
-                        <input :value="gatewayPreviewUrl || '-'" type="text" readonly class="input mono" />
-                      </div>
-                      <button @click="onLoadPoolSessionRules()" :disabled="!selectedPoolIdForChain || isActionRunning('loadPoolSessionRules-' + selectedPoolIdForChain)" class="btn btn-secondary self-end">刷新规则</button>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="card" style="margin-bottom: 12px;" v-if="selectedPoolIdForChain">
-                  <div class="card-body">
-                    <h3 class="settings-title">链路配置</h3>
-                    <div class="settings-row">
                       <div class="form-group" style="flex: 1;">
-                        <label class="form-label">启用链路</label>
-                        <select v-model="poolChainForm.chain_enabled" class="select">
-                          <option :value="true">启用</option>
+                        <label class="form-label">启用</label>
+                        <select v-model="gatewayConfigForm.enabled" class="select">
                           <option :value="false">关闭</option>
+                          <option :value="true">开启</option>
                         </select>
                       </div>
                       <div class="form-group" style="flex: 1;">
-                        <label class="form-label">粘性 TTL(秒)</label>
-                        <input v-model.number="poolChainForm.sticky_ttl_sec" type="number" min="1" class="input" />
+                        <label class="form-label">监听地址</label>
+                        <input v-model.trim="gatewayConfigForm.listen_host" class="input mono" />
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">监听端口</label>
+                        <input v-model.number="gatewayConfigForm.listen_port" type="number" min="1" class="input mono" />
+                      </div>
+                      <div class="form-group" style="flex: 1.4;">
+                        <label class="form-label">默认池</label>
+                        <select v-model.number="gatewayConfigForm.default_pool_id" class="select">
+                          <option :value="0">未选择</option>
+                          <option v-for="item in proxyPools" :key="'gateway-pool-' + item.id" :value="Number(item.id)">{{ item.name }} (#{{ item.id }})</option>
+                        </select>
                       </div>
                       <div class="form-group" style="flex: 1;">
                         <label class="form-label">缺失会话动作</label>
-                        <select v-model="poolChainForm.session_missing_action" class="select">
+                        <select v-model="gatewayConfigForm.session_missing_action" class="select">
                           <option value="RANDOM">RANDOM</option>
                           <option value="REJECT">REJECT</option>
                         </select>
                       </div>
-                      <div class="form-group" style="flex: 2;">
-                        <label class="form-label">统一网关前缀</label>
-                        <input v-model.trim="poolChainForm.gateway_path_prefix" type="text" placeholder="/proxy/pool-a" class="input mono" />
-                      </div>
-                      <button @click="onSavePoolChainConfig()" :disabled="isActionRunning('savePoolChain-' + selectedPoolIdForChain)" class="btn btn-primary self-end">保存链路配置</button>
+                      <button @click="onSaveGatewayConfig()" :disabled="isActionRunning('saveGatewayConfig')" class="btn btn-primary self-end">保存网关配置</button>
                     </div>
                     <div class="settings-row" style="margin-top: 8px;">
                       <div class="form-group" style="flex: 1;">
-                        <label class="form-label">显式会话头</label>
-                        <textarea v-model="poolChainForm.session_header_names_text" class="textarea mono" style="height: 88px;" placeholder="X-ProxyPool-Session&#10;X-Session-Id"></textarea>
+                        <label class="form-label">HTTP 会话头</label>
+                        <textarea v-model="gatewayConfigForm.http_session_header_names_text" class="textarea mono" style="height: 88px;" placeholder="X-ProxyPool-Session"></textarea>
                       </div>
                       <div class="form-group" style="flex: 1;">
-                        <label class="form-label">显式会话 Query</label>
-                        <textarea v-model="poolChainForm.session_query_param_names_text" class="textarea mono" style="height: 88px;" placeholder="session&#10;sid"></textarea>
+                        <label class="form-label">HTTP 会话 Query</label>
+                        <textarea v-model="gatewayConfigForm.http_session_query_names_text" class="textarea mono" style="height: 88px;" placeholder="session"></textarea>
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">CONNECT 会话头</label>
+                        <textarea v-model="gatewayConfigForm.connect_session_header_names_text" class="textarea mono" style="height: 88px;" placeholder="X-ProxyPool-Session"></textarea>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div class="settings-grid" v-if="selectedPoolIdForChain">
+                <div class="settings-grid">
                   <div class="card">
                     <div class="card-body">
-                      <h3 class="settings-title">会话规则</h3>
-                      <div class="settings-row">
-                        <div class="form-group" style="flex: 1.6;">
-                          <label class="form-label">URL 前缀</label>
-                          <input v-model.trim="poolSessionRuleForm.url_prefix" type="text" placeholder="api.example.com/v1/private" class="input mono" />
+                      <h3 class="settings-title">接入方式</h3>
+                      <p class="form-hint">HTTP proxy = {{ gatewayConfigForm.listen_host }}:{{ gatewayConfigForm.listen_port }}</p>
+                      <p class="form-hint">HTTPS proxy = {{ gatewayConfigForm.listen_host }}:{{ gatewayConfigForm.listen_port }}</p>
+                      <button @click="onLoadGatewayStatus()" :disabled="isActionRunning('loadGatewayStatus')" class="btn btn-secondary">刷新网关状态</button>
+                      <div v-if="gatewayStatus" style="margin-top: 12px;">
+                        <div class="status-bar">
+                          <div class="status-item">
+                            <span class="text-muted">运行状态</span>
+                            <span class="badge" :class="gatewayStatus.runtime?.running ? 'badge-success' : 'badge-neutral'">{{ gatewayStatus.runtime?.running ? 'RUNNING' : 'STOPPED' }}</span>
+                          </div>
+                          <div class="status-item">
+                            <span class="text-muted">租约数</span>
+                            <span class="mono text-xs">{{ (gatewayStatus.leases || []).length }}</span>
+                          </div>
+                          <div class="status-item">
+                            <span class="text-muted">实例数</span>
+                            <span class="mono text-xs">{{ (gatewayStatus.instances || []).length }}</span>
+                          </div>
                         </div>
-                        <div class="form-group" style="flex: 1.4;">
-                          <label class="form-label">规则头列表</label>
-                          <textarea v-model="poolSessionRuleForm.headers_text" class="textarea mono" style="height: 88px;" placeholder="Authorization&#10;X-Biz-Session"></textarea>
-                        </div>
-                        <button @click="onSavePoolSessionRule()" :disabled="isActionRunning('savePoolSessionRule-' + selectedPoolIdForChain)" class="btn btn-primary self-end">保存规则</button>
-                      </div>
-                      <div class="table-wrap" style="margin-top: 12px;">
-                        <table class="data-table data-table-compact">
-                          <thead>
-                            <tr>
-                              <th>URL 前缀</th>
-                              <th>规则头</th>
-                              <th style="width: 120px;">操作</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <tr v-for="item in poolSessionRules" :key="'rule-' + item.url_prefix">
-                              <td class="mono text-xs">{{ item.url_prefix }}</td>
-                              <td class="mono text-xs">{{ (item.headers || []).join(', ') || '-' }}</td>
-                              <td>
-                                <div class="btn-group">
-                                  <button @click="usePoolSessionRule(item)" class="btn btn-xs btn-ghost">编辑</button>
-                                  <button @click="onDeletePoolSessionRule(item.url_prefix)" :disabled="isActionRunning('deletePoolSessionRule-' + selectedPoolIdForChain + '-' + item.url_prefix)" class="btn btn-xs btn-danger">删除</button>
-                                </div>
-                              </td>
-                            </tr>
-                            <tr v-if="!poolSessionRules.length">
-                              <td colspan="3" class="text-xs text-muted">暂无规则。按 host/path 最长前缀匹配业务头。</td>
-                            </tr>
-                          </tbody>
-                        </table>
                       </div>
                     </div>
                   </div>
 
                   <div class="card">
                     <div class="card-body">
-                      <h3 class="settings-title">池级 Route Test</h3>
+                      <h3 class="settings-title">网关测试</h3>
                       <div class="settings-row">
                         <div class="form-group" style="flex: 1;">
-                          <label class="form-label">会话ID</label>
-                          <input v-model="poolRouteTest.session_id" type="text" placeholder="留空则随机路由" class="input" />
+                          <label class="form-label">目标 URL</label>
+                          <input v-model.trim="gatewayTestForm.target_url" type="text" placeholder="https://www.cloudflare.com/cdn-cgi/trace" class="input mono" />
                         </div>
                         <div class="form-group" style="flex: 1;">
-                          <label class="form-label">目标域名</label>
-                          <input v-model="poolRouteTest.target_domain" type="text" placeholder="api.example.com" class="input" />
+                          <label class="form-label">会话 ID</label>
+                          <input v-model.trim="gatewayTestForm.session_id" type="text" placeholder="留空则按配置处理" class="input mono" />
                         </div>
-                        <button @click="onTestPoolRoute()" :disabled="isActionRunning('testPoolRoute-' + selectedPoolIdForChain)" class="btn btn-secondary self-end">测试路由</button>
+                        <button @click="onRunGatewayTest()" :disabled="isActionRunning('runGatewayTest')" class="btn btn-secondary self-end">测试网关</button>
                       </div>
-                      <div v-if="poolRouteTestResult" style="margin-top: 12px;">
-                        <div class="status-bar">
-                          <div class="status-item">
-                            <span class="text-muted">前置节点</span>
-                            <span class="mono text-xs">{{ poolRouteTestResult.front_node?.name || poolRouteTestResult.front_node?.key }}</span>
-                          </div>
-                          <div class="status-item">
-                            <span class="text-muted">后置节点</span>
-                            <span class="mono text-xs">{{ poolRouteTestResult.exit_node?.name || poolRouteTestResult.exit_node?.key }}</span>
-                          </div>
-                          <div class="status-item">
-                            <span class="text-muted">出口IP</span>
-                            <span class="mono text-xs">{{ poolRouteTestResult.exit_node?.egress_ip || '-' }}</span>
-                          </div>
-                          <div class="status-item">
-                            <span class="text-muted">创建租约</span>
-                            <span class="badge" :class="poolRouteTestResult.lease_created ? 'badge-success' : 'badge-neutral'">{{ poolRouteTestResult.lease_created ? '是' : '否' }}</span>
-                          </div>
-                        </div>
+                      <div v-if="gatewayTestResult" style="margin-top: 12px;">
+                        <pre class="mono text-xs" style="white-space: pre-wrap;">{{ JSON.stringify(gatewayTestResult, null, 2) }}</pre>
                       </div>
                     </div>
                   </div>
