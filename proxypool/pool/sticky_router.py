@@ -83,8 +83,7 @@ class StickyRouter:
                     return result
         
         # Fall back to P2C selection
-        front = self._p2c_select(front_nodes, target_domain)
-        exit_node = self._p2c_select(exit_nodes, target_domain)
+        front, exit_node = self._select_distinct_pair(front_nodes, exit_nodes, target_domain)
         
         if not front or not exit_node:
             return None
@@ -144,7 +143,7 @@ class StickyRouter:
             return None
 
         # Select a front node
-        front = self._p2c_select(front_nodes, "")
+        front = self._select_front_for_exit(front_nodes, exit_node)
         if front is None:
             return None
 
@@ -165,6 +164,29 @@ class StickyRouter:
             exit_node=exit_node,
             bound_instance_id=lease.instance_id,
         )
+
+    def _select_distinct_pair(
+        self,
+        front_nodes: list[NodeEntry],
+        exit_nodes: list[NodeEntry],
+        target_domain: str,
+    ) -> tuple[NodeEntry | None, NodeEntry | None]:
+        exit_node = self._p2c_select(exit_nodes, target_domain)
+        if exit_node is None:
+            return None, None
+        front = self._select_front_for_exit(front_nodes, exit_node)
+        if front is not None:
+            return front, exit_node
+
+        remaining_exits = [node for node in exit_nodes if node.key != exit_node.key]
+        fallback_exit = self._p2c_select(remaining_exits, target_domain)
+        if fallback_exit is None:
+            return None, None
+        return self._select_front_for_exit(front_nodes, fallback_exit), fallback_exit
+
+    def _select_front_for_exit(self, front_nodes: list[NodeEntry], exit_node: NodeEntry) -> NodeEntry | None:
+        candidates = [node for node in front_nodes if node.key != exit_node.key]
+        return self._p2c_select(candidates, "")
     
     def _find_same_ip_exit(self, egress_ip: str, exit_nodes: list[NodeEntry]) -> NodeEntry | None:
         """Find an exit node with the same egress IP."""

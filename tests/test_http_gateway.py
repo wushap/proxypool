@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import socket
 from pathlib import Path
 import time
 
@@ -19,16 +21,32 @@ class FakeBackend:
     def __init__(self) -> None:
         self.started: list[str] = []
         self.stopped: list[str] = []
+        self.listeners: dict[str, socket.socket] = {}
 
     def build_config(self, spec):
         return {"listeners": [{"type": spec.inbound_type, "port": spec.port}]}
 
     def start(self, spec):
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((spec.listen, spec.port))
+        listener.listen(1)
+        previous = self.listeners.pop(spec.instance_id, None)
+        if previous is not None:
+            previous.close()
+        self.listeners[spec.instance_id] = listener
         self.started.append(spec.instance_id)
-        return StartedInstance(pid=999, config_file=Path("/tmp/test.yaml"), log_file=Path("/tmp/test.log"))
+        return StartedInstance(pid=os.getpid(), config_file=Path("/tmp/test.yaml"), log_file=Path("/tmp/test.log"))
 
     def stop(self, instance_id: str) -> None:
         self.stopped.append(instance_id)
+        listener = self.listeners.pop(instance_id, None)
+        if listener is not None:
+            listener.close()
+
+    def close(self) -> None:
+        for instance_id in list(self.listeners):
+            self.stop(instance_id)
 
 
 def test_pool_session_rule_round_trip(tmp_path: Path) -> None:
@@ -139,51 +157,54 @@ async def test_unified_gateway_strips_internal_session_header_and_creates_lease(
         transport=transport,
     )
 
-    response = await gateway.handle(
-        method="GET",
-        pool_name="pool-a",
-        scheme="https",
-        target_host="api.example.com",
-        target_path="/v1/chat",
-        headers={
-            "X-ProxyPool-Session": "sess-1",
-            "Authorization": "Bearer keep-me",
-        },
-        query_params={},
-        body=b"",
-    )
+    try:
+        response = await gateway.handle(
+            method="GET",
+            pool_name="pool-a",
+            scheme="https",
+            target_host="api.example.com",
+            target_path="/v1/chat",
+            headers={
+                "X-ProxyPool-Session": "sess-1",
+                "Authorization": "Bearer keep-me",
+            },
+            query_params={},
+            body=b"",
+        )
 
-    assert response.status_code == 200
-    assert captured["headers"]["authorization"] == "Bearer keep-me"
-    assert "x-proxypool-session" not in captured["headers"]
+        assert response.status_code == 200
+        assert captured["headers"]["authorization"] == "Bearer keep-me"
+        assert "x-proxypool-session" not in captured["headers"]
 
-    lease = storage.get_sticky_lease("sess-1", pool_id)
-    assert lease is not None
-    assert lease["instance_id"] != ""
-    first_last_accessed = lease["last_accessed"]
-    assert chain_service.get_leases(pool_id)[0]["instance_id"] != ""
+        lease = storage.get_sticky_lease("sess-1", pool_id)
+        assert lease is not None
+        assert lease["instance_id"] != ""
+        first_last_accessed = lease["last_accessed"]
+        assert chain_service.get_leases(pool_id)[0]["instance_id"] != ""
 
-    time.sleep(0.01)
+        time.sleep(0.01)
 
-    second = await gateway.handle(
-        method="GET",
-        pool_name="pool-a",
-        scheme="https",
-        target_host="api.example.com",
-        target_path="/v1/chat",
-        headers={
-            "X-ProxyPool-Session": "sess-1",
-            "Authorization": "Bearer keep-me",
-        },
-        query_params={},
-        body=b"",
-    )
-    assert second.status_code == 200
+        second = await gateway.handle(
+            method="GET",
+            pool_name="pool-a",
+            scheme="https",
+            target_host="api.example.com",
+            target_path="/v1/chat",
+            headers={
+                "X-ProxyPool-Session": "sess-1",
+                "Authorization": "Bearer keep-me",
+            },
+            query_params={},
+            body=b"",
+        )
+        assert second.status_code == 200
 
-    updated_lease = storage.get_sticky_lease("sess-1", pool_id)
-    assert updated_lease is not None
-    assert updated_lease["instance_id"] == lease["instance_id"]
-    assert updated_lease["last_accessed"] != first_last_accessed
+        updated_lease = storage.get_sticky_lease("sess-1", pool_id)
+        assert updated_lease is not None
+        assert updated_lease["instance_id"] == lease["instance_id"]
+        assert updated_lease["last_accessed"] != first_last_accessed
+    finally:
+        backend.close()
 
 
 def test_chain_instance_manager_can_ensure_running_instance(tmp_path: Path) -> None:
@@ -200,25 +221,27 @@ def test_chain_instance_manager_can_ensure_running_instance(tmp_path: Path) -> N
     storage.upsert_proxy(exit_node)
     backend = FakeBackend()
     manager = ChainInstanceManager(storage=storage, backend=backend)
+    try:
+        first = manager.ensure_instance(
+            pool_id=1,
+            front_node_key=front.normalized_key(),
+            exit_node_key=exit_node.normalized_key(),
+            inbound_type="http",
+        )
+        assert first["status"] == "running"
 
-    first = manager.ensure_instance(
-        pool_id=1,
-        front_node_key=front.normalized_key(),
-        exit_node_key=exit_node.normalized_key(),
-        inbound_type="http",
-    )
-    assert first["status"] == "running"
+        stopped = manager.stop_instance(first["instance_id"])
+        assert stopped["status"] == "stopped"
 
-    stopped = manager.stop_instance(first["instance_id"])
-    assert stopped["status"] == "stopped"
-
-    second = manager.ensure_instance(
-        pool_id=1,
-        front_node_key=front.normalized_key(),
-        exit_node_key=exit_node.normalized_key(),
-        inbound_type="http",
-    )
-    assert second["instance_id"] == first["instance_id"]
-    assert second["port"] == first["port"]
-    assert second["status"] == "running"
-    assert backend.started.count(first["instance_id"]) == 2
+        second = manager.ensure_instance(
+            pool_id=1,
+            front_node_key=front.normalized_key(),
+            exit_node_key=exit_node.normalized_key(),
+            inbound_type="http",
+        )
+        assert second["instance_id"] == first["instance_id"]
+        assert second["port"] == first["port"]
+        assert second["status"] == "running"
+        assert backend.started.count(first["instance_id"]) == 2
+    finally:
+        backend.close()

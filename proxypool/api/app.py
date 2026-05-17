@@ -164,7 +164,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def on_startup() -> None:
         app.state.backend_health_task = asyncio.create_task(_backend_health_loop())
         if gateway_config_service.get_config().enabled:
-            await gateway_runtime.start()
+            try:
+                await gateway_runtime.start()
+            except Exception:
+                pass
         # Start Resin if it was running before (persisted) or resin_auto_start is set.
         if resin_manager.get_desired_running() or cfg.resin_auto_start:
             if not resin_manager.is_running():
@@ -247,6 +250,14 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def update_http_gateway_config(body: HttpGatewayConfigRequest) -> dict:
         item = gateway_config_service.update_config(**body.model_dump())
         app.state.forward_gateway.config = item
+        app.state.chain_service.sticky_router.sticky_ttl_sec = int(item.sticky_ttl_sec)
+        if item.enabled:
+            try:
+                await gateway_runtime.start()
+            except Exception:
+                pass
+        else:
+            await gateway_runtime.stop()
         return {"item": asdict(item)}
 
     @app.get("/api/gateway/http-status")

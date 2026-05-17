@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -33,10 +34,14 @@ class MihomoEgressBackend:
         config_file.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
         log_handle = log_file.open("a", encoding="utf-8")
+        env = dict(os.environ)
+        env["HOME"] = str(self.runtime_dir)
+        env["XDG_CONFIG_HOME"] = str(self.runtime_dir)
         process = subprocess.Popen(
             [self.binary, "-f", str(config_file)],
             stdout=log_handle,
             stderr=subprocess.STDOUT,
+            env=env,
         )
         self._processes[spec.instance_id] = process
         return StartedInstance(pid=int(process.pid), config_file=config_file, log_file=log_file)

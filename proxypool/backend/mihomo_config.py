@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import unquote
 
 from proxypool.backend.egress_backend import ChainInstanceSpec
 
@@ -53,10 +54,12 @@ def _build_mihomo_proxy(proxy: dict[str, Any], name: str, dialer_proxy: str | No
     if protocol == "http":
         item["type"] = "http"
         _apply_auth(item, extra)
+        _apply_common_tls(item, extra)
         return item
     if protocol == "socks":
         item["type"] = "socks5"
         _apply_auth(item, extra)
+        _apply_common_tls(item, extra)
         return item
     if protocol == "ss":
         cipher = str(extra.get("cipher") or "").strip()
@@ -66,6 +69,8 @@ def _build_mihomo_proxy(proxy: dict[str, Any], name: str, dialer_proxy: str | No
         item["type"] = "ss"
         item["cipher"] = cipher
         item["password"] = password
+        _apply_common_tls(item, extra)
+        _apply_network_opts(item, extra)
         return item
     if protocol == "trojan":
         password = str(extra.get("password") or "").strip()
@@ -73,18 +78,130 @@ def _build_mihomo_proxy(proxy: dict[str, Any], name: str, dialer_proxy: str | No
             raise RuntimeError("mihomo trojan proxy requires password")
         item["type"] = "trojan"
         item["password"] = password
-        sni = str(extra.get("sni") or extra.get("peer") or "").strip()
-        if sni:
-            item["sni"] = sni
+        _apply_common_tls(item, extra)
+        _apply_network_opts(item, extra)
+        return item
+    if protocol == "vless":
+        uuid = str(extra.get("uuid") or "").strip()
+        if not uuid:
+            raise RuntimeError("mihomo vless proxy requires uuid")
+        item["type"] = "vless"
+        item["uuid"] = uuid
+        flow = str(extra.get("flow") or "").strip()
+        if flow:
+            item["flow"] = flow
+        _apply_common_tls(item, extra)
+        _apply_network_opts(item, extra)
+        return item
+    if protocol == "vmess":
+        uuid = str(extra.get("uuid") or "").strip()
+        if not uuid:
+            raise RuntimeError("mihomo vmess proxy requires uuid")
+        item["type"] = "vmess"
+        item["uuid"] = uuid
+        alter_id = int(extra.get("alterId") or extra.get("alter_id") or 0)
+        if alter_id > 0:
+            item["alterId"] = alter_id
+        item["cipher"] = str(extra.get("cipher") or extra.get("security") or "auto").strip() or "auto"
+        _apply_common_tls(item, extra)
+        _apply_network_opts(item, extra)
+        return item
+    if protocol == "hysteria2":
+        password = str(extra.get("password") or "").strip()
+        if not password:
+            raise RuntimeError("mihomo hysteria2 proxy requires password")
+        item["type"] = "hysteria2"
+        item["password"] = password
+        _apply_common_tls(item, extra)
+        obfs = str(extra.get("obfs") or "").strip()
+        obfs_password = str(extra.get("obfs-password") or extra.get("obfs_password") or "").strip()
+        if obfs:
+            item["obfs"] = obfs
+        if obfs_password:
+            item["obfs-password"] = obfs_password
         return item
 
     raise RuntimeError(f"unsupported mihomo proxy protocol: {protocol}")
 
 
 def _apply_auth(item: dict[str, Any], extra: dict[str, Any]) -> None:
-    username = str(extra.get("username") or "").strip()
+    username = _decode_auth_value(extra.get("username"))
     password = str(extra.get("password") or "").strip()
     if username:
         item["username"] = username
     if password:
         item["password"] = password
+
+
+def _apply_common_tls(item: dict[str, Any], extra: dict[str, Any]) -> None:
+    security = str(extra.get("security") or extra.get("tls") or "").strip().lower()
+    sni = str(extra.get("sni") or extra.get("peer") or extra.get("servername") or "").strip()
+    fingerprint = str(extra.get("fp") or extra.get("client_fingerprint") or "").strip()
+    insecure = _is_truthy(extra.get("allowInsecure") or extra.get("allow_insecure") or extra.get("insecure"))
+
+    if not (security == "tls" or sni or fingerprint or insecure):
+        return
+    item["tls"] = True
+    if sni:
+        item["servername"] = sni
+        item["sni"] = sni
+    if fingerprint:
+        item["client-fingerprint"] = fingerprint
+    if insecure:
+        item["skip-cert-verify"] = True
+
+
+def _apply_network_opts(item: dict[str, Any], extra: dict[str, Any]) -> None:
+    network = str(extra.get("type") or extra.get("network") or extra.get("net") or "").strip().lower()
+    if not network or network in {"tcp", "none"}:
+        return
+
+    item["network"] = network
+    host = str(extra.get("host") or "").strip()
+    path = str(extra.get("path") or "/").strip() or "/"
+    if network == "ws":
+        ws_opts: dict[str, Any] = {"path": path}
+        if host:
+            ws_opts["headers"] = {"Host": host}
+        item["ws-opts"] = ws_opts
+        return
+    if network == "grpc":
+        service_name = str(extra.get("serviceName") or extra.get("service_name") or "").strip()
+        if service_name:
+            item["grpc-opts"] = {"grpc-service-name": service_name}
+        return
+    if network == "http":
+        http_opts: dict[str, Any] = {"path": [path]}
+        if host:
+            http_opts["host"] = [host]
+        item["http-opts"] = http_opts
+
+
+def _decode_auth_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    decoded = _safe_b64decode_text(text)
+    if decoded and ":" in decoded:
+        left, _, right = decoded.partition(":")
+        if right:
+            return unquote(left).strip()
+        nested = _safe_b64decode_text(unquote(left))
+        if nested and ":" in nested:
+            inner_left, _, _ = nested.partition(":")
+            return unquote(inner_left).strip()
+    return text
+
+
+def _safe_b64decode_text(value: str) -> str:
+    import base64
+
+    try:
+        padded = value + ("=" * (-len(value) % 4))
+        return base64.b64decode(padded).decode("utf-8")
+    except Exception:
+        return ""
+
+
+def _is_truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}

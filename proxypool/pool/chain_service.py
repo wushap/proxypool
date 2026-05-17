@@ -113,6 +113,15 @@ class ProxyChainService:
     def _rebuild_pools(self) -> None:
         """Rebuild both pools from all proxies in storage."""
         all_proxies = self.storage.list_proxies(limit=100000)
+        proxy_status = {
+            str(proxy.get("normalized_key") or ""): {
+                "available": bool(proxy.get("available")),
+                "latency_ms": proxy.get("latency_ms"),
+                "egress_ip": str(proxy.get("resolved_ip") or ""),
+            }
+            for proxy in all_proxies
+            if str(proxy.get("normalized_key") or "")
+        }
 
         # Convert to dict format for pool rebuild
         nodes_dict = {}
@@ -130,6 +139,8 @@ class ProxyChainService:
         
         front_matched = self.front_pool.rebuild(nodes_dict)
         exit_matched = self.exit_pool.rebuild(nodes_dict)
+        self._apply_probe_status(self.front_pool, proxy_status)
+        self._apply_probe_status(self.exit_pool, proxy_status)
         
         logger.info("Pools rebuilt: front=%s, exit=%s", len(front_matched), len(exit_matched))
 
@@ -154,6 +165,16 @@ class ProxyChainService:
                 exit_node.circuit_open = bool(record.get("circuit_open_since"))
                 exit_node.egress_ip = record.get("egress_ip", "")
                 exit_node.latency_ms = record.get("latency_avg_ms")
+                exit_node.routeable = exit_node.routeable or bool(record.get("last_success_at"))
+
+    def _apply_probe_status(self, pool: NodePool, proxy_status: dict[str, dict[str, Any]]) -> None:
+        for node in pool.get_all_nodes():
+            status = proxy_status.get(node.key, {})
+            node.routeable = bool(status.get("available"))
+            if status.get("latency_ms") is not None:
+                node.latency_ms = int(status["latency_ms"])
+            if status.get("egress_ip"):
+                node.egress_ip = str(status["egress_ip"])
 
     def _probe_exit_chain(self, front_node: NodeEntry, exit_node: NodeEntry) -> tuple[bool, str, int | None]:
         """Probe an exit node through a specific front node using sing-box."""
