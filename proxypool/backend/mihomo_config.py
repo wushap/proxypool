@@ -110,8 +110,7 @@ def _build_mihomo_proxy(proxy: dict[str, Any], name: str, dialer_proxy: str | No
         item["type"] = "vmess"
         item["uuid"] = uuid
         alter_id = int(extra.get("alterId") or extra.get("alter_id") or 0)
-        if alter_id > 0:
-            item["alterId"] = alter_id
+        item["alterId"] = alter_id
         item["cipher"] = str(extra.get("cipher") or extra.get("security") or "auto").strip() or "auto"
         _apply_common_tls(item, extra)
         _apply_network_opts(item, extra)

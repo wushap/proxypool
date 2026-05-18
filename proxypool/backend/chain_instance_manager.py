@@ -176,7 +176,32 @@ class ChainInstanceManager:
                 route_signature=str(item.get("route_signature") or ""),
             )
         started = self.backend.start(spec)
-        self._wait_until_instance_ready(spec.listen, spec.port)
+        try:
+            self._wait_until_instance_ready(spec.listen, spec.port, started=started)
+        except Exception as exc:
+            with suppress(Exception):
+                self.backend.stop(instance_id)
+            error = str(exc)
+            self.storage.upsert_chain_egress_instance(
+                instance_id=str(item["instance_id"]),
+                pool_id=int(item["pool_id"]),
+                endpoint_id=int(item.get("endpoint_id") or 0),
+                backend_type=self.backend.backend_type,
+                front_node_key=str(item["front_node_key"]),
+                exit_node_key=str(item["exit_node_key"]),
+                hop_node_keys=hop_node_keys,
+                route_signature=str(item.get("route_signature") or ""),
+                listen=str(item["listen"]),
+                port=int(item["port"]),
+                inbound_type=str(item["inbound_type"]),
+                status="failed",
+                pid=-1,
+                config_file=str(started.config_file),
+                log_file=str(started.log_file),
+                egress_ip=str(item.get("egress_ip") or ""),
+                last_error=error[:1000],
+            )
+            raise
         return self.storage.upsert_chain_egress_instance(
             instance_id=str(item["instance_id"]),
             pool_id=int(item["pool_id"]),
@@ -391,13 +416,54 @@ class ChainInstanceManager:
             return "127.0.0.1"
         return text
 
-    def _wait_until_instance_ready(self, host: str, port: int, timeout_sec: float = 5.0) -> None:
+    def _wait_until_instance_ready(
+        self,
+        host: str,
+        port: int,
+        timeout_sec: float = 5.0,
+        started: Any | None = None,
+    ) -> None:
         deadline = time.monotonic() + max(0.1, timeout_sec)
         while time.monotonic() < deadline:
             if self._is_tcp_open(host, port, timeout_sec=0.2):
                 return
+            process_error = self._started_process_error(started)
+            if process_error:
+                raise RuntimeError(process_error)
             time.sleep(0.05)
-        raise RuntimeError(f"chain instance did not become ready on {host}:{port}")
+        detail = self._started_log_tail(started)
+        message = f"chain instance did not become ready on {host}:{port}"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message)
+
+    def _started_process_error(self, started: Any | None) -> str:
+        if started is None:
+            return ""
+        pid = int(getattr(started, "pid", 0) or 0)
+        if pid <= 0 or self._is_process_alive(pid):
+            return ""
+        detail = self._started_log_tail(started)
+        if detail:
+            return f"chain instance process exited before ready: {detail}"
+        return "chain instance process exited before ready"
+
+    def _started_log_tail(self, started: Any | None, max_chars: int = 1200) -> str:
+        if started is None:
+            return ""
+        log_file = getattr(started, "log_file", "")
+        if not log_file:
+            return ""
+        try:
+            with open(log_file, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                fh.seek(max(0, size - max_chars))
+                text = fh.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return lines[-1] if lines else text.strip()
 
     def _resolve_hop_keys(self, front_node_key: str, exit_node_key: str, hop_node_keys: list[str] | None) -> list[str]:
         resolved = [str(item or "").strip() for item in list(hop_node_keys or []) if str(item or "").strip()]

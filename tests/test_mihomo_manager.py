@@ -119,6 +119,35 @@ def test_build_mihomo_chain_config_supports_vless_ws_and_trojan_ws(tmp_path: Pat
     assert trojan_proxy["ws-opts"]["path"] == "/tr"
 
 
+def test_build_mihomo_chain_config_includes_vmess_zero_alter_id(tmp_path: Path):
+    spec = ChainInstanceSpec(
+        instance_id="chain-vmess",
+        pool_id=1,
+        listen="127.0.0.1",
+        port=19093,
+        inbound_type="http",
+        hop_proxies=[
+            {
+                "protocol": "vmess",
+                "host": "vmess.example.com",
+                "port": 443,
+                "raw_link": "vmess://example",
+                "name": "exit-vmess",
+                "extra_json": {
+                    "uuid": "12345678-1234-1234-1234-123456789012",
+                    "cipher": "auto",
+                },
+            }
+        ],
+    )
+
+    config = build_mihomo_chain_config(spec)
+
+    proxy = config["proxies"][0]
+    assert proxy["type"] == "vmess"
+    assert proxy["alterId"] == 0
+
+
 def test_mihomo_backend_start_writes_config_and_returns_paths(tmp_path: Path):
     spec = ChainInstanceSpec(
         instance_id="chain-a",

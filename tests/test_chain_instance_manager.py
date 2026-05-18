@@ -78,6 +78,14 @@ class DelayedBackend(FakeBackend):
         super().close()
 
 
+class ExitingBackend(FakeBackend):
+    def start(self, spec):
+        self.started.append(spec.instance_id)
+        log_file = Path("/tmp/test-exit.log")
+        log_file.write_text("fatal: parse config error\n", encoding="utf-8")
+        return StartedInstance(pid=99999, config_file=Path("/tmp/test-exit.yaml"), log_file=log_file)
+
+
 def test_chain_instance_manager_start_and_stop(tmp_path: Path):
     storage = SQLiteProxyStorage(tmp_path / "test.db")
     front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
@@ -374,6 +382,37 @@ def test_start_instance_waits_for_listener_ready(tmp_path: Path):
         backend.close()
 
     assert elapsed >= 0.15
+
+
+def test_start_instance_records_backend_log_when_process_exits_before_ready(tmp_path: Path):
+    storage = SQLiteProxyStorage(tmp_path / "exit-before-ready.db")
+    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
+    exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="exit-1")
+    storage.upsert_proxy(front)
+    storage.upsert_proxy(exit_node)
+    backend = ExitingBackend()
+    manager = ChainInstanceManager(storage=storage, backend=backend)
+    manager.create_instance(
+        instance_id="chain-exit",
+        pool_id=1,
+        front_node_key=front.normalized_key(),
+        exit_node_key=exit_node.normalized_key(),
+        listen="127.0.0.1",
+        port=19092,
+        inbound_type="http",
+    )
+
+    with patch("os.kill", side_effect=ProcessLookupError()):
+        try:
+            manager.start_instance("chain-exit")
+            raise AssertionError("expected start_instance to fail")
+        except RuntimeError as exc:
+            assert "fatal: parse config error" in str(exc)
+
+    item = storage.get_chain_egress_instance("chain-exit")
+    assert item is not None
+    assert item["status"] == "failed"
+    assert "fatal: parse config error" in item["last_error"]
 
 
 def test_chain_instance_manager_supports_multi_hop_instance(tmp_path: Path):
