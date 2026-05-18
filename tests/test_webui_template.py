@@ -265,6 +265,12 @@ def test_webui_should_show_standard_proxy_usage_and_gateway_test() -> None:
     assert "health_check_interval_sec" in content
     assert "实时检测" in content
     assert "立即检测" in content
+    assert "gatewayHealthMonitor" in content
+    assert "selectedGatewayHealthEndpoint" in content
+    assert "gatewayHealthNode" in content
+    assert "检测结果" in content
+    assert "经由" in content
+    assert "startGatewayStatusAutoRefresh" in content
     assert "runGatewayHealthCheck" in content
     assert "http-health-check" in content
     assert "gatewayTestForm.target_url" in content

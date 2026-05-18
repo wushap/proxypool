@@ -348,6 +348,21 @@ export const appOptions = {
       const id = Number(this.gatewayStatusEndpointId || this.gatewayStatus?.summary?.endpoint_id || this.gatewayConfigForm.endpoint_id || 0);
       return (this.gatewayEndpoints || []).find(item => Number(item.id) === id) || this.gatewayStatus?.endpoint || null;
     },
+    gatewayHealthMonitor() {
+      return this.gatewayStatus?.health_monitor || {
+        enabled: false,
+        interval_sec: 30,
+        running: false,
+        last_started_at: "",
+        last_finished_at: "",
+        last_error: "",
+        endpoints: {},
+      };
+    },
+    selectedGatewayHealthEndpoint() {
+      const endpointId = Number(this.selectedGatewayStatusEndpoint?.id || this.gatewayStatus?.summary?.endpoint_id || this.gatewayStatusEndpointId || 0);
+      return this.gatewayHealthEndpointFor(endpointId);
+    },
     gatewayHopPools() { return Array.isArray(this.gatewayStatus?.hop_pools) ? this.gatewayStatus.hop_pools : []; },
     gatewayTransitions() { return Array.isArray(this.gatewayStatus?.transitions) ? this.gatewayStatus.transitions : []; },
   },
@@ -2598,6 +2613,51 @@ export const appOptions = {
       if (node.latency_ms !== null && node.latency_ms !== undefined) parts.push(`${node.latency_ms} ms`);
       if (node.resolved_ip) parts.push(node.resolved_ip);
       return parts.length ? parts.join(" / ") : "-";
+    },
+    gatewayHealthEndpointFor(endpointId) {
+      const id = Number(endpointId || 0);
+      const endpoints = this.gatewayHealthMonitor?.endpoints || {};
+      return id > 0 ? (endpoints[String(id)] || null) : null;
+    },
+    gatewayHealthHop(pool) {
+      const endpoint = this.selectedGatewayHealthEndpoint;
+      const hops = Array.isArray(endpoint?.hops) ? endpoint.hops : [];
+      const hopIndex = Number(pool?.hop_index ?? -1);
+      if (hopIndex >= 0) {
+        const byIndex = hops.find(item => Number(item.hop_index) === hopIndex);
+        if (byIndex) return byIndex;
+      }
+      const poolId = Number(pool?.pool_id || 0);
+      return poolId > 0 ? (hops.find(item => Number(item.pool_id) === poolId) || null) : null;
+    },
+    gatewayHealthNode(pool, node) {
+      const hop = this.gatewayHealthHop(pool);
+      const nodes = Array.isArray(hop?.nodes) ? hop.nodes : [];
+      const key = String(node?.key || node?.normalized_key || "");
+      return key ? (nodes.find(item => String(item.node_key || "") === key) || null) : null;
+    },
+    gatewayHealthCheckedText(pool) {
+      const hop = this.gatewayHealthHop(pool);
+      if (!hop) return "未检测";
+      return `${Number(hop.healthy_nodes || 0)}/${Number(hop.checked_nodes || 0)} 检测可用`;
+    },
+    formatGatewayHealthResult(result) {
+      if (!result) return "未检测";
+      if (result.ok) {
+        const latency = result.latency_ms ?? result.elapsed_ms;
+        return latency !== null && latency !== undefined ? `OK ${latency} ms` : "OK";
+      }
+      return String(result.error || "FAILED");
+    },
+    formatGatewayHealthVia(result) {
+      const key = String(result?.via_node_key || "");
+      if (!key) return "-";
+      const serial = this.getSerial(key);
+      return serial !== "-" ? `#${serial}` : key;
+    },
+    gatewayHealthBadgeClass(result) {
+      if (!result) return "badge-neutral";
+      return result.ok ? "badge-success" : "badge-danger";
     },
     gatewayStatusBadgeClass(ok) {
       return ok ? "badge-success" : "badge-danger";

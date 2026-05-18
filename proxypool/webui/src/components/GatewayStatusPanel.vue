@@ -43,11 +43,51 @@
       </div>
       <div class="gateway-status-item">
         <span class="text-muted">实时检测</span>
-        <span class="badge" :class="gatewayStatusBadgeClass(gatewayStatus?.health_monitor?.enabled)">{{ gatewayStatus?.health_monitor?.enabled ? `${gatewayStatus?.health_monitor?.interval_sec || '-'}s` : 'OFF' }}</span>
+        <span class="badge" :class="gatewayHealthMonitor?.enabled ? (gatewayHealthMonitor?.running ? 'badge-warning' : 'badge-success') : 'badge-danger'">
+          {{ gatewayHealthMonitor?.enabled ? (gatewayHealthMonitor?.running ? 'CHECKING' : `${gatewayHealthMonitor?.interval_sec || '-'}s`) : 'OFF' }}
+        </span>
       </div>
       <div class="gateway-status-item">
         <span class="text-muted">最后检测</span>
-        <strong class="mono text-xs">{{ formatTime(gatewayStatus?.health_monitor?.last_finished_at) }}</strong>
+        <strong class="mono text-xs">{{ formatTime(gatewayHealthMonitor?.last_finished_at) }}</strong>
+      </div>
+      <div class="gateway-status-item">
+        <span class="text-muted">检测端点</span>
+        <strong class="mono">{{ Object.keys(gatewayHealthMonitor?.endpoints || {}).length }}</strong>
+      </div>
+      <div class="gateway-status-item">
+        <span class="text-muted">检测错误</span>
+        <strong class="text-xs" :class="gatewayHealthMonitor?.last_error ? 'text-rose-600' : 'text-muted'">{{ gatewayHealthMonitor?.last_error || '-' }}</strong>
+      </div>
+    </div>
+
+    <div class="gateway-config-panel">
+      <div class="gateway-panel-header">
+        <div>
+          <h4>实时健康检测</h4>
+          <p class="form-hint">后台按配置间隔检测每个启用端点；活跃链路失败时会标记冷却，后续请求自动选择其它可用组合。</p>
+        </div>
+        <span class="badge" :class="selectedGatewayHealthEndpoint?.active_failed ? 'badge-danger' : 'badge-neutral'">
+          {{ selectedGatewayHealthEndpoint?.active_failed ? 'ACTIVE FAILED' : 'ACTIVE OK' }}
+        </span>
+      </div>
+      <div class="gateway-config-grid">
+        <div>
+          <span class="text-muted">当前检测端点</span>
+          <strong>{{ selectedGatewayHealthEndpoint?.name || selectedGatewayStatusEndpoint?.name || '-' }}</strong>
+        </div>
+        <div>
+          <span class="text-muted">检测时间</span>
+          <strong class="mono text-xs">{{ formatTime(selectedGatewayHealthEndpoint?.checked_at) }}</strong>
+        </div>
+        <div>
+          <span class="text-muted">活跃检测链路</span>
+          <strong class="mono">{{ (selectedGatewayHealthEndpoint?.active_hop_node_keys || []).map(key => '#' + getSerial(key)).join(' -> ') || '-' }}</strong>
+        </div>
+        <div>
+          <span class="text-muted">检测间隔</span>
+          <strong class="mono">{{ gatewayHealthMonitor?.enabled ? `${gatewayHealthMonitor?.interval_sec || '-'}s` : '关闭' }}</strong>
+        </div>
       </div>
     </div>
 
@@ -84,7 +124,7 @@
         <div class="gateway-panel-header">
           <div>
             <h4>{{ pool.label }} · {{ pool.pool?.name || ('#' + pool.pool_id) }}</h4>
-            <p class="form-hint">{{ pool.healthy_nodes }}/{{ pool.total_nodes }} 个健康节点</p>
+            <p class="form-hint">{{ pool.healthy_nodes }}/{{ pool.total_nodes }} 个可路由节点；{{ gatewayHealthCheckedText(pool) }}</p>
           </div>
           <span class="badge" :class="gatewayStatusBadgeClass(pool.available)">{{ pool.available ? 'AVAILABLE' : 'EMPTY' }}</span>
         </div>
@@ -95,7 +135,9 @@
                 <th style="width: 74px;">状态</th>
                 <th>节点</th>
                 <th>信息</th>
-                <th style="width: 80px;">延迟</th>
+                <th style="width: 140px;">检测结果</th>
+                <th style="width: 70px;">经由</th>
+                <th style="width: 130px;">检测时间</th>
               </tr>
             </thead>
             <tbody>
@@ -109,7 +151,13 @@
                   <div class="mono text-xs text-muted">{{ node.host }}:{{ node.port }}</div>
                 </td>
                 <td class="text-xs text-muted">{{ formatGatewayNodeMeta(node) }}</td>
-                <td class="mono text-xs">{{ node.latency_ms ?? '-' }}</td>
+                <td class="text-xs">
+                  <span class="badge badge-sm" :class="gatewayHealthBadgeClass(gatewayHealthNode(pool, node))">
+                    {{ formatGatewayHealthResult(gatewayHealthNode(pool, node)) }}
+                  </span>
+                </td>
+                <td class="mono text-xs">{{ formatGatewayHealthVia(gatewayHealthNode(pool, node)) }}</td>
+                <td class="mono text-xs">{{ formatTime(gatewayHealthNode(pool, node)?.checked_at) }}</td>
               </tr>
             </tbody>
           </table>
@@ -164,5 +212,49 @@ import { rootProxyMixin } from "../rootProxyMixin";
 export default {
   name: "GatewayStatusPanel",
   mixins: [rootProxyMixin],
+  data() {
+    return {
+      gatewayStatusRefreshTimer: null,
+    };
+  },
+  mounted() {
+    this.startGatewayStatusAutoRefresh();
+  },
+  beforeUnmount() {
+    this.stopGatewayStatusAutoRefresh();
+  },
+  watch: {
+    proxyPoolTab(value) {
+      this.startGatewayStatusAutoRefresh();
+      if (value === "gateway-status") {
+        this.loadGatewayStatus().catch(err => this.setMessage("刷新网关状态失败: " + err, true));
+      }
+    },
+    "gatewayHealthMonitor.interval_sec"() {
+      this.startGatewayStatusAutoRefresh();
+    },
+    "gatewayHealthMonitor.enabled"() {
+      this.startGatewayStatusAutoRefresh();
+    },
+  },
+  methods: {
+    stopGatewayStatusAutoRefresh() {
+      if (this.gatewayStatusRefreshTimer) {
+        clearInterval(this.gatewayStatusRefreshTimer);
+        this.gatewayStatusRefreshTimer = null;
+      }
+    },
+    startGatewayStatusAutoRefresh() {
+      this.stopGatewayStatusAutoRefresh();
+      if (this.proxyPoolTab !== "gateway-status") return;
+      const monitor = this.gatewayHealthMonitor || {};
+      const intervalSec = Number(monitor.interval_sec || this.gatewayConfigForm?.health_check_interval_sec || 30);
+      const delayMs = Math.max(5000, Math.min(300000, intervalSec * 1000));
+      this.gatewayStatusRefreshTimer = setInterval(() => {
+        if (this.proxyPoolTab !== "gateway-status" || this.isActionRunning("loadGatewayStatus")) return;
+        this.loadGatewayStatus().catch(err => this.setMessage("刷新网关状态失败: " + err, true));
+      }, delayMs);
+    },
+  },
 };
 </script>
