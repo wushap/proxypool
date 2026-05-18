@@ -17,8 +17,6 @@ FROM python:3.12-slim-bookworm AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
-    PROXYPOOL_WEBUI_HOST=0.0.0.0 \
-    PROXYPOOL_WEBUI_PORT=8080 \
     PROXYPOOL_DB_PATH=/app/data/proxies.db \
     PROXYPOOL_OUTPUT_DIR=/app/output \
     PROXYPOOL_SOURCES_FILE=/app/configs/sources.txt \
@@ -34,6 +32,9 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PROXYPOOL_WEBUI_HOST=0.0.0.0 \
+    PROXYPOOL_WEBUI_PORT=8080
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
