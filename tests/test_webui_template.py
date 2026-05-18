@@ -261,6 +261,12 @@ def test_webui_should_show_standard_proxy_usage_and_gateway_test() -> None:
     assert "gatewayTransitions" in content
     assert "活跃链路" in content
     assert "跨跳组合" in content
+    assert "health_check_enabled" in content
+    assert "health_check_interval_sec" in content
+    assert "实时检测" in content
+    assert "立即检测" in content
+    assert "runGatewayHealthCheck" in content
+    assert "http-health-check" in content
     assert "gatewayTestForm.target_url" in content
     assert "http-status" in content
     assert "http-test" in content

@@ -115,6 +115,8 @@ export const appOptions = {
         http_session_header_names_text: "X-ProxyPool-Session",
         http_session_query_names_text: "session",
         connect_session_header_names_text: "X-ProxyPool-Session",
+        health_check_enabled: true,
+        health_check_interval_sec: 30,
       },
       gatewayEndpoints: [],
       gatewayStatusEndpointId: 0,
@@ -1257,6 +1259,8 @@ export const appOptions = {
         http_session_header_names_text: this.listTextToMultiline(item.http_session_header_names),
         http_session_query_names_text: this.listTextToMultiline(item.http_session_query_names),
         connect_session_header_names_text: this.listTextToMultiline(item.connect_session_header_names),
+        health_check_enabled: item.health_check_enabled !== false,
+        health_check_interval_sec: Number(item.health_check_interval_sec || 30),
       };
     },
     async saveGatewayConfig() {
@@ -1271,6 +1275,8 @@ export const appOptions = {
         http_session_header_names: this.parseMultilineList(this.gatewayConfigForm.http_session_header_names_text),
         http_session_query_names: this.parseMultilineList(this.gatewayConfigForm.http_session_query_names_text),
         connect_session_header_names: this.parseMultilineList(this.gatewayConfigForm.connect_session_header_names_text),
+        health_check_enabled: this.gatewayConfigForm.health_check_enabled === true,
+        health_check_interval_sec: Math.max(5, Math.min(3600, Number(this.gatewayConfigForm.health_check_interval_sec || 30))),
       };
       const resp = await fetch(`${this.gatewayApiBase()}/http-config`, {
         method: "PUT",
@@ -1291,6 +1297,13 @@ export const appOptions = {
       if (!resp.ok) throw new Error(data.detail || "加载网关状态失败");
       this.gatewayStatus = data;
       if (Number(data?.summary?.endpoint_id || 0) > 0) this.gatewayStatusEndpointId = Number(data.summary.endpoint_id);
+    },
+    async runGatewayHealthCheck() {
+      const resp = await fetch(`${this.gatewayApiBase()}/http-health-check`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "执行网关健康检测失败");
+      await this.loadGatewayStatus();
+      this.setMessage("网关健康检测已完成");
     },
     async runGatewayTest() {
       const resp = await fetch(`${this.gatewayApiBase()}/http-test`, {
@@ -1438,6 +1451,7 @@ export const appOptions = {
     async onSaveGatewayConfig() { await this.runWithButtonState("saveGatewayConfig", () => this.saveGatewayConfig()); },
     async onLoadGatewayConfig() { await this.runWithButtonState("loadGatewayConfig", () => this.loadGatewayConfig()); },
     async onLoadGatewayStatus() { await this.runWithButtonState("loadGatewayStatus", () => this.loadGatewayStatus()); },
+    async onRunGatewayHealthCheck() { await this.runWithButtonState("runGatewayHealthCheck", () => this.runGatewayHealthCheck()); },
     async onRunGatewayTest() { await this.runWithButtonState("runGatewayTest", () => this.runGatewayTest()); },
     async onLoadGatewayEndpoints() { await this.runWithButtonState("loadGatewayEndpoints", () => this.loadGatewayEndpoints()); },
     async onSaveGatewayEndpoint() { await this.runWithButtonState("saveGatewayEndpoint", () => this.saveGatewayEndpoint()); },

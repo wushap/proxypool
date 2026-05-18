@@ -203,11 +203,14 @@ async def test_http_gateway_config_api_round_trip(tmp_path: Path) -> None:
         )
         assert put_resp.status_code == 200
         assert put_resp.json()["item"]["enabled"] is True
+        assert put_resp.json()["item"]["health_check_enabled"] is True
+        assert put_resp.json()["item"]["health_check_interval_sec"] == 30
 
         get_resp = await client.get("/api/gateway/http-config")
         assert get_resp.status_code == 200
         assert get_resp.json()["item"]["listen_port"] == 18899
         assert get_resp.json()["item"]["endpoint_id"] == endpoint_id
+        assert get_resp.json()["item"]["health_check_interval_sec"] == 30
 
 
 @pytest.mark.anyio
@@ -389,6 +392,80 @@ async def test_http_proxy_endpoint_status_marks_all_failed_transitions_unavailab
     assert data["summary"]["healthy_hop_pools"] == 2
     assert data["transitions"][0]["available"] is False
     assert data["summary"]["available"] is False
+
+
+@pytest.mark.anyio
+async def test_http_gateway_health_check_marks_active_route_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    transport = httpx.ASGITransport(app=app)
+
+    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front")
+    exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="exit")
+    storage.upsert_proxy(front)
+    storage.upsert_proxy(exit_node)
+    storage.update_test_result(front.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(exit_node.normalized_key(), available=True, latency_ms=20)
+
+    class FakeProbeResult:
+        def __init__(self, normalized_key: str, available: bool, error: str = "") -> None:
+            self.normalized_key = normalized_key
+            self.available = available
+            self.latency_ms = 7 if available else None
+            self.openai_unlocked = None
+            self.openai_status = ""
+            self.error = error
+
+    async def fake_probe_async(node: dict) -> FakeProbeResult:
+        return FakeProbeResult(str(node.get("normalized_key") or ""), True)
+
+    async def fake_probe_with_front_proxy_async(node: dict, front_proxy: dict) -> FakeProbeResult:
+        del front_proxy
+        return FakeProbeResult(str(node.get("normalized_key") or ""), False, "hop failed")
+
+    monkeypatch.setattr(app.state.tester.prober, "probe_async", fake_probe_async)
+    monkeypatch.setattr(app.state.tester.prober, "probe_with_front_proxy_async", fake_probe_with_front_proxy_async)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        front_pool = (await client.post("/api/pools", json={"name": "front-health", "filters": {"protocol": "http"}})).json()["item"]
+        exit_pool = (await client.post("/api/pools", json={"name": "exit-health", "filters": {"protocol": "socks"}})).json()["item"]
+        endpoint = (await client.post("/api/http-proxy-endpoints", json={
+            "name": "ep-health-check",
+            "listen_host": "127.0.0.1",
+            "listen_port": _pick_free_port(),
+            "hop_pool_ids": [front_pool["id"], exit_pool["id"]],
+        })).json()["item"]
+        route_resp = await client.get(
+            f"/api/http-proxy-endpoints/{endpoint['id']}/route-test",
+            params={"session_id": "sess-active-health", "target_domain": "api.example.com"},
+        )
+        assert route_resp.status_code == 200
+        assert route_resp.json()["hop_node_keys"] == [front.normalized_key(), exit_node.normalized_key()]
+
+        config_resp = await client.put("/api/gateway/http-config", json={
+            "enabled": True,
+            "listen_host": "127.0.0.1",
+            "listen_port": _pick_free_port(),
+            "endpoint_id": endpoint["id"],
+            "default_pool_id": front_pool["id"],
+            "health_check_enabled": True,
+            "health_check_interval_sec": 5,
+        })
+        assert config_resp.status_code == 200
+
+        health_resp = await client.post("/api/gateway/http-health-check")
+        status_resp = await client.get(f"/api/http-proxy-endpoints/{endpoint['id']}/status")
+
+    assert health_resp.status_code == 200
+    health = health_resp.json()["item"]
+    endpoint_health = health["endpoints"][str(endpoint["id"])]
+    assert endpoint_health["active_failed"] is True
+    assert endpoint_health["hops"][1]["nodes"][0]["active"] is True
+    assert endpoint_health["hops"][1]["nodes"][0]["ok"] is False
+    data = status_resp.json()
+    assert data["transitions"][0]["available"] is False
+    assert data["health_monitor"]["last_finished_at"]
 
 
 @pytest.mark.anyio

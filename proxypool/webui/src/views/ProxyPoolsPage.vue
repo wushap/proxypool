@@ -401,6 +401,17 @@
                           <option value="REJECT">REJECT</option>
                         </select>
                       </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">健康检测</label>
+                        <select v-model="gatewayConfigForm.health_check_enabled" class="select">
+                          <option :value="true">开启</option>
+                          <option :value="false">关闭</option>
+                        </select>
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">检测间隔(秒)</label>
+                        <input v-model.number="gatewayConfigForm.health_check_interval_sec" type="number" min="5" max="3600" class="input mono" />
+                      </div>
                       <button @click="onSaveGatewayConfig()" :disabled="isActionRunning('saveGatewayConfig')" class="btn btn-primary self-end">保存网关配置</button>
                     </div>
                     <div class="settings-row" style="margin-top: 8px;">

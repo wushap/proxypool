@@ -21,6 +21,10 @@ class HttpGatewayConfigService:
         data = json.loads(raw)
         if "endpoint_id" not in data:
             data["endpoint_id"] = 0
+        if "health_check_enabled" not in data:
+            data["health_check_enabled"] = True
+        if "health_check_interval_sec" not in data:
+            data["health_check_interval_sec"] = 30
         return HttpGatewayConfig(**data)
 
     def update_config(self, **kwargs: Any) -> HttpGatewayConfig:

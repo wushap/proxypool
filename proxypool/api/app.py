@@ -8,6 +8,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -353,6 +354,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             "runtime": runtime,
             "leases": leases,
             "instances": instances,
+            "health_monitor": _gateway_health_snapshot(),
             "active_hop_node_keys": active_hop_keys,
             "hop_pools": hop_pools,
             "transitions": transitions,
@@ -388,6 +390,174 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.auto_task_config = _default_auto_task_config()
     app.state.auto_task_runner = None
     app.state.auto_task_last_run = {}
+    app.state.gateway_health_task = None
+    app.state.gateway_health_lock = asyncio.Lock()
+    app.state.gateway_health_snapshot = {
+        "enabled": False,
+        "interval_sec": 30,
+        "running": False,
+        "last_started_at": "",
+        "last_finished_at": "",
+        "last_error": "",
+        "endpoints": {},
+    }
+
+    def _gateway_health_snapshot() -> dict:
+        snapshot = getattr(app.state, "gateway_health_snapshot", {}) or {}
+        return {
+            "enabled": bool(snapshot.get("enabled")),
+            "interval_sec": int(snapshot.get("interval_sec") or 30),
+            "running": bool(snapshot.get("running")),
+            "last_started_at": str(snapshot.get("last_started_at") or ""),
+            "last_finished_at": str(snapshot.get("last_finished_at") or ""),
+            "last_error": str(snapshot.get("last_error") or ""),
+            "endpoints": dict(snapshot.get("endpoints") or {}),
+        }
+
+    async def _probe_gateway_node(node: dict, front_proxy: dict | None = None) -> dict:
+        key = str(node.get("normalized_key") or "")
+        started = time.perf_counter()
+        try:
+            if front_proxy is not None:
+                result = await prober.probe_with_front_proxy_async(node, front_proxy)
+            else:
+                result = await prober.probe_async(node)
+        except Exception as exc:
+            result = SimpleNamespace(
+                normalized_key=key,
+                available=False,
+                latency_ms=None,
+                openai_unlocked=None,
+                openai_status="",
+                error=str(exc),
+            )
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        storage.update_test_result(
+            normalized_key=str(result.normalized_key or key),
+            available=bool(result.available),
+            latency_ms=result.latency_ms,
+            openai_unlocked=result.openai_unlocked,
+            openai_status=result.openai_status,
+            error=str(result.error or ""),
+        )
+        return {
+            "node_key": str(result.normalized_key or key),
+            "ok": bool(result.available),
+            "latency_ms": result.latency_ms,
+            "elapsed_ms": elapsed_ms,
+            "error": str(result.error or ""),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def _run_gateway_health_once() -> dict:
+        async with app.state.gateway_health_lock:
+            config = gateway_config_service.get_config()
+            started_at = datetime.now(timezone.utc).isoformat()
+            snapshot = _gateway_health_snapshot()
+            snapshot.update({
+                "enabled": bool(config.health_check_enabled),
+                "interval_sec": int(config.health_check_interval_sec),
+                "running": True,
+                "last_started_at": started_at,
+                "last_error": "",
+            })
+            app.state.gateway_health_snapshot = snapshot
+            endpoints_result: dict[str, dict] = {}
+            try:
+                for endpoint in storage.list_http_proxy_endpoints():
+                    if endpoint.get("enabled") is not True:
+                        continue
+                    endpoint_id = int(endpoint.get("id") or 0)
+                    if endpoint_id <= 0:
+                        continue
+                    hops = list(endpoint.get("hops") or [])
+                    hop_results: list[dict] = []
+                    active_keys = _latest_active_hop_keys(
+                        endpoint_id,
+                        chain_service.get_leases(
+                            pool_id=int(hops[0].get("pool_id") or 0) if hops else None,
+                            endpoint_id=endpoint_id,
+                        ),
+                        chain_instance_manager.list_instances(endpoint_id=endpoint_id),
+                    )
+                    active_failed = False
+                    first_active_proxy = storage.get_proxy_by_key(active_keys[0]) if active_keys else None
+                    for index, hop in enumerate(hops):
+                        pool_id = int(hop.get("pool_id") or 0)
+                        candidates = [
+                            item for item in storage.list_proxy_pool_candidates(pool_id, limit=500)
+                            if bool(item.get("available"))
+                        ] if pool_id > 0 else []
+                        active_key = active_keys[index] if index < len(active_keys) else ""
+                        if active_key and not any(str(item.get("normalized_key") or "") == active_key for item in candidates):
+                            active_proxy = storage.get_proxy_by_key(active_key)
+                            if active_proxy is not None:
+                                candidates.insert(0, active_proxy)
+                        nodes: list[dict] = []
+                        for node in candidates:
+                            node_key = str(node.get("normalized_key") or "")
+                            front_proxy = None
+                            if index > 0 and first_active_proxy is not None and node_key != str(first_active_proxy.get("normalized_key") or ""):
+                                front_proxy = first_active_proxy
+                            result = await _probe_gateway_node(node, front_proxy=front_proxy)
+                            result["active"] = bool(active_key and node_key == active_key)
+                            result["via_node_key"] = str((front_proxy or {}).get("normalized_key") or "")
+                            if result["active"] and not result["ok"]:
+                                active_failed = True
+                            nodes.append(result)
+                        hop_results.append({
+                            "hop_index": index,
+                            "pool_id": pool_id,
+                            "checked_nodes": len(nodes),
+                            "healthy_nodes": sum(1 for item in nodes if item.get("ok")),
+                            "active_node_key": active_key,
+                            "nodes": nodes,
+                        })
+                    if active_failed and active_keys and hops:
+                        chain_service.report_endpoint_route_failure(
+                            endpoint_id=endpoint_id,
+                            pool_id=int(hops[0].get("pool_id") or 0),
+                            hop_node_keys=active_keys,
+                            cooldown_sec=max(30, int(config.health_check_interval_sec) * 2),
+                        )
+                    endpoints_result[str(endpoint_id)] = {
+                        "endpoint_id": endpoint_id,
+                        "name": str(endpoint.get("name") or ""),
+                        "active_hop_node_keys": active_keys,
+                        "active_failed": active_failed,
+                        "checked_at": datetime.now(timezone.utc).isoformat(),
+                        "hops": hop_results,
+                    }
+                snapshot = _gateway_health_snapshot()
+                snapshot.update({
+                    "enabled": bool(config.health_check_enabled),
+                    "interval_sec": int(config.health_check_interval_sec),
+                    "running": False,
+                    "last_finished_at": datetime.now(timezone.utc).isoformat(),
+                    "last_error": "",
+                    "endpoints": endpoints_result,
+                })
+                app.state.gateway_health_snapshot = snapshot
+                return snapshot
+            except Exception as exc:
+                snapshot = _gateway_health_snapshot()
+                snapshot.update({
+                    "running": False,
+                    "last_finished_at": datetime.now(timezone.utc).isoformat(),
+                    "last_error": str(exc),
+                    "endpoints": endpoints_result or snapshot.get("endpoints") or {},
+                })
+                app.state.gateway_health_snapshot = snapshot
+                raise
+
+    async def _gateway_health_loop() -> None:
+        while True:
+            config = gateway_config_service.get_config()
+            interval = max(5, int(config.health_check_interval_sec or 30))
+            if bool(config.enabled) and bool(config.health_check_enabled):
+                with contextlib.suppress(Exception):
+                    await _run_gateway_health_once()
+            await asyncio.sleep(interval)
 
     async def _backend_health_loop() -> None:
         interval = max(5, int(cfg.backend_health_check_sec))
@@ -601,6 +771,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def on_startup() -> None:
         app.state.backend_health_task = asyncio.create_task(_backend_health_loop())
         app.state.auto_task_runner = asyncio.create_task(_auto_task_loop())
+        app.state.gateway_health_task = asyncio.create_task(_gateway_health_loop())
         if gateway_config_service.get_config().enabled:
             try:
                 await gateway_runtime.start()
@@ -609,7 +780,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
-        for attr in ("backend_health_task", "auto_task_runner"):
+        for attr in ("backend_health_task", "auto_task_runner", "gateway_health_task"):
             task = getattr(app.state, attr, None)
             if task is None:
                 continue
@@ -780,6 +951,11 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         config = gateway_config_service.get_config()
         resolved_endpoint_id = int(endpoint_id or config.endpoint_id or 0)
         return _build_http_gateway_status(config, resolved_endpoint_id)
+
+    @app.post("/api/gateway/http-health-check")
+    async def run_http_gateway_health_check() -> dict:
+        snapshot = await _run_gateway_health_once()
+        return {"item": snapshot}
 
     @app.post("/api/gateway/http-test")
     async def run_http_gateway_test(body: HttpGatewayTestRequest) -> dict:

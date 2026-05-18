@@ -21,6 +21,8 @@ class HttpGatewayConfig:
     http_session_header_names: list[str] = field(default_factory=lambda: ["X-ProxyPool-Session"])
     http_session_query_names: list[str] = field(default_factory=lambda: ["session"])
     connect_session_header_names: list[str] = field(default_factory=lambda: ["X-ProxyPool-Session"])
+    health_check_enabled: bool = True
+    health_check_interval_sec: int = 30
 
     def __post_init__(self) -> None:
         self.listen_host = str(self.listen_host or "127.0.0.1").strip() or "127.0.0.1"
@@ -37,3 +39,5 @@ class HttpGatewayConfig:
         self.http_session_header_names = _normalize_names(self.http_session_header_names, ["X-ProxyPool-Session"])
         self.http_session_query_names = _normalize_names(self.http_session_query_names, ["session"])
         self.connect_session_header_names = _normalize_names(self.connect_session_header_names, ["X-ProxyPool-Session"])
+        self.health_check_enabled = bool(self.health_check_enabled)
+        self.health_check_interval_sec = max(5, min(3600, int(self.health_check_interval_sec or 30)))

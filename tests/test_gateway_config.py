@@ -19,6 +19,8 @@ def test_http_gateway_config_defaults(tmp_path: Path) -> None:
     assert item.session_missing_action == "RANDOM"
     assert item.http_session_header_names == ["X-ProxyPool-Session"]
     assert item.connect_session_header_names == ["X-ProxyPool-Session"]
+    assert item.health_check_enabled is True
+    assert item.health_check_interval_sec == 30
 
 
 def test_http_gateway_config_round_trip(tmp_path: Path) -> None:
@@ -36,6 +38,8 @@ def test_http_gateway_config_round_trip(tmp_path: Path) -> None:
         http_session_header_names=["X-ProxyPool-Session", "X-Session-Id"],
         http_session_query_names=["session", "sid"],
         connect_session_header_names=["X-ProxyPool-Session"],
+        health_check_enabled=False,
+        health_check_interval_sec=45,
     )
 
     assert saved.enabled is True
@@ -46,6 +50,8 @@ def test_http_gateway_config_round_trip(tmp_path: Path) -> None:
     assert saved.sticky_ttl_sec == 7200
     assert saved.session_missing_action == "REJECT"
     assert saved.http_session_query_names == ["session", "sid"]
+    assert saved.health_check_enabled is False
+    assert saved.health_check_interval_sec == 45
     assert service.get_config().listen_port == 18080
 
 

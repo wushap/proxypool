@@ -1208,7 +1208,7 @@ button, input, select, textarea { font: inherit; }
 /* --- Gateway Status Workspace --- */
 .gateway-status-strip {
   display: grid;
-  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
   gap: 8px;
   margin-bottom: 12px;
 }

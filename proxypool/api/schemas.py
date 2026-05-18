@@ -183,6 +183,8 @@ class HttpGatewayConfigRequest(BaseModel):
     http_session_header_names: list[str] = Field(default_factory=list)
     http_session_query_names: list[str] = Field(default_factory=list)
     connect_session_header_names: list[str] = Field(default_factory=list)
+    health_check_enabled: bool = True
+    health_check_interval_sec: int = Field(default=30, ge=5, le=3600)
 
 
 class HttpGatewayTestRequest(BaseModel):

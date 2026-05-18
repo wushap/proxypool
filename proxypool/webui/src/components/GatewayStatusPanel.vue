@@ -10,6 +10,7 @@
           <option :value="0">默认端点</option>
           <option v-for="item in gatewayEndpoints" :key="'gateway-status-ep-' + item.id" :value="Number(item.id)">{{ item.name }} (#{{ item.id }})</option>
         </select>
+        <button @click="onRunGatewayHealthCheck()" :disabled="isActionRunning('runGatewayHealthCheck')" class="btn btn-secondary">立即检测</button>
         <button @click="onLoadGatewayStatus()" :disabled="isActionRunning('loadGatewayStatus')" class="btn btn-secondary">刷新</button>
       </div>
     </div>
@@ -39,6 +40,14 @@
       <div class="gateway-status-item">
         <span class="text-muted">活跃链路</span>
         <strong class="mono">{{ (gatewayStatus?.active_hop_node_keys || []).map(key => '#' + getSerial(key)).join(' -> ') || '-' }}</strong>
+      </div>
+      <div class="gateway-status-item">
+        <span class="text-muted">实时检测</span>
+        <span class="badge" :class="gatewayStatusBadgeClass(gatewayStatus?.health_monitor?.enabled)">{{ gatewayStatus?.health_monitor?.enabled ? `${gatewayStatus?.health_monitor?.interval_sec || '-'}s` : 'OFF' }}</span>
+      </div>
+      <div class="gateway-status-item">
+        <span class="text-muted">最后检测</span>
+        <strong class="mono text-xs">{{ formatTime(gatewayStatus?.health_monitor?.last_finished_at) }}</strong>
       </div>
     </div>
 
