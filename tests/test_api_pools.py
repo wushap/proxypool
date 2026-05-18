@@ -310,6 +310,88 @@ async def test_http_proxy_endpoint_update_reorders_hops_and_status_reflects_inst
 
 
 @pytest.mark.anyio
+async def test_http_proxy_endpoint_status_includes_hop_pool_and_transition_health(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    transport = httpx.ASGITransport(app=app)
+
+    front_up = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-up")
+    front_down = ProxyNode(protocol="http", host="1.1.1.2", port=8080, raw_link="http://1.1.1.2:8080", name="front-down")
+    exit_up = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="exit-up")
+    storage.upsert_proxy(front_up)
+    storage.upsert_proxy(front_down)
+    storage.upsert_proxy(exit_up)
+    storage.update_test_result(front_up.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(front_down.normalized_key(), available=False, latency_ms=None)
+    storage.update_test_result(exit_up.normalized_key(), available=True, latency_ms=20)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        front_pool = (await client.post("/api/pools", json={"name": "front-status", "filters": {"protocol": "http"}})).json()["item"]
+        exit_pool = (await client.post("/api/pools", json={"name": "exit-status", "filters": {"protocol": "socks"}})).json()["item"]
+        endpoint = (await client.post("/api/http-proxy-endpoints", json={
+            "name": "ep-health",
+            "listen_host": "127.0.0.1",
+            "listen_port": _pick_free_port(),
+            "hop_pool_ids": [front_pool["id"], exit_pool["id"]],
+        })).json()["item"]
+        route_resp = await client.get(
+            f"/api/http-proxy-endpoints/{endpoint['id']}/route-test",
+            params={"session_id": "sess-health", "target_domain": "api.example.com"},
+        )
+        assert route_resp.status_code == 200
+
+        status_resp = await client.get(f"/api/http-proxy-endpoints/{endpoint['id']}/status")
+
+    assert status_resp.status_code == 200
+    data = status_resp.json()
+    assert data["summary"]["total_hop_pools"] == 2
+    assert data["summary"]["healthy_hop_pools"] == 2
+    assert [pool["healthy_nodes"] for pool in data["hop_pools"]] == [1, 1]
+    assert data["hop_pools"][0]["nodes"][0]["active"] is True
+    assert data["transitions"][0]["available"] is True
+    assert data["transitions"][0]["healthy_pairs"] >= 1
+
+
+@pytest.mark.anyio
+async def test_http_proxy_endpoint_status_marks_all_failed_transitions_unavailable(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    transport = httpx.ASGITransport(app=app)
+
+    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front")
+    exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="exit")
+    storage.upsert_proxy(front)
+    storage.upsert_proxy(exit_node)
+    storage.update_test_result(front.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(exit_node.normalized_key(), available=True, latency_ms=20)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        front_pool = (await client.post("/api/pools", json={"name": "front-only", "filters": {"protocol": "http"}})).json()["item"]
+        exit_pool = (await client.post("/api/pools", json={"name": "exit-only", "filters": {"protocol": "socks"}})).json()["item"]
+        endpoint = (await client.post("/api/http-proxy-endpoints", json={
+            "name": "ep-all-failed",
+            "listen_host": "127.0.0.1",
+            "listen_port": _pick_free_port(),
+            "hop_pool_ids": [front_pool["id"], exit_pool["id"]],
+        })).json()["item"]
+
+        app.state.chain_service.report_endpoint_route_failure(
+            endpoint_id=int(endpoint["id"]),
+            pool_id=int(front_pool["id"]),
+            hop_node_keys=[front.normalized_key(), exit_node.normalized_key()],
+        )
+        status_resp = await client.get(f"/api/http-proxy-endpoints/{endpoint['id']}/status")
+
+    assert status_resp.status_code == 200
+    data = status_resp.json()
+    assert data["summary"]["healthy_hop_pools"] == 2
+    assert data["transitions"][0]["available"] is False
+    assert data["summary"]["available"] is False
+
+
+@pytest.mark.anyio
 async def test_http_proxy_endpoint_can_chain_multiple_filtered_pools_in_order(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     app = create_app(settings)

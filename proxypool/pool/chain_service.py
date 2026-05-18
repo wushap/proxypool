@@ -762,6 +762,30 @@ class ProxyChainService:
             return False
         return True
 
+    def endpoint_route_health(self, endpoint_id: int, hop_node_keys: list[str]) -> dict[str, Any]:
+        clean_keys = tuple(str(item or "").strip() for item in hop_node_keys if str(item or "").strip())
+        key = (int(endpoint_id or 0), clean_keys)
+        failed = self._is_endpoint_route_failed(endpoint_id, list(clean_keys))
+        failure_expires_at = ""
+        expires_at = self._failed_endpoint_routes.get(key)
+        if expires_at is not None:
+            failure_expires_at = expires_at.isoformat()
+
+        healthy_until = ""
+        healthy_exp = self._healthy_endpoint_routes.get(key)
+        now = datetime.now(timezone.utc)
+        if healthy_exp is not None:
+            if now >= healthy_exp:
+                self._healthy_endpoint_routes.pop(key, None)
+            else:
+                healthy_until = healthy_exp.isoformat()
+        return {
+            "failed": failed,
+            "failure_expires_at": failure_expires_at,
+            "known_healthy": bool(healthy_until),
+            "healthy_until": healthy_until,
+        }
+
     def _get_multi_hop_lease(
         self,
         session_id: str,

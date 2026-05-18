@@ -24,6 +24,7 @@ class FakePoolService:
 class FakeChainService:
     def __init__(self):
         self.calls = []
+        self.failures = []
 
     def route_request(self, session_id="", pool_id=0, target_domain="", live_instance_ids=None):
         self.calls.append((session_id, pool_id, target_domain, live_instance_ids))
@@ -35,15 +36,44 @@ class FakeChainService:
             "instance_reused": False,
         }
 
-    def bind_instance_to_session(self, session_id: str, pool_id: int, instance_id: str):
-        return {"session_id": session_id, "pool_id": pool_id, "instance_id": instance_id}
+    def bind_instance_to_session(self, session_id: str, pool_id: int, instance_id: str, endpoint_id: int = 0):
+        return {
+            "session_id": session_id,
+            "pool_id": pool_id,
+            "instance_id": instance_id,
+            "endpoint_id": endpoint_id,
+        }
+
+    def report_endpoint_route_failure(
+        self,
+        endpoint_id: int,
+        pool_id: int,
+        session_id: str = "",
+        hop_node_keys: list[str] | None = None,
+    ) -> None:
+        self.failures.append({
+            "endpoint_id": endpoint_id,
+            "pool_id": pool_id,
+            "session_id": session_id,
+            "hop_node_keys": list(hop_node_keys or []),
+        })
 
 
 class FakeInstanceManager:
-    def list_running_instance_ids(self, pool_id=None):
+    def list_running_instance_ids(self, pool_id=None, endpoint_id=None):
         return set()
 
-    def ensure_instance(self, pool_id, front_node_key, exit_node_key, inbound_type="http", listen=None):
+    def ensure_instance(
+        self,
+        pool_id,
+        front_node_key,
+        exit_node_key,
+        inbound_type="http",
+        listen=None,
+        endpoint_id=0,
+        hop_node_keys=None,
+        route_signature="",
+    ):
         return {"instance_id": "inst-1", "listen": "127.0.0.1", "port": 18080, "status": "running"}
 
 
@@ -80,7 +110,17 @@ class ForwardingInstanceManager(FakeInstanceManager):
     def __init__(self):
         self.ensure_calls = []
 
-    def ensure_instance(self, pool_id, front_node_key, exit_node_key, inbound_type="http", listen=None):
+    def ensure_instance(
+        self,
+        pool_id,
+        front_node_key,
+        exit_node_key,
+        inbound_type="http",
+        listen=None,
+        endpoint_id=0,
+        hop_node_keys=None,
+        route_signature="",
+    ):
         self.ensure_calls.append((pool_id, front_node_key, exit_node_key, inbound_type, listen))
         return {"instance_id": "inst-1", "listen": "127.0.0.1", "port": 18080, "status": "running"}
 
@@ -136,6 +176,88 @@ async def test_forward_proxy_gateway_route_http_request_uses_instance_manager(tm
 
     assert route["instance"]["instance_id"] == "inst-1"
     assert manager.ensure_calls[0][0] == 7
+
+
+@pytest.mark.anyio
+async def test_forward_proxy_gateway_retries_endpoint_route_when_instance_start_fails(tmp_path: Path) -> None:
+    storage = SQLiteProxyStorage(tmp_path / "gateway-retry-endpoint.db")
+    endpoint = storage.create_http_proxy_endpoint("ep", listen_host="127.0.0.1", listen_port=18899)
+    storage.replace_http_proxy_endpoint_hops(endpoint["id"], [11, 12])
+    endpoint = storage.get_http_proxy_endpoint(endpoint["id"])
+    assert endpoint is not None
+
+    class EndpointPoolService(FakePoolService):
+        def get_pool(self, pool_id: int):
+            return {"id": 11}
+
+    class EndpointChainService(FakeChainService):
+        def __init__(self):
+            super().__init__()
+            self.index = 0
+
+        def route_request(self, session_id="", pool_id=0, endpoint_id=0, target_domain="", live_instance_ids=None):
+            self.calls.append((session_id, pool_id, endpoint_id, target_domain, live_instance_ids))
+            front = "front-bad" if self.index == 0 else "front-good"
+            self.index += 1
+            return {
+                "front_node": {"key": front},
+                "exit_node": {"key": "exit-1"},
+                "hop_node_keys": [front, "exit-1"],
+                "endpoint_id": endpoint_id,
+                "pool_id": pool_id,
+                "route_signature": f"{front}>exit-1",
+                "lease_created": bool(session_id),
+                "bound_instance_id": "",
+                "instance_reused": False,
+            }
+
+    class EndpointInstanceManager(FakeInstanceManager):
+        def __init__(self):
+            self.ensure_calls = []
+
+        def list_running_instance_ids(self, pool_id=None, endpoint_id=None):
+            return set()
+
+        def ensure_instance(
+            self,
+            pool_id,
+            front_node_key,
+            exit_node_key,
+            inbound_type="http",
+            listen=None,
+            endpoint_id=0,
+            hop_node_keys=None,
+            route_signature="",
+        ):
+            self.ensure_calls.append(front_node_key)
+            if front_node_key == "front-bad":
+                raise RuntimeError("chain instance did not become ready on 127.0.0.1:1150")
+            return {"instance_id": "inst-good", "listen": "127.0.0.1", "port": 18080, "status": "running"}
+
+    chain_service = EndpointChainService()
+    manager = EndpointInstanceManager()
+    gateway = ForwardProxyGateway(
+        storage=storage,
+        pool_service=EndpointPoolService({"id": 11}),
+        chain_service=chain_service,
+        chain_instance_manager=manager,
+        config=HttpGatewayConfig(enabled=True, endpoint_id=endpoint["id"], default_pool_id=11),
+    )
+
+    gateway._route_instance_attempts = lambda endpoint: 2
+    route = gateway.resolve_route_for_http(
+        raw_target="https://api.example.com/v1/chat",
+        headers={"X-ProxyPool-Session": "sess-1"},
+    )
+
+    assert route["instance"]["instance_id"] == "inst-good"
+    assert manager.ensure_calls == ["front-bad", "front-good"]
+    assert chain_service.failures == [{
+        "endpoint_id": endpoint["id"],
+        "pool_id": 11,
+        "session_id": "sess-1",
+        "hop_node_keys": ["front-bad", "exit-1"],
+    }]
 
 
 @pytest.mark.anyio
@@ -196,7 +318,17 @@ async def test_forward_proxy_gateway_runtime_handles_http_and_connect(tmp_path: 
     proxy_server = await asyncio.start_server(proxy_handler, "127.0.0.1", proxy_port)
 
     class RuntimeInstanceManager(FakeInstanceManager):
-        def ensure_instance(self, pool_id, front_node_key, exit_node_key, inbound_type="http", listen=None):
+        def ensure_instance(
+            self,
+            pool_id,
+            front_node_key,
+            exit_node_key,
+            inbound_type="http",
+            listen=None,
+            endpoint_id=0,
+            hop_node_keys=None,
+            route_signature="",
+        ):
             return {
                 "instance_id": "inst-1",
                 "listen": "127.0.0.1",
@@ -334,7 +466,17 @@ async def test_forward_proxy_gateway_connect_preflight_retries_failed_route(
             }
 
     class RetryInstanceManager(FakeInstanceManager):
-        def ensure_instance(self, pool_id, front_node_key, exit_node_key, inbound_type="http", listen=None):
+        def ensure_instance(
+            self,
+            pool_id,
+            front_node_key,
+            exit_node_key,
+            inbound_type="http",
+            listen=None,
+            endpoint_id=0,
+            hop_node_keys=None,
+            route_signature="",
+        ):
             captured.setdefault("ensured", []).append(front_node_key)
             if front_node_key == "front-bad":
                 return {"instance_id": "bad-inst", "listen": "127.0.0.1", "port": good_port, "status": "running"}

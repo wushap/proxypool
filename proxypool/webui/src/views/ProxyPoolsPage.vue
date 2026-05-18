@@ -16,6 +16,7 @@
                 <div class="tabs workspace-tabs">
                   <button @click="proxyPoolTab = 'pools'" :class="{ active: proxyPoolTab === 'pools' }" class="tab-btn">代理池</button>
                   <button @click="proxyPoolTab = 'gateway'" :class="{ active: proxyPoolTab === 'gateway' }" class="tab-btn">HTTP 网关</button>
+                  <button @click="proxyPoolTab = 'gateway-status'" :class="{ active: proxyPoolTab === 'gateway-status' }" class="tab-btn">网关状态</button>
                   <button @click="proxyPoolTab = 'chain'" :class="{ active: proxyPoolTab === 'chain' }" class="tab-btn">链服务</button>
                   <button @click="proxyPoolTab = 'backend'" :class="{ active: proxyPoolTab === 'backend' }" class="tab-btn">后端链路</button>
                   <button @click="proxyPoolTab = 'events'" :class="{ active: proxyPoolTab === 'events' }" class="tab-btn">进程记录</button>
@@ -477,9 +478,11 @@
                       </div>
                     </div>
                   </div>
-                </div>
 
                 </div>
+                </div>
+
+                <GatewayStatusPanel />
 
                 <div v-show="proxyPoolTab === 'chain'" class="tab-panel fade-in">
                 <h3 class="section-divider">代理链服务</h3>
@@ -928,10 +931,14 @@
 </template>
 
 <script>
+import GatewayStatusPanel from "../components/GatewayStatusPanel.vue";
 import { rootProxyMixin } from "../rootProxyMixin";
 
 export default {
   name: "ProxyPoolsPage",
   mixins: [rootProxyMixin],
+  components: {
+    GatewayStatusPanel,
+  },
 };
 </script>

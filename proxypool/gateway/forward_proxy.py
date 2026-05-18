@@ -10,6 +10,8 @@ from proxypool.gateway.session_extractor import SessionExtractor
 
 
 class ForwardProxyGateway:
+    ROUTE_INSTANCE_ATTEMPT_CAP = 50
+
     def __init__(
         self,
         storage,
@@ -122,6 +124,72 @@ class ForwardProxyGateway:
             inbound_type="http",
         )
 
+    def _route_instance_attempts(self, endpoint: dict[str, Any] | None) -> int:
+        if endpoint is None:
+            return 1
+        total = 1
+        for hop in list(endpoint.get("hops") or []):
+            pool_id = int(hop.get("pool_id") or 0)
+            if pool_id <= 0:
+                return 1
+            try:
+                candidates = [
+                    item for item in self.storage.list_proxy_pool_candidates(pool_id, limit=500)
+                    if bool(item.get("available"))
+                ]
+            except Exception:
+                return 1
+            if not candidates:
+                return 1
+            total *= len(candidates)
+            if total >= self.ROUTE_INSTANCE_ATTEMPT_CAP:
+                return self.ROUTE_INSTANCE_ATTEMPT_CAP
+        return max(1, min(self.ROUTE_INSTANCE_ATTEMPT_CAP, total))
+
+    def _resolve_route_with_instance(
+        self,
+        pool: dict[str, Any],
+        endpoint: dict[str, Any] | None,
+        session_id: str,
+        target_domain: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        endpoint_id = int((endpoint or {}).get("id") or 0)
+        pool_id = int(pool["id"])
+        attempts = self._route_instance_attempts(endpoint)
+        last_error: Exception | None = None
+        for _ in range(attempts):
+            route = self._route_request(
+                session_id=session_id,
+                pool_id=pool_id,
+                endpoint_id=endpoint_id,
+                target_domain=target_domain,
+                live_instance_ids=self._list_running_instance_ids(
+                    pool_id=pool_id,
+                    endpoint_id=endpoint_id,
+                ),
+            )
+            if route is None:
+                break
+            try:
+                instance = self._ensure_instance(
+                    pool_id=pool_id,
+                    endpoint_id=endpoint_id,
+                    route=route,
+                )
+                return route, instance
+            except Exception as exc:
+                last_error = exc
+                self.report_route_failure({
+                    "endpoint": endpoint,
+                    "pool": pool,
+                    "session_id": session_id,
+                    "route": route,
+                    "instance": {},
+                }, str(exc) or exc.__class__.__name__)
+        if last_error is not None:
+            raise RuntimeError(f"no available chain route: {last_error}") from last_error
+        raise RuntimeError("no available chain route")
+
     def _bind_instance_to_session(
         self,
         session_id: str,
@@ -209,22 +277,11 @@ class ForwardProxyGateway:
         missing_action = str((endpoint or {}).get("session_missing_action") or self.config.session_missing_action or "RANDOM").upper()
         if not session_id and missing_action == "REJECT":
             raise ValueError("session_id is required")
-        route = self._route_request(
+        route, instance = self._resolve_route_with_instance(
+            pool=pool,
+            endpoint=endpoint,
             session_id=session_id,
-            pool_id=int(pool["id"]),
-            endpoint_id=int((endpoint or {}).get("id") or 0),
             target_domain=parsed.netloc,
-            live_instance_ids=self._list_running_instance_ids(
-                pool_id=int(pool["id"]),
-                endpoint_id=int((endpoint or {}).get("id") or 0),
-            ),
-        )
-        if route is None:
-            raise RuntimeError("no available chain route")
-        instance = self._ensure_instance(
-            pool_id=int(pool["id"]),
-            endpoint_id=int((endpoint or {}).get("id") or 0),
-            route=route,
         )
         if session_id:
             self._bind_instance_to_session(
@@ -262,22 +319,11 @@ class ForwardProxyGateway:
         session_id = self.extract_connect_session_key(headers=headers, connection_id=connection_id)
         if not session_id:
             raise ValueError("session_id is required")
-        route = self._route_request(
+        route, instance = self._resolve_route_with_instance(
+            pool=pool,
+            endpoint=endpoint,
             session_id=session_id,
-            pool_id=int(pool["id"]),
-            endpoint_id=int((endpoint or {}).get("id") or 0),
             target_domain=str(target_host or ""),
-            live_instance_ids=self._list_running_instance_ids(
-                pool_id=int(pool["id"]),
-                endpoint_id=int((endpoint or {}).get("id") or 0),
-            ),
-        )
-        if route is None:
-            raise RuntimeError("no available chain route")
-        instance = self._ensure_instance(
-            pool_id=int(pool["id"]),
-            endpoint_id=int((endpoint or {}).get("id") or 0),
-            route=route,
         )
         self._bind_instance_to_session(
             session_id=session_id,

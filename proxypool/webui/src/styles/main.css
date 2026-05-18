@@ -1204,3 +1204,95 @@ button, input, select, textarea { font: inherit; }
 .chain-node-unhealthy {
   color: var(--danger-text);
 }
+
+/* --- Gateway Status Workspace --- */
+.gateway-status-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.gateway-status-item {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--panel-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gateway-status-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.gateway-config-panel,
+.gateway-status-panel,
+.gateway-transition-panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  padding: 12px;
+}
+
+.gateway-config-panel {
+  margin-bottom: 12px;
+}
+
+.gateway-transition-panel {
+  margin-bottom: 12px;
+}
+
+.gateway-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.gateway-panel-header h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.gateway-active-row {
+  background: var(--warning-bg);
+}
+
+.gateway-config-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.gateway-config-grid > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+@media (max-width: 1080px) {
+  .gateway-status-strip {
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+  }
+
+  .gateway-config-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .gateway-status-strip,
+  .gateway-config-grid,
+  .gateway-status-layout {
+    grid-template-columns: 1fr;
+  }
+}

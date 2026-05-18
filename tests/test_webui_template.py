@@ -255,6 +255,12 @@ def test_webui_should_show_standard_proxy_usage_and_gateway_test() -> None:
     assert "HTTP proxy" in content
     assert "HTTPS proxy" in content
     assert "gatewayStatus" in content
+    assert "gatewayStatusEndpointId" in content
+    assert "网关状态" in content
+    assert "gatewayHopPools" in content
+    assert "gatewayTransitions" in content
+    assert "活跃链路" in content
+    assert "跨跳组合" in content
     assert "gatewayTestForm.target_url" in content
     assert "http-status" in content
     assert "http-test" in content

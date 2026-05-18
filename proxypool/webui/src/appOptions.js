@@ -117,6 +117,7 @@ export const appOptions = {
         connect_session_header_names_text: "X-ProxyPool-Session",
       },
       gatewayEndpoints: [],
+      gatewayStatusEndpointId: 0,
       gatewayEndpointForm: {
         id: 0,
         name: "",
@@ -341,6 +342,12 @@ export const appOptions = {
     paginatedBackendEvents() { return this.paginateItems(this.backendEvents || [], "backendEvents"); },
     backendInstances() { return Array.isArray(this.backendStatus?.instances) ? this.backendStatus.instances : []; },
     paginatedProxies() { return this.paginateItems(this.proxies || [], "proxies"); },
+    selectedGatewayStatusEndpoint() {
+      const id = Number(this.gatewayStatusEndpointId || this.gatewayStatus?.summary?.endpoint_id || this.gatewayConfigForm.endpoint_id || 0);
+      return (this.gatewayEndpoints || []).find(item => Number(item.id) === id) || this.gatewayStatus?.endpoint || null;
+    },
+    gatewayHopPools() { return Array.isArray(this.gatewayStatus?.hop_pools) ? this.gatewayStatus.hop_pools : []; },
+    gatewayTransitions() { return Array.isArray(this.gatewayStatus?.transitions) ? this.gatewayStatus.transitions : []; },
   },
 
   methods: {
@@ -1075,11 +1082,16 @@ export const appOptions = {
         hop_pool_ids: (item?.hops || []).map(hop => Number(hop.pool_id || 0)).filter(Boolean),
       };
     },
+    onGatewayStatusEndpointChanged() {
+      this.loadGatewayStatus();
+    },
     async loadGatewayEndpoints() {
       const resp = await fetch(this.gatewayEndpointsApiBase());
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || "加载 HTTP 端点失败");
       this.gatewayEndpoints = data.items || [];
+      const preferredStatusId = Number(this.gatewayStatusEndpointId || this.gatewayConfigForm.endpoint_id || 0);
+      if (!preferredStatusId && this.gatewayEndpoints.length) this.gatewayStatusEndpointId = Number(this.gatewayEndpoints[0].id || 0);
       if (!this.gatewayEndpointForm.id && this.gatewayEndpoints.length) {
         const preferred = this.gatewayEndpoints.find(item => Number(item.id) === Number(this.gatewayConfigForm.endpoint_id || 0));
         if (preferred) this.editGatewayEndpoint(preferred);
@@ -1116,6 +1128,8 @@ export const appOptions = {
       if (!resp.ok) throw new Error(data.detail || "保存 HTTP 端点失败");
       await this.loadGatewayEndpoints();
       this.editGatewayEndpoint(data.item || {});
+      this.gatewayStatusEndpointId = Number(data.item?.id || this.gatewayStatusEndpointId || 0);
+      await this.loadGatewayStatus();
       this.setMessage(`HTTP 端点已保存: ${data.item?.name || payload.name}`);
     },
     async deleteGatewayEndpoint(endpointId) {
@@ -1126,11 +1140,16 @@ export const appOptions = {
       if (Number(this.gatewayConfigForm.endpoint_id || 0) === Number(endpointId)) {
         this.gatewayConfigForm.endpoint_id = 0;
       }
+      if (Number(this.gatewayStatusEndpointId || 0) === Number(endpointId)) {
+        this.gatewayStatusEndpointId = this.gatewayEndpoints.length ? Number(this.gatewayEndpoints[0].id || 0) : 0;
+      }
       this.resetGatewayEndpointForm();
+      await this.loadGatewayStatus();
       this.setMessage("HTTP 端点已删除");
     },
     async selectGatewayEndpoint(item) {
       this.gatewayConfigForm.endpoint_id = Number(item?.id || 0);
+      this.gatewayStatusEndpointId = Number(item?.id || 0);
       await this.saveGatewayConfig();
       this.setMessage(`默认端点已切换: ${item?.name || item?.id}`);
     },
@@ -1265,10 +1284,13 @@ export const appOptions = {
       this.setMessage("HTTP 网关配置已保存");
     },
     async loadGatewayStatus() {
-      const resp = await fetch(`${this.gatewayApiBase()}/http-status`);
+      const endpointId = Number(this.gatewayStatusEndpointId || this.gatewayConfigForm.endpoint_id || 0);
+      const suffix = endpointId > 0 ? `?endpoint_id=${encodeURIComponent(endpointId)}` : "";
+      const resp = await fetch(`${this.gatewayApiBase()}/http-status${suffix}`);
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || "加载网关状态失败");
       this.gatewayStatus = data;
+      if (Number(data?.summary?.endpoint_id || 0) > 0) this.gatewayStatusEndpointId = Number(data.summary.endpoint_id);
     },
     async runGatewayTest() {
       const resp = await fetch(`${this.gatewayApiBase()}/http-test`, {
@@ -1283,6 +1305,7 @@ export const appOptions = {
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || "执行网关测试失败");
       this.gatewayTestResult = data;
+      await this.loadGatewayStatus();
       if (data.ok) this.setMessage("HTTP 网关测试成功");
       else this.setMessage(data.detail || "HTTP 网关测试失败", true);
     },
@@ -2546,6 +2569,24 @@ export const appOptions = {
         if (serial !== "-") labels.push(`#${serial}`);
       }
       return labels.length ? labels.join(",") : "-";
+    },
+    formatGatewayNode(node) {
+      if (!node) return "-";
+      const name = String(node.name || "").trim() || `${node.host || "-"}:${node.port || "-"}`;
+      const serial = this.getSerial(node.key);
+      return serial !== "-" ? `#${serial} ${name}` : name;
+    },
+    formatGatewayNodeMeta(node) {
+      if (!node) return "-";
+      const parts = [];
+      if (node.protocol) parts.push(String(node.protocol).toUpperCase());
+      if (node.country || node.city) parts.push(`${node.country || "-"}:${node.city || "-"}`);
+      if (node.latency_ms !== null && node.latency_ms !== undefined) parts.push(`${node.latency_ms} ms`);
+      if (node.resolved_ip) parts.push(node.resolved_ip);
+      return parts.length ? parts.join(" / ") : "-";
+    },
+    gatewayStatusBadgeClass(ok) {
+      return ok ? "badge-success" : "badge-danger";
     },
     getSerial(normalizedKey) {
       return this.proxySerialMap[String(normalizedKey || "")] || "-";
