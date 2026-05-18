@@ -89,12 +89,18 @@ def build_singbox_outbound(node: dict[str, Any], tag: str = "probe-out") -> dict
             "server_port": port,
             "uuid": uuid,
         }
+        flow = str(extra.get("flow") or "").strip()
+        if flow:
+            outbound["flow"] = flow
+        packet_encoding = str(extra.get("packet_encoding") or extra.get("packetEncoding") or "").strip()
+        if not packet_encoding and flow == "xtls-rprx-vision":
+            packet_encoding = "xudp"
+        if packet_encoding:
+            outbound["packet_encoding"] = packet_encoding
         security = str(extra.get("security") or "")
-        sni = str(extra.get("sni") or extra.get("servername") or "")
-        if security == "tls" or sni:
-            outbound["tls"] = {"enabled": True}
-            if sni:
-                outbound["tls"]["server_name"] = sni
+        tls = _build_singbox_tls(extra, security=security)
+        if tls:
+            outbound["tls"] = tls
         return outbound
 
     if protocol == "vmess":
@@ -184,6 +190,47 @@ def build_singbox_outbound(node: dict[str, Any], tag: str = "probe-out") -> dict
         return outbound
 
     return None
+
+
+def _build_singbox_tls(extra: dict[str, Any], security: str = "") -> dict[str, Any] | None:
+    sni = str(extra.get("sni") or extra.get("servername") or extra.get("server_name") or extra.get("peer") or "").strip()
+    fingerprint = str(extra.get("fp") or extra.get("fingerprint") or extra.get("client_fingerprint") or "").strip()
+    public_key = str(extra.get("pbk") or extra.get("public_key") or "").strip()
+    short_id = str(extra.get("sid") or extra.get("short_id") or "").strip()
+    insecure_raw = extra.get("allowInsecure")
+    if insecure_raw is None:
+        insecure_raw = extra.get("allow_insecure")
+    if insecure_raw is None:
+        insecure_raw = extra.get("insecure")
+    insecure_set = insecure_raw is not None and str(insecure_raw).strip() != ""
+    insecure = _is_truthy(insecure_raw)
+
+    security_type = str(security or "").strip().lower()
+    if not (security_type in {"tls", "reality"} or sni or fingerprint or public_key or short_id or insecure_set):
+        return None
+
+    tls: dict[str, Any] = {"enabled": True}
+    if sni:
+        tls["server_name"] = sni
+    if insecure_set:
+        tls["insecure"] = insecure
+    if fingerprint:
+        tls["utls"] = {
+            "enabled": True,
+            "fingerprint": fingerprint,
+        }
+    if public_key or short_id:
+        reality: dict[str, Any] = {"enabled": True}
+        if public_key:
+            reality["public_key"] = public_key
+        if short_id:
+            reality["short_id"] = short_id
+        tls["reality"] = reality
+    return tls
+
+
+def _is_truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class SingboxProber:

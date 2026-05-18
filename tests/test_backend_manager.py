@@ -132,6 +132,67 @@ class TestSingBoxBackendManager(unittest.TestCase):
             finally:
                 sock.close()
 
+    def test_runtime_config_preserves_vless_reality_options(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            storage = SQLiteProxyStorage(base / "proxies.db")
+            front = ProxyNode(
+                protocol="vmess",
+                host="45.192.101.134",
+                port=9527,
+                raw_link="vmess://front",
+                extra={"uuid": "ae862e1d-3b8c-443a-027b-37c6c69ef43c"},
+            )
+            exit_node = ProxyNode(
+                protocol="vless",
+                host="aws-link9.liangxin1.xyz",
+                port=23587,
+                raw_link="vless://exit",
+                extra={
+                    "uuid": "502e73b5-8662-4332-8168-8ecdb8fc6b63",
+                    "flow": "xtls-rprx-vision",
+                    "packetEncoding": "xudp",
+                    "sni": "iosapps.itunes.apple.com",
+                    "fp": "ios",
+                    "pbk": "public-key",
+                    "sid": "short-id",
+                    "allowInsecure": "0",
+                    "security": "tls",
+                },
+            )
+            storage.upsert_proxy(front)
+            storage.upsert_proxy(exit_node)
+            manager = SingBoxBackendManager(
+                storage=storage,
+                binary="sing-box",
+                test_url="https://www.cloudflare.com/cdn-cgi/trace",
+                routes_file=base / "routes.json",
+                runtime_config_file=base / "runtime" / "singbox.json",
+                log_file=base / "runtime" / "singbox.log",
+                backend_engine="singbox",
+            )
+            manager.set_routes(
+                [
+                    SingBoxRoute(
+                        inbound_port=40005,
+                        inbound_type="http",
+                        front_proxy_key=front.normalized_key(),
+                        exit_proxy_key=exit_node.normalized_key(),
+                    )
+                ]
+            )
+
+            config = manager.build_runtime_config()
+            outbound = next(item for item in config["outbounds"] if item.get("type") == "vless")
+            self.assertEqual(outbound["flow"], "xtls-rprx-vision")
+            self.assertEqual(outbound["packet_encoding"], "xudp")
+            self.assertEqual(outbound["detour"], "out-0-hop-0")
+            self.assertEqual(outbound["tls"]["server_name"], "iosapps.itunes.apple.com")
+            self.assertFalse(outbound["tls"]["insecure"])
+            self.assertEqual(outbound["tls"]["utls"]["fingerprint"], "ios")
+            self.assertEqual(outbound["tls"]["reality"]["public_key"], "public-key")
+            self.assertEqual(outbound["tls"]["reality"]["short_id"], "short-id")
+
     def test_backend_instances_are_persisted_and_reconciled(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

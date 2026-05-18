@@ -7,7 +7,7 @@ from pathlib import Path
 from proxypool.models import ProxyNode
 from proxypool.storage.sqlite import SQLiteProxyStorage
 from proxypool.tester.service import TesterService
-from proxypool.tester.singbox import DEFAULT_LATENCY_TEST_URLS, ProbeResult, SingboxProber
+from proxypool.tester.singbox import DEFAULT_LATENCY_TEST_URLS, ProbeResult, SingboxProber, build_singbox_outbound
 
 
 class FakeProber:
@@ -117,6 +117,37 @@ class FallbackChainProber:
 
 
 class TestSingboxProber(unittest.TestCase):
+    def test_build_singbox_outbound_preserves_vless_reality_options(self) -> None:
+        outbound = build_singbox_outbound(
+            {
+                "protocol": "vless",
+                "host": "aws-link9.liangxin1.xyz",
+                "port": 23587,
+                "extra": {
+                    "uuid": "502e73b5-8662-4332-8168-8ecdb8fc6b63",
+                    "flow": "xtls-rprx-vision",
+                    "packetEncoding": "xudp",
+                    "sni": "iosapps.itunes.apple.com",
+                    "fp": "ios",
+                    "pbk": "public-key",
+                    "sid": "short-id",
+                    "allowInsecure": "0",
+                    "security": "tls",
+                },
+            },
+            tag="mid-proxy",
+        )
+
+        self.assertIsNotNone(outbound)
+        assert outbound is not None
+        self.assertEqual(outbound["flow"], "xtls-rprx-vision")
+        self.assertEqual(outbound["packet_encoding"], "xudp")
+        self.assertEqual(outbound["tls"]["server_name"], "iosapps.itunes.apple.com")
+        self.assertFalse(outbound["tls"]["insecure"])
+        self.assertEqual(outbound["tls"]["utls"]["fingerprint"], "ios")
+        self.assertEqual(outbound["tls"]["reality"]["public_key"], "public-key")
+        self.assertEqual(outbound["tls"]["reality"]["short_id"], "short-id")
+
     def test_latency_test_urls_include_defaults_after_custom_primary(self) -> None:
         prober = SingboxProber(test_url="https://latency.example.com/ping")
 
