@@ -664,6 +664,36 @@ class TestProxyChainService:
         assert result is not None
         assert result["hop_node_keys"] == [front_good.normalized_key(), exit_node.normalized_key()]
 
+    def test_endpoint_route_searches_past_failed_low_latency_combinations(self, storage):
+        front_bad = ProxyNode(protocol="http", host="1.1.1.1", port=8080, name="front-11", raw_link="http://1.1.1.1:8080")
+        front_good = ProxyNode(protocol="http", host="1.1.1.2", port=8080, name="front-good", raw_link="http://1.1.1.2:8080")
+        exit_bad = ProxyNode(protocol="socks", host="2.2.2.1", port=1080, name="exit-bad", raw_link="socks://2.2.2.1:1080")
+        exit_good = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-good", raw_link="socks://2.2.2.2:1080")
+        for latency, node in enumerate([front_bad, exit_bad, front_good, exit_good], start=1):
+            storage.upsert_proxy(node)
+            storage.update_test_result(node.normalized_key(), available=True, latency_ms=latency)
+
+        pool1 = storage.create_proxy_pool(name="pool-front", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="pool-exit", filters={"protocol": "socks"})
+        endpoint = storage.create_http_proxy_endpoint(name="ep-1", listen_port=18899)
+        storage.replace_http_proxy_endpoint_hops(int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])])
+
+        service = ProxyChainService(storage)
+        for failed_hops in [
+            [front_bad.normalized_key(), exit_bad.normalized_key()],
+            [front_bad.normalized_key(), exit_good.normalized_key()],
+        ]:
+            service.report_endpoint_route_failure(
+                endpoint_id=int(endpoint["id"]),
+                pool_id=int(pool1["id"]),
+                hop_node_keys=failed_hops,
+            )
+
+        result = service.route_request("", int(pool1["id"]), int(endpoint["id"]), "api.example.com")
+
+        assert result is not None
+        assert result["hop_node_keys"] == [front_good.normalized_key(), exit_bad.normalized_key()]
+
     def test_endpoint_route_success_prefers_known_healthy_route(self, storage, monkeypatch):
         front_bad = ProxyNode(protocol="http", host="1.1.1.1", port=8080, name="front-bad", raw_link="http://1.1.1.1:8080")
         front_good = ProxyNode(protocol="http", host="1.1.1.2", port=8080, name="front-good", raw_link="http://1.1.1.2:8080")
@@ -682,6 +712,7 @@ class TestProxyChainService:
             endpoint_id=int(endpoint["id"]),
             hop_node_keys=[front_good.normalized_key(), exit_node.normalized_key()],
         )
+        assert service._is_endpoint_node_failed(int(endpoint["id"]), front_good.normalized_key()) is False
 
         def pick_bad_first(pool_id, exclude_keys, target_domain):
             del target_domain

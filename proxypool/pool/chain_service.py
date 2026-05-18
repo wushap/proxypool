@@ -1,6 +1,7 @@
 """Proxy chain service coordinating node pools, routing, and health."""
 from __future__ import annotations
 
+import itertools
 import logging
 import random
 import threading
@@ -66,6 +67,7 @@ class ProxyChainService:
         )
         self._multi_hop_leases: dict[tuple[str, int, int], MultiHopLease] = {}
         self._failed_endpoint_routes: dict[tuple[int, tuple[str, ...]], datetime] = {}
+        self._failed_endpoint_nodes: dict[tuple[int, str], datetime] = {}
         self._healthy_endpoint_routes: dict[tuple[int, tuple[str, ...]], datetime] = {}
 
         self._initialized = False
@@ -306,6 +308,7 @@ class ProxyChainService:
         else:
             resolved_endpoint_id = int(endpoint_id or 0)
         if resolved_endpoint_id > 0:
+            self.refresh_pools()
             return self._route_endpoint_request(
                 session_id=session_id,
                 endpoint_id=resolved_endpoint_id,
@@ -512,6 +515,7 @@ class ProxyChainService:
             expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(1, int(cooldown_sec or 300)))
             self._failed_endpoint_routes[(safe_endpoint_id, keys)] = expires_at
             self._healthy_endpoint_routes.pop((safe_endpoint_id, keys), None)
+            self._failed_endpoint_nodes[(safe_endpoint_id, keys[0])] = expires_at
 
     def report_endpoint_route_success(
         self,
@@ -524,6 +528,8 @@ class ProxyChainService:
         if safe_endpoint_id <= 0 or not keys:
             return
         self._failed_endpoint_routes.pop((safe_endpoint_id, keys), None)
+        for node_key in keys:
+            self._failed_endpoint_nodes.pop((safe_endpoint_id, node_key), None)
         self._healthy_endpoint_routes[(safe_endpoint_id, keys)] = datetime.now(timezone.utc) + timedelta(
             seconds=max(1, int(ttl_sec or 600))
         )
@@ -644,9 +650,7 @@ class ProxyChainService:
         if not pool_hops:
             return None
 
-        max_attempts = max(1, min(50, len(pool_hops) * 12))
         hop_node_keys: list[str] = []
-        hop_egress_ip = ""
         preferred_hops = self._pick_healthy_endpoint_route(endpoint_id, pool_hops)
         if preferred_hops is not None:
             hop_node_keys = preferred_hops
@@ -655,34 +659,65 @@ class ProxyChainService:
                 "hop_node_keys": hop_node_keys,
                 "egress_ip": str(exit_proxy.get("resolved_ip") or ""),
             }
-        for _ in range(max_attempts):
-            used_keys: set[str] = set()
-            hop_node_keys = []
-            hop_egress_ip = ""
-            for hop in pool_hops:
-                pool_id = int(hop.get("pool_id") or 0)
-                if pool_id <= 0:
-                    return None
-                candidate = self._pick_pool_candidate(pool_id=pool_id, exclude_keys=used_keys, target_domain=target_domain)
-                if candidate is None:
-                    return None
-                key = str(candidate.get("normalized_key") or "").strip()
-                if not key:
-                    return None
-                used_keys.add(key)
-                hop_node_keys.append(key)
-                hop_egress_ip = str(candidate.get("resolved_ip") or hop_egress_ip or "")
-            if not self._is_endpoint_route_failed(endpoint_id, hop_node_keys):
-                break
-        else:
+
+        selection = self._search_endpoint_hop_candidates(
+            endpoint_id=endpoint_id,
+            pool_hops=pool_hops,
+            target_domain=target_domain,
+        )
+        if selection is None:
             return None
+        hop_node_keys = selection["hop_node_keys"]
         if not hop_node_keys:
             return None
         exit_proxy = self.storage.get_proxy_by_key(hop_node_keys[-1]) or {}
         return {
             "hop_node_keys": hop_node_keys,
-            "egress_ip": str(exit_proxy.get("resolved_ip") or hop_egress_ip or ""),
+            "egress_ip": str(exit_proxy.get("resolved_ip") or selection.get("egress_ip") or ""),
         }
+
+    def _search_endpoint_hop_candidates(
+        self,
+        endpoint_id: int,
+        pool_hops: list[dict[str, Any]],
+        target_domain: str,
+    ) -> dict[str, Any] | None:
+        del target_domain
+        candidate_groups: list[list[dict[str, Any]]] = []
+        for hop in pool_hops:
+            pool_id = int(hop.get("pool_id") or 0)
+            if pool_id <= 0:
+                return None
+            candidates = [
+                item for item in self.storage.list_proxy_pool_candidates(pool_id, limit=200, exclude_keys=set())
+                if bool(item.get("available")) and str(item.get("normalized_key") or "").strip()
+            ]
+            candidates = [
+                item for item in candidates
+                if not self._is_endpoint_node_failed(endpoint_id, str(item.get("normalized_key") or "").strip())
+            ]
+            candidates.sort(key=self._candidate_score)
+            if not candidates:
+                return None
+            candidate_groups.append(candidates)
+
+        checked = 0
+        max_checks = max(1, min(1000, max(100, sum(len(group) for group in candidate_groups) * len(candidate_groups))))
+        for combo in itertools.product(*candidate_groups):
+            checked += 1
+            if checked > max_checks:
+                break
+            keys = [str(item.get("normalized_key") or "").strip() for item in combo]
+            if len(set(keys)) != len(keys):
+                continue
+            if self._is_endpoint_route_failed(endpoint_id, keys):
+                continue
+            exit_proxy = combo[-1]
+            return {
+                "hop_node_keys": keys,
+                "egress_ip": str(exit_proxy.get("resolved_ip") or ""),
+            }
+        return None
 
     def _pick_pool_candidate(
         self,
@@ -690,6 +725,7 @@ class ProxyChainService:
         exclude_keys: set[str],
         target_domain: str,
     ) -> dict[str, Any] | None:
+        del target_domain
         candidates = [
             item for item in self.storage.list_proxy_pool_candidates(pool_id, limit=200, exclude_keys=exclude_keys)
             if bool(item.get("available"))
@@ -759,6 +795,19 @@ class ProxyChainService:
             return False
         if datetime.now(timezone.utc) >= expires_at:
             self._failed_endpoint_routes.pop(key, None)
+            return False
+        return True
+
+    def _is_endpoint_node_failed(self, endpoint_id: int, node_key: str) -> bool:
+        safe_key = str(node_key or "").strip()
+        if not safe_key:
+            return False
+        key = (int(endpoint_id or 0), safe_key)
+        expires_at = self._failed_endpoint_nodes.get(key)
+        if expires_at is None:
+            return False
+        if datetime.now(timezone.utc) >= expires_at:
+            self._failed_endpoint_nodes.pop(key, None)
             return False
         return True
 
