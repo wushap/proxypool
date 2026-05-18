@@ -28,6 +28,7 @@ The application is organized as service modules under `proxypool/`, all wired to
 - `tasks` tracks long-running background operations started from API/Web UI.
 - `scheduler` runs simple interval collection and testing jobs.
 - `webui` is a static Vue/Element Plus console for operating the whole system.
+- `deploy` documents container deployment and runtime mount strategy.
 
 ## End-To-End Data Flow
 
@@ -106,3 +107,7 @@ The database is the main boundary between modules. Services communicate mostly b
 6. Start gateway/backend runtime.
 7. Send client traffic through exported subscriptions, local backend ports, or HTTP gateway endpoints.
 8. Periodically refresh sources and rerun tests so routing decisions stay current.
+
+## Deployment Guides
+
+- [Docker deployment](deploy/docker.md)

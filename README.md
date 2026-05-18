@@ -22,10 +22,44 @@
 - `proxypool/tester/`
 - `proxypool/storage/`
 - `proxypool/api/`
-- `proxypool/webui/index.html`
+- `proxypool/webui/src/`
 - `scripts/import_output_sources.py`
 - `scripts/import_sources_file.py`
 - `scripts/run_once_tester.py`
+
+## Docker 部署
+
+准备运行目录和后端二进制：
+
+```bash
+mkdir -p bin data output configs
+chmod +x bin/sing-box bin/mihomo
+```
+
+启动：
+
+```bash
+docker compose up -d --build
+```
+
+打开：`http://127.0.0.1:8080/`
+
+容器默认挂载：
+
+- `./data:/app/data`：SQLite 数据库和运行态文件
+- `./output:/app/output`：导出和任务输出
+- `./configs:/app/configs`：订阅源、路由等配置
+- `./bin:/app/bin:ro`：`sing-box`、`mihomo` 二进制
+
+HTTP 代理端点是独立监听端口。需要从宿主机访问时，请在端点配置里把监听地址设为 `0.0.0.0`，并在 `docker-compose.yml` 的 `ports` 中加入对应端口，例如：
+
+```yaml
+ports:
+  - "8080:8080"
+  - "18899:18899"
+```
+
+详细说明见 `guide/deploy/docker.md`。
 
 ## 安装依赖
 

@@ -1,0 +1,30 @@
+services:
+  proxypool:
+    build:
+      context: .
+    image: proxypool:local
+    container_name: proxypool
+    init: true
+    restart: unless-stopped
+    environment:
+      PROXYPOOL_DB_PATH: /app/data/proxies.db
+      PROXYPOOL_OUTPUT_DIR: /app/output
+      PROXYPOOL_SOURCES_FILE: /app/configs/sources.txt
+      PROXYPOOL_SINGBOX_ROUTES_FILE: /app/configs/singbox-routes.json
+      PROXYPOOL_SINGBOX_RUNTIME_CONFIG: /app/data/runtime/singbox.json
+      PROXYPOOL_SINGBOX_RUNTIME_LOG: /app/data/runtime/singbox.log
+      PROXYPOOL_SINGBOX_BINARY: /app/bin/sing-box
+      PROXYPOOL_MIHOMO_BINARY: /app/bin/mihomo
+      PROXYPOOL_MIHOMO_RUNTIME_DIR: /app/data/runtime/mihomo
+      PROXYPOOL_API_KEY: ${PROXYPOOL_API_KEY:-}
+      PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST: ${PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST:-0.0.0.0}
+      PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT: ${PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT:-8899}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "8080:8080"
+      - "${PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT:-8899}:${PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT:-8899}"
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./configs:/app/configs
+      - ./bin:/app/bin:ro
