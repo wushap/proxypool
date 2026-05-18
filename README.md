@@ -51,13 +51,7 @@ docker compose up -d --build
 - `./configs:/app/configs`：订阅源、路由等配置
 - `./bin:/app/bin:ro`：`sing-box`、`mihomo` 二进制
 
-HTTP 代理端点是独立监听端口。需要从宿主机访问时，请在端点配置里把监听地址设为 `0.0.0.0`，并在 `docker-compose.yml` 的 `ports` 中加入对应端口，例如：
-
-```yaml
-ports:
-  - "8080:8080"
-  - "18899:18899"
-```
+Docker Compose 默认使用 `network_mode: host`。HTTP 代理端点是独立监听端口，后续新增端口不需要再改 `ports` 映射；需要从其他机器访问时，请在端点配置里把监听地址设为 `0.0.0.0`。
 
 详细说明见 `guide/deploy/docker.md`。
 

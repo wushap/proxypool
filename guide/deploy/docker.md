@@ -5,7 +5,7 @@ This project can run as a Docker container with FastAPI, the built Vite Web UI, 
 ## Files
 
 - `Dockerfile` builds the Web UI in a Node stage, installs Python dependencies with `uv`, then copies the static `dist/` assets into a slim Python runtime image.
-- `docker-compose.yml` starts the app on port `8080` and mounts runtime directories.
+- `docker-compose.yml` runs the app with host networking and mounts runtime directories.
 - `.dockerignore` keeps local databases, output, frontend dependencies, and host binaries out of the build context.
 
 ## Host Directories
@@ -32,11 +32,13 @@ The image does not copy `./bin` by default because those binaries are platform-s
 docker compose up -d --build
 ```
 
-Open the Web UI:
+The compose service uses `network_mode: host`, so the app binds directly on the host network stack. Open the Web UI:
 
 ```text
 http://127.0.0.1:8080/
 ```
+
+On native Linux Docker, host networking means listeners are created directly on the host. On Docker Desktop or WSL-based Docker, host networking may be scoped to the Docker VM rather than the WSL/user host; in that environment, verify access from your actual deployment host before relying on external clients.
 
 View logs:
 
@@ -55,7 +57,7 @@ docker compose down
 Common runtime variables:
 
 - `PROXYPOOL_API_KEY` protects mutating API calls with `X-API-Key`.
-- `PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST` defaults to `0.0.0.0` in Docker so published proxy ports can be reached from the host.
+- `PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST` defaults to `0.0.0.0` in Docker so proxy ports can be reached from outside the host when firewall rules allow it.
 - `PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT` defaults to `8899`.
 - `PROXYPOOL_SOURCES_FILE` defaults to `/app/configs/sources.txt`.
 - `PROXYPOOL_DB_PATH` defaults to `/app/data/proxies.db`.
@@ -71,20 +73,14 @@ PROXYPOOL_API_KEY=change-me PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT=18899 docker com
 
 ## HTTP Proxy Endpoint Ports
 
-The Web UI/API always runs on container port `8080`. HTTP proxy endpoints are separate listeners, so each endpoint that must be accessed from the host needs both:
+The Web UI/API listens on host port `8080`. HTTP proxy endpoints are separate listeners. Because compose uses host networking, newly created endpoint ports do not need explicit `ports` mappings.
 
-1. The endpoint listen host set to `0.0.0.0`.
-2. A matching compose port mapping.
+Use these rules:
 
-For example, if an endpoint listens on `18899`, add:
+- For local-only access on the host, use `127.0.0.1`.
+- For access from other machines, set the endpoint listen host to `0.0.0.0` and allow the port through the host firewall.
 
-```yaml
-ports:
-  - "8080:8080"
-  - "18899:18899"
-```
-
-If the endpoint listens on `127.0.0.1` inside the container, Docker port publishing will not expose it reliably to the host. Use `0.0.0.0` for container deployments.
+Host networking is intentional here because proxy endpoints can be added dynamically from the Web UI/API. Bridge networking would require updating compose port mappings for every new listener.
 
 ## Data Persistence
 

@@ -5,6 +5,7 @@ services:
     image: proxypool:local
     container_name: proxypool
     init: true
+    network_mode: host
     restart: unless-stopped
     environment:
       PROXYPOOL_DB_PATH: /app/data/proxies.db
@@ -20,9 +21,6 @@ services:
       PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST: ${PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST:-0.0.0.0}
       PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT: ${PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT:-8899}
       TZ: ${TZ:-Asia/Shanghai}
-    ports:
-      - "8080:8080"
-      - "${PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT:-8899}:${PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT:-8899}"
     volumes:
       - ./data:/app/data
       - ./output:/app/output
