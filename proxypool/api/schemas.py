@@ -78,6 +78,7 @@ class SpeedTestRequest(BaseModel):
     limit: int = Field(default=0, ge=0, le=20000)
     timeout_sec: float = Field(default=30.0, ge=3.0, le=300.0)
     only_available: bool = True
+    only_direct: bool | None = None
 
 
 class AutoTaskConfigRequest(BaseModel):

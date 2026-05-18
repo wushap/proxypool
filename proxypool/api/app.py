@@ -220,9 +220,11 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             raise ValueError("speed test url must start with http:// or https://")
 
         def _runner(update, should_stop):
+            only_direct = bool(body.only_available) if body.only_direct is None else bool(body.only_direct)
             candidates = storage.get_candidates_for_test(
                 limit=int(body.limit or 0),
                 only_available=bool(body.only_available),
+                only_direct=only_direct,
             )
             total = len(candidates)
             results: list[dict] = []
@@ -1567,15 +1569,19 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
-        html_path = cfg.project_root / "proxypool" / "webui" / "index.html"
-        if not html_path.exists():
-            raise HTTPException(status_code=404, detail="WebUI not found")
-        return html_path.read_text(encoding="utf-8")
+        dist_index = cfg.project_root / "proxypool" / "webui" / "dist" / "index.html"
+        if not dist_index.exists():
+            raise HTTPException(status_code=404, detail="WebUI build not found. Run `npm run build` in proxypool/webui.")
+        return dist_index.read_text(encoding="utf-8")
 
-    # Serve webui static assets (css/, js/)
+    # Serve built Vite assets when present; fall back to legacy static assets for tests/dev.
     _webui_dir = cfg.project_root / "proxypool" / "webui"
-    if _webui_dir.is_dir():
+    _webui_dist = _webui_dir / "dist"
+    if (_webui_dist / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_webui_dist / "assets")), name="webui-assets")
+    if (_webui_dir / "css").is_dir():
         app.mount("/css", StaticFiles(directory=str(_webui_dir / "css")), name="webui-css")
+    if (_webui_dir / "js").is_dir():
         app.mount("/js", StaticFiles(directory=str(_webui_dir / "js")), name="webui-js")
 
     # ------------------------------------------------------------------

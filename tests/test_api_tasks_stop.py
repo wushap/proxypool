@@ -149,6 +149,105 @@ async def test_speed_test_task_runs_serial_speed_probe(tmp_path, monkeypatch) ->
 
 
 @pytest.mark.anyio
+async def test_speed_test_only_direct_filters_out_chained_nodes(tmp_path, monkeypatch) -> None:
+    app = create_app(_make_settings(tmp_path))
+    storage = app.state.storage
+    direct = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="direct")
+    chained = ProxyNode(protocol="http", host="2.2.2.2", port=8080, raw_link="http://2.2.2.2:8080", name="chained")
+    storage.upsert_proxy(direct)
+    storage.upsert_proxy(chained)
+    storage.update_test_result(direct.normalized_key(), available=True, latency_ms=10, fallback_front_keys=[])
+    storage.update_test_result(chained.normalized_key(), available=True, latency_ms=20, fallback_front_keys=["front-a"])
+    tested_keys: list[str] = []
+
+    async def fake_speed_test_async(node, url, timeout_sec=30.0):
+        tested_keys.append(str(node.get("normalized_key") or ""))
+        return SpeedTestResult(
+            normalized_key=str(node.get("normalized_key") or ""),
+            ok=True,
+            elapsed_ms=1000,
+            bytes_downloaded=10_000_000,
+            speed_mbps=80.0,
+        )
+
+    monkeypatch.setattr(app.state.tester.prober, "speed_test_async", fake_speed_test_async)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        start_resp = await client.post(
+            "/api/tasks/speed-test/start",
+            json={
+                "url": "https://speed.cloudflare.com/__down?bytes=10000000",
+                "limit": 0,
+                "timeout_sec": 10,
+                "only_available": True,
+                "only_direct": True,
+            },
+        )
+        assert start_resp.status_code == 200
+        task_id = start_resp.json()["task_id"]
+
+        for _ in range(80):
+            task_resp = await client.get(f"/api/tasks/{task_id}")
+            assert task_resp.status_code == 200
+            task = task_resp.json()
+            if str(task.get("status")) == "success":
+                break
+            await asyncio.sleep(0.02)
+
+    assert tested_keys == [direct.normalized_key()]
+
+
+@pytest.mark.anyio
+async def test_speed_test_legacy_only_available_defaults_to_direct_nodes(tmp_path, monkeypatch) -> None:
+    app = create_app(_make_settings(tmp_path))
+    storage = app.state.storage
+    direct = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="direct")
+    chained = ProxyNode(protocol="http", host="2.2.2.2", port=8080, raw_link="http://2.2.2.2:8080", name="chained")
+    storage.upsert_proxy(direct)
+    storage.upsert_proxy(chained)
+    storage.update_test_result(direct.normalized_key(), available=True, latency_ms=10, fallback_front_keys=[])
+    storage.update_test_result(chained.normalized_key(), available=True, latency_ms=20, fallback_front_keys=["front-a"])
+    tested_keys: list[str] = []
+
+    async def fake_speed_test_async(node, url, timeout_sec=30.0):
+        tested_keys.append(str(node.get("normalized_key") or ""))
+        return SpeedTestResult(
+            normalized_key=str(node.get("normalized_key") or ""),
+            ok=True,
+            elapsed_ms=1000,
+            bytes_downloaded=10_000_000,
+            speed_mbps=80.0,
+        )
+
+    monkeypatch.setattr(app.state.tester.prober, "speed_test_async", fake_speed_test_async)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        start_resp = await client.post(
+            "/api/tasks/speed-test/start",
+            json={
+                "url": "https://speed.cloudflare.com/__down?bytes=10000000",
+                "limit": 0,
+                "timeout_sec": 10,
+                "only_available": True,
+            },
+        )
+        assert start_resp.status_code == 200
+        task_id = start_resp.json()["task_id"]
+
+        for _ in range(80):
+            task_resp = await client.get(f"/api/tasks/{task_id}")
+            assert task_resp.status_code == 200
+            task = task_resp.json()
+            if str(task.get("status")) == "success":
+                break
+            await asyncio.sleep(0.02)
+
+    assert tested_keys == [direct.normalized_key()]
+
+
+@pytest.mark.anyio
 async def test_auto_task_config_round_trip(tmp_path) -> None:
     app = create_app(_make_settings(tmp_path))
     transport = httpx.ASGITransport(app=app)

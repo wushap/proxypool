@@ -1,0 +1,110 @@
+<template>
+            <section v-show="activePage === 'subscriptions'" class="card fade-in">
+              <div class="card-body">
+                <div class="section-header">
+                  <h2 class="section-title">订阅管理</h2>
+                  <div class="btn-group">
+                    <button @click="onRefreshAllSubscriptions" :disabled="isActionRunning('refreshAllSubscriptions')" class="btn btn-secondary">
+                      {{ buttonLabel('refreshAllSubscriptions', '刷新全部', '刷新中...') }}
+                    </button>
+                    <button @click="onDeleteUnavailableSubscriptions" :disabled="isActionRunning('deleteUnavailableSubscriptions')" class="btn btn-danger">
+                      {{ buttonLabel('deleteUnavailableSubscriptions', '删除不可用', '删除中...') }}
+                    </button>
+                    <button @click="onLoadSubscriptions" :disabled="isActionRunning('loadSubscriptions')" class="btn btn-secondary">
+                      {{ buttonLabel('loadSubscriptions', '刷新列表', '刷新中...') }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Add subscription form -->
+                <div class="form-row-3" style="gap: 8px; margin-bottom: 12px;">
+                  <input v-model.trim="subscriptionForm.name" type="text" placeholder="订阅名称" class="input" />
+                  <input v-model.trim="subscriptionForm.url" type="text" placeholder="订阅链接 URL" class="input" />
+                  <button @click="onCreateSubscription" :disabled="isActionRunning('createSubscription')" class="btn btn-primary">
+                    {{ buttonLabel('createSubscription', '添加订阅', '添加中...') }}
+                  </button>
+                </div>
+
+                <!-- Global update proxy -->
+                <div class="form-row-4" style="gap: 8px; margin-bottom: 12px;">
+                  <input v-model.trim="subscriptionUpdateProxyRef" list="proxy-key-options" type="text" placeholder="全局更新代理序号(可选 如 #12)" class="input input-mono" style="grid-column: span 3;" />
+                  <button @click="onSaveSubscriptionUpdateProxy" :disabled="isActionRunning('saveSubUpdateProxy')" class="btn btn-secondary">
+                    {{ buttonLabel('saveSubUpdateProxy', '保存', '保存中...') }}
+                  </button>
+                </div>
+
+                <p class="form-hint" style="margin-bottom: 12px;">节点来源将自动标记为 `subscription#ID:名称|URL`，可在节点表来源列过滤。</p>
+
+                <!-- Pagination -->
+                <div class="pagination">
+                  <div class="pagination-info">
+                    <span class="text-muted">每页</span>
+                    <select v-model.number="pagination.subscriptions.perPage" @change="onPaginationPageSizeChange('subscriptions')" class="select input-sm" style="width: 56px;">
+                      <option v-for="n in pageSizeOptions" :key="'sub-' + n" :value="n">{{ n }}</option>
+                    </select>
+                    <span class="text-muted">{{ pageIndicator('subscriptions') }}</span>
+                  </div>
+                  <div class="pagination-nav">
+                    <button @click="goPrevPage('subscriptions')" :disabled="!canPrevPage('subscriptions')" class="btn btn-xs btn-ghost">上一页</button>
+                    <button @click="goNextPage('subscriptions')" :disabled="!canNextPage('subscriptions')" class="btn btn-xs btn-ghost">下一页</button>
+                  </div>
+                </div>
+
+                <!-- Table -->
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th style="width: 50px;">ID</th>
+                        <th style="width: 140px;">名称</th>
+                        <th>链接</th>
+                        <th style="width: 70px;">启用</th>
+                        <th style="width: 80px;">状态</th>
+                        <th style="width: 220px;" title="解析/新增/更新/无效/去重">统计</th>
+                        <th style="width: 140px;">上次刷新</th>
+                        <th style="width: 100px;">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="item in paginatedSubscriptions" :key="item.id">
+                        <td class="mono text-muted">{{ item.id }}</td>
+                        <td><input :value="item.name || ''" @change="onRenameSubscription(item, $event.target.value)" type="text" class="inline-input" /></td>
+                        <td class="mono text-muted text-xs truncate" style="max-width: 280px;">{{ shortSubscriptionUrl(item.url) }}</td>
+                        <td>
+                          <button @click="onToggleSubscription(item)" :disabled="isActionRunning('toggleSub-' + item.id)" class="btn btn-xs" :class="item.enabled ? 'btn-success' : 'btn-ghost'">
+                            {{ item.enabled ? '启用' : '停用' }}
+                          </button>
+                        </td>
+                        <td><span class="badge" :class="item.last_status === 'success' ? 'badge-success' : item.last_status === 'failed' ? 'badge-danger' : 'badge-neutral'">{{ item.last_status || '-' }}</span></td>
+                        <td>
+                          <div class="subscription-stats" :title="'解析 ' + (item.last_parsed || 0) + ' / 新增 ' + (item.last_inserted || 0) + ' / 更新 ' + (item.last_updated || 0) + ' / 无效 ' + (item.last_invalid || 0) + ' / 去重 ' + (item.last_deduped || 0)">
+                            <span class="stat-pill">解析 {{ item.last_parsed || 0 }}</span>
+                            <span class="stat-pill stat-pill-success">新增 {{ item.last_inserted || 0 }}</span>
+                            <span class="stat-pill">更新 {{ item.last_updated || 0 }}</span>
+                            <span class="stat-pill" :class="(item.last_invalid || 0) > 0 ? 'stat-pill-danger' : ''">无效 {{ item.last_invalid || 0 }}</span>
+                            <span class="stat-pill">去重 {{ item.last_deduped || 0 }}</span>
+                          </div>
+                        </td>
+                        <td class="text-xs text-muted">{{ formatTime(item.last_fetched_at) }}</td>
+                        <td>
+                          <div class="btn-group">
+                            <button @click="onRefreshSubscription(item.id)" :disabled="isActionRunning('refreshSub-' + item.id)" class="btn btn-xs btn-secondary">刷新</button>
+                            <button @click="onDeleteSubscription(item.id)" :disabled="isActionRunning('deleteSub-' + item.id)" class="btn btn-xs btn-danger">删除</button>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+</template>
+
+<script>
+import { rootProxyMixin } from "../rootProxyMixin";
+
+export default {
+  name: "SubscriptionsPage",
+  mixins: [rootProxyMixin],
+};
+</script>

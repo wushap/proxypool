@@ -19,6 +19,10 @@ data/
 *.pid
 proxies.db
 
+# frontend build artifacts
+node_modules/
+proxypool/webui/dist/
+
 # local import/export artifacts
 output/
 

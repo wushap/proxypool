@@ -33,6 +33,10 @@
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cd proxypool/webui
+npm install
+npm run build
+cd ../..
 ```
 
 ## 快速开始
@@ -50,6 +54,15 @@ python3 -m proxypool.main
 ```
 
 打开：`http://127.0.0.1:8080/`
+
+开发前端时可单独启动 Vite：
+
+```bash
+cd proxypool/webui
+npm run dev
+```
+
+Vite dev server 会把 `/api` 代理到 `http://127.0.0.1:8080`；生产或直接由 FastAPI 服务 WebUI 时，先运行 `npm run build` 生成 `proxypool/webui/dist/`。
 
 3. 手动跑一轮测速：
 

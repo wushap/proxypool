@@ -1,10 +1,8 @@
 /**
- * Proxy Pool Console - Vue Application
+ * Proxy Pool Console - Vue root options.
  */
-const { createApp } = Vue;
-
 // --- Defaults ---
-const DEFAULT_PROXY_COLUMN_CONFIGS = {
+export const DEFAULT_PROXY_COLUMN_CONFIGS = {
   serial:         { label: "序号",       visible: true },
   protocol:       { label: "协议",       visible: true },
   address:        { label: "地址",       visible: true },
@@ -20,17 +18,17 @@ const DEFAULT_PROXY_COLUMN_CONFIGS = {
   action:         { label: "操作",       visible: true },
 };
 
-const DEFAULT_PROXY_COLUMN_ORDER = [
+export const DEFAULT_PROXY_COLUMN_ORDER = [
   "serial", "protocol", "address", "latency", "bandwidth", "status", "checked_at",
   "geo", "purity", "unlock", "fallback_front", "source", "action",
 ];
 
-const DEFAULT_PROXY_FILTERS = {
+export const DEFAULT_PROXY_FILTERS = {
   protocol: "", available: "", geo: "", geo_country: "", geo_location: "",
   openai: "", ip_purity: "", fallback_front: "", source: "", speed_min_mbps: "",
 };
 
-function cloneProxyColumnConfigs() {
+export function cloneProxyColumnConfigs() {
   const out = {};
   for (const [key, val] of Object.entries(DEFAULT_PROXY_COLUMN_CONFIGS)) {
     out[key] = { label: String(val.label || ""), visible: val.visible !== false };
@@ -38,8 +36,8 @@ function cloneProxyColumnConfigs() {
   return out;
 }
 
-// --- Create App ---
-const app = createApp({
+// --- Root Options ---
+export const appOptions = {
   data() {
     return {
       activePage: "tasks",
@@ -175,7 +173,7 @@ const app = createApp({
         url: "https://speed.cloudflare.com/__down?bytes=10000000",
         limit: 0,
         timeout_sec: 30,
-        only_available: true,
+        only_direct: true,
       },
       autoTaskConfig: {
         enabled: false,
@@ -2343,7 +2341,8 @@ const app = createApp({
           url: String(this.speedTestForm.url || "").trim(),
           limit: Math.max(0, Math.min(20000, Math.trunc(Number(this.speedTestForm.limit || 0)))),
           timeout_sec: Math.max(3, Math.min(300, Number(this.speedTestForm.timeout_sec || 30))),
-          only_available: this.speedTestForm.only_available === true,
+          only_available: this.speedTestForm.only_direct === true,
+          only_direct: this.speedTestForm.only_direct === true,
         };
         if (!/^https?:\/\//.test(payload.url)) throw new Error("测速文件地址必须以 http:// 或 https:// 开头");
         this.speedTestForm = payload;
@@ -2583,23 +2582,4 @@ const app = createApp({
   },
 
   unmounted() { this.stopTaskPolling(); },
-});
-
-// --- Element Plus Defaults ---
-const applyElementPlusDefaults = () => {
-  const defaults = [
-    [ElementPlus.ElButton, { size: "small" }],
-    [ElementPlus.ElTag, { size: "small", effect: "plain" }],
-    [ElementPlus.ElInput, { size: "small", clearable: true }],
-    [ElementPlus.ElSelect, { size: "small", clearable: true }],
-  ];
-  defaults.forEach(([component, props]) => {
-    if (component && typeof component.setPropsDefaults === "function") {
-      component.setPropsDefaults(props);
-    }
-  });
 };
-applyElementPlusDefaults();
-
-app.use(ElementPlus);
-app.mount("#app");

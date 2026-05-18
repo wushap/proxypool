@@ -7,15 +7,27 @@ WEBUI_DIR = Path("proxypool/webui")
 def _read_webui() -> str:
     """Read all webui files for combined content checks."""
     parts = []
-    for name in ["index.html", "js/app.js", "css/main.css"]:
+    for name in ["index.html", "package.json", "vite.config.js"]:
         p = WEBUI_DIR / name
         if p.exists():
             parts.append(p.read_text(encoding="utf-8"))
+    src_dir = WEBUI_DIR / "src"
+    if src_dir.exists():
+        for p in sorted(src_dir.rglob("*")):
+            if p.suffix in {".vue", ".js", ".css"}:
+                parts.append(p.read_text(encoding="utf-8"))
+    legacy_css = WEBUI_DIR / "css" / "main.css"
+    if legacy_css.exists():
+        parts.append(legacy_css.read_text(encoding="utf-8"))
     return "\n".join(parts)
 
 
 def _read_html() -> str:
-    return (WEBUI_DIR / "index.html").read_text(encoding="utf-8")
+    parts = [(WEBUI_DIR / "index.html").read_text(encoding="utf-8")]
+    src_dir = WEBUI_DIR / "src"
+    if src_dir.exists():
+        parts.extend(p.read_text(encoding="utf-8") for p in sorted(src_dir.rglob("*.vue")))
+    return "\n".join(parts)
 
 
 def test_el_option_must_not_be_self_closing_in_dom_template() -> None:
@@ -120,6 +132,16 @@ def test_webui_should_use_pragmatic_element_plus_console_shell() -> None:
     assert "Proxy Pool" in html
 
 
+def test_webui_should_use_vite_vue_stack() -> None:
+    content = _read_webui()
+    assert '"vite"' in content
+    assert '"@vitejs/plugin-vue"' in content
+    assert 'import { createApp } from "vue"' in content
+    assert 'import ElementPlus from "element-plus"' in content
+    assert '<script type="module" src="/src/main.js"></script>' in content
+    assert "js/components/loader.js" not in content
+
+
 def test_webui_should_expose_unified_multi_hop_pool_menu() -> None:
     html = _read_html()
     assert 'index="proxy-pools">多跳代理池<' in html
@@ -160,7 +182,7 @@ def test_webui_task_delete_button_should_call_existing_handler() -> None:
 
 def test_webui_click_handlers_should_exist_in_app_methods() -> None:
     html = _read_html()
-    js = (WEBUI_DIR / "js/app.js").read_text(encoding="utf-8")
+    js = (WEBUI_DIR / "src" / "appOptions.js").read_text(encoding="utf-8")
     refs = set(re.findall(r'@click="\s*(on[A-Za-z0-9_]+)\b', html))
     defs = set(re.findall(r"async\s+(on[A-Za-z0-9_]+)\s*\(", js))
     assert sorted(refs - defs) == []

@@ -260,6 +260,21 @@ class TestSQLiteProxyStorage(unittest.TestCase):
             self.assertEqual(len(none_rows), 1)
             self.assertEqual(has_rows[0]["normalized_key"], n1.normalized_key())
 
+    def test_get_candidates_for_test_only_direct_excludes_fallback_front_nodes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "db.sqlite3"
+            storage = SQLiteProxyStorage(db)
+            chained = ProxyNode(protocol="trojan", host="chain.example.com", port=443, raw_link="trojan://chain", extra={"password": "p"})
+            direct = ProxyNode(protocol="trojan", host="direct.example.com", port=443, raw_link="trojan://direct", extra={"password": "p"})
+            storage.upsert_proxy(chained)
+            storage.upsert_proxy(direct)
+            storage.update_test_result(chained.normalized_key(), available=True, latency_ms=100, fallback_front_keys=["front-a"])
+            storage.update_test_result(direct.normalized_key(), available=True, latency_ms=120, fallback_front_keys=[])
+
+            rows = storage.get_candidates_for_test(limit=0, only_available=True, only_direct=True)
+
+            self.assertEqual([row["normalized_key"] for row in rows], [direct.normalized_key()])
+
     def test_get_candidates_for_test_supports_only_unavailable_and_min_age(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"

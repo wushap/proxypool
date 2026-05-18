@@ -4,12 +4,17 @@ WEBUI_DIR = Path("proxypool/webui")
 
 
 def _read_webui() -> str:
-    """Read both index.html and js/app.js for combined content checks."""
+    """Read Vite WebUI source files for combined content checks."""
     parts = []
-    for name in ["index.html", "js/app.js"]:
+    for name in ["index.html", "package.json", "vite.config.js"]:
         p = WEBUI_DIR / name
         if p.exists():
             parts.append(p.read_text(encoding="utf-8"))
+    src_dir = WEBUI_DIR / "src"
+    if src_dir.exists():
+        for p in sorted(src_dir.rglob("*")):
+            if p.suffix in {".vue", ".js", ".css"}:
+                parts.append(p.read_text(encoding="utf-8"))
     return "\n".join(parts)
 
 
@@ -20,7 +25,7 @@ def test_webui_should_poll_task_list_not_single_task_endpoint() -> None:
 
 
 def test_webui_should_render_multi_task_panel() -> None:
-    html = (WEBUI_DIR / "index.html").read_text(encoding="utf-8")
+    html = _read_webui()
     assert "任务中心" in html
     assert "v-for=\"task in taskItems\"" in html
     assert "删除记录" in html
@@ -50,6 +55,9 @@ def test_webui_should_support_speed_test_and_auto_tasks() -> None:
     content = _read_webui()
     assert "测试网速" in content
     assert "speedTestForm" in content
+    assert "only_direct" in content
+    assert "仅对可直连的节点测速" in content
+    assert "排除依赖前置代理的链式连通节点" in content
     assert "/api/tasks/speed-test/start" in content
     assert "自动任务" in content
     assert "autoTaskConfig" in content

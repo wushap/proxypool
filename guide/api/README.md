@@ -27,7 +27,7 @@ Authorization is implemented as HTTP middleware. Read-oriented endpoints are all
 - Proxy listing and bulk deletion: `/api/proxies`, `/api/proxies/delete-*`.
 - Collection and subscriptions: `/api/collector/*`, `/api/subscriptions/*`, `/api/published-subscriptions/*`, `/api/subscription`.
 - GeoIP and IP purity: `/api/geoip/enrich`, `/api/geoip/ip-purity`, corresponding task start routes.
-- Testing and speed checks: `/api/tester/*`, `/api/tasks/speed-test/start`, `/api/tasks/openai-check/start`.
+- Testing and speed checks: `/api/tester/*`, `/api/tasks/speed-test/start`, `/api/tasks/openai-check/start`. Speed-test requests can pass `only_direct=true` to restrict candidates to directly reachable available nodes (`fallback_front_keys_json = '[]'`), excluding nodes that only work through a fallback front proxy.
 - Proxy pools and chain routes: `/api/pools/*`, `/api/chain/*`.
 - HTTP gateway: `/api/gateway/*`, `/api/http-proxy-endpoints/*`, and `/api/gateway/{pool_name}/{scheme}/{target_host}/{target_path}`.
 

@@ -669,6 +669,7 @@ class SQLiteProxyStorage:
         only_unchecked: bool = False,
         only_available: bool = False,
         only_unavailable: bool = False,
+        only_direct: bool = False,
         min_last_checked_age_hours: int = 0,
         protocols: list[str] | None = None,
     ) -> list[dict[str, Any]]:
@@ -679,6 +680,8 @@ class SQLiteProxyStorage:
             where.append("last_checked_at IS NULL")
         if only_available:
             where.append("available = 1")
+        if only_direct:
+            where.append("fallback_front_keys_json = '[]'")
         if only_unavailable:
             where.append("available = 0")
         if not only_unchecked:
