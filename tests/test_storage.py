@@ -44,6 +44,12 @@ class TestSQLiteProxyStorage(unittest.TestCase):
             self.assertEqual(up_rows[0]["openai_unlocked"], True)
             self.assertEqual(up_rows[0]["openai_status"], "401 unauthorized")
             self.assertEqual(up_rows[0]["fallback_front_keys"], ["front-key-1", "front-key-2"])
+            storage.update_speed_test_result(first_key, ok=True, speed_mbps=80.1234)
+            fast_rows = storage.list_proxies_filtered(limit=10, speed_min_mbps=80)
+            self.assertEqual(len(fast_rows), 1)
+            self.assertEqual(float(fast_rows[0]["speed_mbps"]), 80.123)
+            faster_rows = storage.list_proxies_filtered(limit=10, speed_min_mbps=80.123)
+            self.assertEqual(len(faster_rows), 0)
 
             links = storage.get_subscription_links(only_available=True)
             self.assertEqual(len(links), 1)
@@ -87,10 +93,14 @@ class TestSQLiteProxyStorage(unittest.TestCase):
             unknown_source_rows = storage.list_proxies_filtered(limit=10, source_keyword="-")
             self.assertEqual(len(unknown_source_rows), 0)
 
+            selected_deleted = storage.delete_proxies_by_keys([first_key, first_key, "missing"])
+            self.assertEqual(selected_deleted, 1)
+            self.assertIsNone(storage.get_proxy_by_key(first_key))
+
             deleted = storage.delete_unavailable()
             self.assertEqual(deleted, 1)
             left = storage.list_proxies_filtered(limit=10)
-            self.assertEqual(len(left), 1)
+            self.assertEqual(len(left), 0)
 
     def test_backend_process_events(self) -> None:
         with tempfile.TemporaryDirectory() as td:

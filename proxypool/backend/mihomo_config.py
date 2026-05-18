@@ -11,10 +11,20 @@ def build_mihomo_chain_config(spec: ChainInstanceSpec) -> dict[str, Any]:
     if listener_type not in {"http", "socks", "mixed"}:
         raise RuntimeError(f"unsupported mihomo inbound_type: {spec.inbound_type}")
 
-    front_name = str(spec.front_proxy.get("name") or "front").strip() or "front"
-    exit_name = str(spec.exit_proxy.get("name") or "exit").strip() or "exit"
-    front_proxy = _build_mihomo_proxy(spec.front_proxy, name=front_name)
-    exit_proxy = _build_mihomo_proxy(spec.exit_proxy, name=exit_name, dialer_proxy=front_name)
+    hop_proxies = list(spec.hop_proxies or [])
+    if not hop_proxies:
+        raise RuntimeError("mihomo chain requires at least one hop proxy")
+
+    proxies: list[dict[str, Any]] = []
+    previous_name = ""
+    final_name = ""
+    for idx, proxy in enumerate(hop_proxies):
+        default_name = f"hop-{idx + 1}"
+        name = str(proxy.get("name") or default_name).strip() or default_name
+        item = _build_mihomo_proxy(proxy, name=name, dialer_proxy=previous_name or None)
+        proxies.append(item)
+        previous_name = name
+        final_name = name
 
     return {
         "listeners": [
@@ -25,8 +35,8 @@ def build_mihomo_chain_config(spec: ChainInstanceSpec) -> dict[str, Any]:
                 "port": int(spec.port),
             }
         ],
-        "proxies": [front_proxy, exit_proxy],
-        "rules": ["MATCH," + exit_name],
+        "proxies": proxies,
+        "rules": ["MATCH," + final_name],
     }
 
 

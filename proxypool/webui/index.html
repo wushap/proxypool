@@ -11,7 +11,7 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
     <script src="https://unpkg.com/element-plus/dist/index.full.min.js"></script>
-    <link rel="stylesheet" href="css/main.css" />
+    <link rel="stylesheet" href="css/main.css?v=20260518-subscription-stats" />
   </head>
   <body>
     <div id="app" class="layout">
@@ -26,9 +26,7 @@
             <el-menu-item index="tasks">任务中心</el-menu-item>
             <el-menu-item index="subscriptions">订阅管理</el-menu-item>
             <el-menu-item index="published-subscriptions">订阅发布</el-menu-item>
-            <el-menu-item index="proxy-pools">代理池</el-menu-item>
-            <el-menu-item index="backend">sing-box 后端</el-menu-item>
-            <el-menu-item index="chain">代理链管理</el-menu-item>
+            <el-menu-item index="proxy-pools">多跳代理池</el-menu-item>
             <el-menu-item index="proxies">代理节点</el-menu-item>
           </el-menu>
           <!-- Global status footer -->
@@ -69,17 +67,28 @@
             </datalist>
 
             <!-- ==================== 任务中心 ==================== -->
-            <section v-show="activePage === 'tasks'" class="fade-in">
+            <section v-show="activePage === 'tasks'" class="task-dashboard fade-in">
               <!-- Quick actions -->
-              <div class="card" style="margin-bottom: 12px;">
+              <div class="card task-quick-card">
                 <div class="card-body">
-                  <h2 class="section-title" style="margin-bottom: 12px;">快捷操作</h2>
-                  <div class="action-bar">
+                  <div class="task-ops-header">
+                    <div>
+                      <h2 class="section-title">任务操作</h2>
+                      <p class="form-hint">常用任务集中启动，运行状态在下方任务列表跟踪。</p>
+                    </div>
+                    <span class="badge" :class="taskItems.some(t => ['queued','running'].includes(String(t.status||''))) ? 'badge-warning' : 'badge-neutral'">
+                      {{ taskItems.some(t => ['queued','running'].includes(String(t.status||''))) ? '有任务运行' : '空闲' }}
+                    </span>
+                  </div>
+                  <div class="action-bar task-action-bar">
                     <button class="btn btn-primary" :disabled="isActionRunning('importFiles')" @click="openImportFiles">
                       {{ buttonLabel('importFiles', '导入节点文件', '导入中...') }}
                     </button>
                     <button class="btn btn-secondary" :disabled="isActionRunning('runTest')" @click="onRunTest">
                       {{ buttonLabel('runTest', '立即测速', '测速中...') }}
+                    </button>
+                    <button class="btn btn-secondary" :disabled="isActionRunning('runSpeedTest')" @click="onRunSpeedTest">
+                      {{ buttonLabel('runSpeedTest', '测试网速', '测试中...') }}
                     </button>
                     <button class="btn btn-secondary" :disabled="isActionRunning('runUnlockCheck')" @click="onRunUnlockCheck">
                       {{ buttonLabel('runUnlockCheck', '检测ChatGPT解锁', '检测中...') }}
@@ -102,7 +111,7 @@
               </div>
 
               <!-- Settings panels -->
-              <div class="settings-grid">
+              <div class="settings-grid task-settings-grid">
                 <!-- Test fallback -->
                 <div class="card">
                   <div class="card-body">
@@ -179,10 +188,109 @@
                     </div>
                   </div>
                 </div>
+
+                <!-- Speed test -->
+                <div class="card">
+                  <div class="card-body">
+                    <h3 class="settings-title">网速测试</h3>
+                    <div class="settings-row">
+                      <div class="form-group" style="flex: 2.2;">
+                        <label class="form-label">测速文件地址</label>
+                        <input v-model.trim="speedTestForm.url" type="text" placeholder="https://speed.cloudflare.com/__down?bytes=10000000" class="input mono" />
+                      </div>
+                      <div class="form-group" style="flex: 0.8;">
+                        <label class="form-label">节点数</label>
+                        <input v-model.number="speedTestForm.limit" type="number" min="0" max="20000" class="input" />
+                      </div>
+                      <div class="form-group" style="flex: 0.8;">
+                        <label class="form-label">超时(秒)</label>
+                        <input v-model.number="speedTestForm.timeout_sec" type="number" min="3" max="300" class="input" />
+                      </div>
+                      <label class="form-check self-end">
+                        <input v-model="speedTestForm.only_available" type="checkbox" />
+                        <span>仅可用节点</span>
+                      </label>
+                      <button @click="onRunSpeedTest" :disabled="isActionRunning('runSpeedTest')" class="btn btn-secondary self-end">
+                        {{ buttonLabel('runSpeedTest', '开始网速测试', '测试中...') }}
+                      </button>
+                    </div>
+                    <p class="form-hint" style="margin-top: 8px;">串行测试，适合使用固定大小下载文件；例如 Cloudflare 10MB 下载地址。</p>
+                  </div>
+                </div>
+
+                <!-- Auto tasks -->
+                <div class="card">
+                  <div class="card-body">
+                    <div class="card-header">
+                      <h3 class="settings-title">自动任务</h3>
+                      <button @click="onLoadAutoTaskConfig" :disabled="isActionRunning('loadAutoTaskConfig')" class="btn btn-xs btn-secondary">刷新配置</button>
+                    </div>
+                    <div class="settings-row">
+                      <label class="form-check">
+                        <input v-model="autoTaskConfig.enabled" type="checkbox" />
+                        <span>启用自动任务</span>
+                      </label>
+                      <label class="form-check">
+                        <input v-model="autoTaskConfig.subscription_refresh_enabled" type="checkbox" />
+                        <span>自动更新订阅</span>
+                      </label>
+                      <div class="form-group" style="flex: 0.8;">
+                        <label class="form-label">订阅间隔(分钟)</label>
+                        <input v-model.number="autoTaskConfig.subscription_refresh_minutes" type="number" min="1" max="10080" class="input" />
+                      </div>
+                    </div>
+                    <div class="settings-row" style="margin-top: 8px;">
+                      <label class="form-check">
+                        <input v-model="autoTaskConfig.tester_enabled" type="checkbox" />
+                        <span>自动测速</span>
+                      </label>
+                      <div class="form-group" style="flex: 0.8;">
+                        <label class="form-label">测速间隔(分钟)</label>
+                        <input v-model.number="autoTaskConfig.tester_minutes" type="number" min="1" max="10080" class="input" />
+                      </div>
+                      <div class="form-group" style="flex: 0.8;">
+                        <label class="form-label">测速节点数</label>
+                        <input v-model.number="autoTaskConfig.tester_limit" type="number" min="0" max="20000" class="input" />
+                      </div>
+                      <div class="form-group" style="flex: 0.8;">
+                        <label class="form-label">测速并发</label>
+                        <input v-model.number="autoTaskConfig.tester_concurrency" type="number" min="1" max="500" class="input" />
+                      </div>
+                    </div>
+                    <div class="settings-row" style="margin-top: 8px;">
+                      <label class="form-check">
+                        <input v-model="autoTaskConfig.speed_test_enabled" type="checkbox" />
+                        <span>自动网速测试</span>
+                      </label>
+                      <div class="form-group" style="flex: 1.8;">
+                        <label class="form-label">网速测试地址</label>
+                        <input v-model.trim="autoTaskConfig.speed_test_url" type="text" class="input mono" />
+                      </div>
+                      <div class="form-group" style="flex: 0.8;">
+                        <label class="form-label">间隔(分钟)</label>
+                        <input v-model.number="autoTaskConfig.speed_test_minutes" type="number" min="1" max="10080" class="input" />
+                      </div>
+                      <div class="form-group" style="flex: 0.8;">
+                        <label class="form-label">节点数</label>
+                        <input v-model.number="autoTaskConfig.speed_test_limit" type="number" min="0" max="20000" class="input" />
+                      </div>
+                      <div class="form-group" style="flex: 0.8;">
+                        <label class="form-label">超时(秒)</label>
+                        <input v-model.number="autoTaskConfig.speed_test_timeout_sec" type="number" min="3" max="300" class="input" />
+                      </div>
+                    </div>
+                    <div class="settings-row" style="margin-top: 8px;">
+                      <button @click="onSaveAutoTaskConfig" :disabled="isActionRunning('saveAutoTaskConfig')" class="btn btn-primary">
+                        {{ buttonLabel('saveAutoTaskConfig', '保存自动任务', '保存中...') }}
+                      </button>
+                      <span class="text-xs text-muted">状态: {{ autoTaskStatus?.running ? '调度器运行中' : '调度器未运行' }}</span>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <!-- Task list -->
-              <div class="card" style="margin-top: 12px;">
+              <div class="card task-list-card">
                 <div class="card-body">
                   <div class="card-header">
                     <h2 class="section-title">任务列表</h2>
@@ -203,7 +311,7 @@
                             {{ buttonLabel('stopTask-' + task.task_id, '停止', '...') }}
                           </button>
                           <button v-if="isTaskDeletable(task)" @click="onDeleteTaskBtn(task)" :disabled="isActionRunning('deleteTask-' + task.task_id)" class="btn btn-xs btn-secondary">
-                            {{ buttonLabel('deleteTask-' + task.task_id, '删除', '...') }}
+                            {{ buttonLabel('deleteTask-' + task.task_id, '删除记录', '...') }}
                           </button>
                         </div>
                       </div>
@@ -211,12 +319,12 @@
                         <div class="task-progress-bar" :style="{ width: (task.progress || 0) + '%' }"></div>
                       </div>
                       <div class="task-meta">
-                        <span>{{ shortTaskId(task.task_id) }}</span>
-                        <span>{{ task.completed || 0 }}/{{ task.total || '-' }}</span>
+                        <span>任务 {{ shortTaskId(task.task_id) }}</span>
+                        <span>进度 {{ task.completed || 0 }}/{{ task.total || '-' }}</span>
                         <span class="text-emerald-600">成功 {{ task.success || 0 }}</span>
                         <span class="text-rose-600">失败 {{ task.failed || 0 }}</span>
-                        <span class="truncate" style="max-width: 200px;">{{ task.message || '-' }}</span>
-                        <span>{{ formatTime(task.updated_at) }}</span>
+                        <span class="task-message">结果 {{ taskMessageText(task) }}</span>
+                        <span>更新 {{ formatTime(task.updated_at) }}</span>
                       </div>
                     </div>
                   </div>
@@ -286,7 +394,7 @@
                         <th>链接</th>
                         <th style="width: 70px;">启用</th>
                         <th style="width: 80px;">状态</th>
-                        <th>统计</th>
+                        <th style="width: 220px;" title="解析/新增/更新/无效/去重">统计</th>
                         <th style="width: 140px;">上次刷新</th>
                         <th style="width: 100px;">操作</th>
                       </tr>
@@ -302,7 +410,15 @@
                           </button>
                         </td>
                         <td><span class="badge" :class="item.last_status === 'success' ? 'badge-success' : item.last_status === 'failed' ? 'badge-danger' : 'badge-neutral'">{{ item.last_status || '-' }}</span></td>
-                        <td class="text-xs text-muted">{{ item.last_parsed || 0 }}/{{ item.last_inserted || 0 }}/{{ item.last_updated || 0 }}</td>
+                        <td>
+                          <div class="subscription-stats" :title="'解析 ' + (item.last_parsed || 0) + ' / 新增 ' + (item.last_inserted || 0) + ' / 更新 ' + (item.last_updated || 0) + ' / 无效 ' + (item.last_invalid || 0) + ' / 去重 ' + (item.last_deduped || 0)">
+                            <span class="stat-pill">解析 {{ item.last_parsed || 0 }}</span>
+                            <span class="stat-pill stat-pill-success">新增 {{ item.last_inserted || 0 }}</span>
+                            <span class="stat-pill">更新 {{ item.last_updated || 0 }}</span>
+                            <span class="stat-pill" :class="(item.last_invalid || 0) > 0 ? 'stat-pill-danger' : ''">无效 {{ item.last_invalid || 0 }}</span>
+                            <span class="stat-pill">去重 {{ item.last_deduped || 0 }}</span>
+                          </div>
+                        </td>
                         <td class="text-xs text-muted">{{ formatTime(item.last_fetched_at) }}</td>
                         <td>
                           <div class="btn-group">
@@ -336,6 +452,13 @@
                         <div class="form-group" style="flex: 2;">
                           <label class="form-label">名称</label>
                           <input v-model.trim="publishedSubscriptionForm.name" type="text" placeholder="发布订阅名称" class="input" />
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                          <label class="form-label">发布格式</label>
+                          <select v-model="publishedSubscriptionForm.format" class="select">
+                            <option value="raw">原始链接</option>
+                            <option value="clash">Clash YAML</option>
+                          </select>
                         </div>
                         <div class="form-group" style="flex: 1;">
                           <label class="form-label">直连</label>
@@ -420,6 +543,7 @@
                       <tr>
                         <th style="width: 50px;">ID</th>
                         <th style="width: 140px;">名称</th>
+                        <th style="width: 90px;">格式</th>
                         <th>筛选条件</th>
                         <th style="width: 60px;">节点</th>
                         <th style="width: 70px;">启用</th>
@@ -430,6 +554,7 @@
                       <tr v-for="item in paginatedPublishedSubscriptions" :key="item.id">
                         <td class="mono text-muted">{{ item.id }}</td>
                         <td><input :value="item.name || ''" @change="onRenamePublishedSubscription(item, $event.target.value)" type="text" class="inline-input" /></td>
+                        <td><span class="badge" :class="item.format === 'clash' ? 'badge-success' : 'badge-neutral'">{{ formatPublishedSubscriptionOutput(item.format) }}</span></td>
                         <td class="text-xs text-muted">{{ formatPublishedSubscriptionFilters(item.filters) }}</td>
                         <td class="mono">{{ item.match_count || 0 }}</td>
                         <td>
@@ -457,81 +582,66 @@
             <section v-show="activePage === 'proxy-pools'" class="card fade-in">
               <div class="card-body">
                 <div class="section-header">
-                  <h2 class="section-title">代理池管理</h2>
+                  <div>
+                    <h2 class="section-title">多跳代理池</h2>
+                    <p class="form-hint">代理池、HTTP 网关、链服务和后端链路统一在本页配置；重复入口已收敛到对应工作区。</p>
+                  </div>
                   <div class="btn-group">
                     <button @click="onLoadProxyPools" :disabled="isActionRunning('loadProxyPools')" class="btn btn-secondary">
                       {{ buttonLabel('loadProxyPools', '刷新', '刷新中...') }}
                     </button>
-                    <button v-if="resinStatus.running" @click="onResinStop" :disabled="isActionRunning('resinStop')" class="btn btn-danger btn-sm">停止 Resin</button>
-                    <button v-else @click="onResinStart" :disabled="isActionRunning('resinStart')" class="btn btn-secondary btn-sm">启动 Resin</button>
                   </div>
                 </div>
 
-                <!-- Resin status bar -->
-                <div class="status-bar" style="margin-bottom: 12px;">
-                  <div class="status-item">
-                    <span class="text-muted">Resin</span>
-                    <span class="badge" :class="resinStatus.running ? 'badge-success' : 'badge-neutral'">{{ resinStatus.running ? '运行中' : '已停止' }}</span>
-                  </div>
-                  <div class="status-item">
-                    <span class="text-muted">健康</span>
-                    <span class="badge" :class="resinStatus.healthy ? 'badge-success' : 'badge-neutral'">{{ resinStatus.healthy ? '正常' : '异常' }}</span>
-                  </div>
-                  <div class="status-item">
-                    <span class="text-muted">PID</span>
-                    <span class="mono">{{ resinStatus.pid || '-' }}</span>
-                  </div>
-                  <div class="status-item">
-                    <span class="text-muted">端口</span>
-                    <span class="mono">{{ resinStatus.port || '-' }}</span>
-                  </div>
-                  <div class="status-item" v-if="resinStatus.running">
-                    <a href="/ui/" target="_blank" class="btn btn-xs btn-secondary">打开 Resin 管理台</a>
-                  </div>
+                <div class="tabs workspace-tabs">
+                  <button @click="proxyPoolTab = 'pools'" :class="{ active: proxyPoolTab === 'pools' }" class="tab-btn">代理池</button>
+                  <button @click="proxyPoolTab = 'gateway'" :class="{ active: proxyPoolTab === 'gateway' }" class="tab-btn">HTTP 网关</button>
+                  <button @click="proxyPoolTab = 'chain'" :class="{ active: proxyPoolTab === 'chain' }" class="tab-btn">链服务</button>
+                  <button @click="proxyPoolTab = 'backend'" :class="{ active: proxyPoolTab === 'backend' }" class="tab-btn">后端链路</button>
+                  <button @click="proxyPoolTab = 'events'" :class="{ active: proxyPoolTab === 'events' }" class="tab-btn">进程记录</button>
                 </div>
+
+                <div v-show="proxyPoolTab === 'pools'" class="tab-panel fade-in">
 
                 <!-- Create pool form -->
-                <div class="card" style="margin-bottom: 12px; border: 1px dashed var(--line);">
+                <div class="card compact-workspace-card" style="margin-bottom: 12px;">
                   <div class="card-body">
                     <h3 class="settings-title">创建代理池</h3>
-                    <div class="settings-row">
-                      <div class="form-group" style="flex: 2;">
+                    <div class="pool-create-grid">
+                      <div class="form-group pool-field-wide">
                         <label class="form-label">名称</label>
                         <input v-model.trim="proxyPoolForm.name" type="text" placeholder="池名称" class="input" />
                       </div>
-                      <div class="form-group" style="flex: 2;">
+                      <div class="form-group pool-field-wide">
                         <label class="form-label">监听</label>
                         <input v-model.trim="proxyPoolForm.listen" type="text" placeholder="0.0.0.0" class="input" />
                       </div>
-                      <div class="form-group" style="flex: 1;">
+                      <div class="form-group">
                         <label class="form-label">类型</label>
                         <select v-model="proxyPoolForm.inbound_type" class="select">
                           <option value="http">HTTP</option>
                           <option value="socks">SOCKS</option>
                         </select>
                       </div>
-                      <button @click="onCreateProxyPool" :disabled="isActionRunning('createProxyPool')" class="btn btn-primary self-end">
-                        {{ buttonLabel('createProxyPool', '创建', '创建中...') }}
-                      </button>
-                    </div>
-                    <div class="settings-row" style="margin-top: 8px;">
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">直连</label>
-                        <select v-model="proxyPoolForm.filters.available" class="select"><option value="true">仅可直连</option><option value="false">仅不可直连</option><option value="">不限</option></select>
+                      <div class="form-group">
+                        <label class="form-label">链路类型</label>
+                        <select v-model="proxyPoolForm.filters.route_mode_filter" class="select"><option value="direct">直连</option><option value="chain">链式</option><option value="unreachable">不可连接</option><option value="">不限</option></select>
                       </div>
-                      <div class="form-group" style="flex: 1;">
+                      <div class="form-group">
                         <label class="form-label">ChatGPT</label>
                         <select v-model="proxyPoolForm.filters.openai_filter" class="select"><option value="">不限</option><option value="unlocked">已解锁</option><option value="blocked">未解锁</option><option value="unchecked">未检测</option></select>
                       </div>
-                      <div class="form-group" style="flex: 1;">
+                      <div class="form-group">
                         <label class="form-label">家宽</label>
                         <select v-model="proxyPoolForm.filters.ip_purity_filter" class="select"><option value="">不限</option><option value="residential">家宽</option><option value="non_residential">非家宽</option><option value="unknown">未知</option></select>
                       </div>
-                      <div class="form-group" style="flex: 1;">
+                      <div class="form-group pool-field-wide">
                         <label class="form-label">国家</label>
-                        <select v-model="proxyPoolForm.filters.geo_country" class="select"><option value="">不限</option><option v-for="opt in geoCountryOptions" :key="'pool-' + opt.value" :value="opt.value">{{ opt.label }}</option></select>
+                        <el-select v-model="proxyPoolForm.filters.geo_countries" multiple collapse-tags collapse-tags-tooltip clearable placeholder="不限" size="small" style="width: 100%">
+                          <el-option v-for="opt in geoCountryOptions" :key="'pool-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
+                        </el-select>
                       </div>
-                      <div class="form-group" style="flex: 1;">
+                      <div class="form-group">
                         <label class="form-label">延迟</label>
                         <div class="input-group">
                           <input v-model.number="proxyPoolForm.filters.latency_min" type="number" min="0" placeholder="最低" class="input" />
@@ -539,10 +649,13 @@
                           <input v-model.number="proxyPoolForm.filters.latency_max" type="number" min="0" placeholder="最高" class="input" />
                         </div>
                       </div>
-                      <div class="form-group" style="flex: 1;">
+                      <div class="form-group">
                         <label class="form-label">时效(小时)</label>
                         <input v-model.number="proxyPoolForm.filters.freshness_hours" type="number" min="0" placeholder="不限" class="input" />
                       </div>
+                      <button @click="onCreateProxyPool" :disabled="isActionRunning('createProxyPool')" class="btn btn-primary pool-create-action">
+                        {{ buttonLabel('createProxyPool', '创建', '创建中...') }}
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -556,7 +669,7 @@
                         <th>筛选条件</th>
                         <th style="width: 60px;">节点</th>
                         <th style="width: 70px;">状态</th>
-                        <th style="width: 180px;">操作</th>
+                        <th style="width: 210px;">操作</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -567,7 +680,7 @@
                         <td class="mono">{{ item.match_count || 0 }}</td>
                         <td><span class="text-sm" :class="item.status === 'running' ? 'text-emerald-600' : 'text-muted'">{{ item.status || 'stopped' }}</span></td>
                         <td>
-                          <div class="btn-group">
+                          <div class="btn-group btn-group-nowrap">
                             <button @click="onSyncPool(item.id)" :disabled="isActionRunning('syncPool-' + item.id)" class="btn btn-xs btn-secondary">同步</button>
                             <button @click="applyPoolFiltersToForm(item)" class="btn btn-xs btn-ghost">套用</button>
                             <button @click="onUpdatePoolFilters(item)" :disabled="isActionRunning('updatePool-' + item.id)" class="btn btn-xs btn-ghost">保存</button>
@@ -594,8 +707,246 @@
                   </div>
                 </div>
 
-                <h3 class="section-divider">全局 HTTP 代理网关</h3>
-                <p class="form-hint" style="margin-bottom: 12px;">用户只需要配置一个标准 HTTP/HTTPS 代理地址，网关内部决定默认池和粘性路由。</p>
+                <h3 class="section-divider">池级链路配置</h3>
+                <p class="form-hint" style="margin-bottom: 12px;">为某个代理池配置会话粘性、统一网关路径和按 URL 前缀的会话头提取规则。当前选中代理池: <span class="mono">{{ selectedPoolNameForChain || '-' }}</span></p>
+
+                <div class="card" style="margin-bottom: 12px;">
+                  <div class="card-body">
+                    <div class="settings-row">
+                      <div class="form-group" style="flex: 1.4;">
+                        <label class="form-label">选择代理池</label>
+                        <select v-model.number="selectedPoolIdForChain" @change="onSelectPoolForChain(proxyPools.find(item => Number(item.id) === Number(selectedPoolIdForChain)) || null)" class="select">
+                          <option :value="0">未选择</option>
+                          <option v-for="item in proxyPools" :key="'pool-chain-' + item.id" :value="Number(item.id)">{{ item.name }} (#{{ item.id }})</option>
+                        </select>
+                      </div>
+                      <label class="form-check self-end">
+                        <input v-model="poolChainForm.chain_enabled" type="checkbox" />
+                        <span>启用池级链路</span>
+                      </label>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">粘性 TTL(秒)</label>
+                        <input v-model.number="poolChainForm.sticky_ttl_sec" type="number" min="1" class="input mono" />
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">缺失会话动作</label>
+                        <select v-model="poolChainForm.session_missing_action" class="select">
+                          <option value="RANDOM">RANDOM</option>
+                          <option value="REJECT">REJECT</option>
+                        </select>
+                      </div>
+                      <button @click="onSavePoolChainConfig()" :disabled="!selectedPoolIdForChain || isActionRunning('savePoolChain-' + selectedPoolIdForChain)" class="btn btn-primary self-end">保存池级配置</button>
+                    </div>
+                    <div class="settings-row" style="margin-top: 8px;">
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">HTTP 会话头</label>
+                        <textarea v-model="poolChainForm.session_header_names_text" class="textarea mono" style="height: 88px;" placeholder="X-ProxyPool-Session"></textarea>
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">HTTP 会话 Query</label>
+                        <textarea v-model="poolChainForm.session_query_param_names_text" class="textarea mono" style="height: 88px;" placeholder="session"></textarea>
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">统一网关路径前缀</label>
+                        <input v-model.trim="poolChainForm.gateway_path_prefix" type="text" placeholder="/proxy/pool-a" class="input mono" />
+                        <p class="form-hint" style="margin-top: 6px;">用于通过统一网关按路径访问该池。</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="settings-grid" style="margin-bottom: 12px;">
+                  <div class="card">
+                    <div class="card-body">
+                      <div class="card-header">
+                        <h3 class="settings-title">会话规则</h3>
+                        <button @click="onLoadPoolSessionRules()" :disabled="!selectedPoolIdForChain || isActionRunning('loadPoolSessionRules-' + selectedPoolIdForChain)" class="btn btn-xs btn-secondary">刷新规则</button>
+                      </div>
+                      <div class="settings-row">
+                        <div class="form-group" style="flex: 1.2;">
+                          <label class="form-label">URL 前缀</label>
+                          <input v-model.trim="poolSessionRuleForm.url_prefix" type="text" placeholder="api.example.com/v1" class="input mono" />
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                          <label class="form-label">用于识别会话的头(多行)</label>
+                          <textarea v-model="poolSessionRuleForm.headers_text" class="textarea mono" style="height: 88px;" placeholder="Authorization&#10;X-Biz-Session"></textarea>
+                        </div>
+                        <button @click="onSavePoolSessionRule()" :disabled="!selectedPoolIdForChain || isActionRunning('savePoolSessionRule-' + selectedPoolIdForChain)" class="btn btn-secondary self-end">保存规则</button>
+                      </div>
+                      <div class="table-wrap" style="margin-top: 12px;">
+                        <table class="data-table data-table-compact">
+                          <thead>
+                            <tr>
+                              <th>URL 前缀</th>
+                              <th>会话头</th>
+                              <th style="width: 120px;">操作</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr v-for="item in poolSessionRules" :key="'session-rule-' + item.url_prefix">
+                              <td class="mono text-xs">{{ item.url_prefix }}</td>
+                              <td class="text-xs">{{ (item.headers || []).join(', ') }}</td>
+                              <td>
+                                <div class="btn-group">
+                                  <button @click="usePoolSessionRule(item)" class="btn btn-xs btn-ghost">套用</button>
+                                  <button @click="onDeletePoolSessionRule(item.url_prefix)" :disabled="isActionRunning('deletePoolSessionRule-' + selectedPoolIdForChain + '-' + item.url_prefix)" class="btn btn-xs btn-danger">删除</button>
+                                </div>
+                              </td>
+                            </tr>
+                            <tr v-if="!poolSessionRules.length">
+                              <td colspan="3" class="text-xs text-muted">暂无规则</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="card">
+                    <div class="card-body">
+                      <h3 class="settings-title">池级路由测试</h3>
+                      <div class="settings-row">
+                        <div class="form-group" style="flex: 1;">
+                          <label class="form-label">会话 ID</label>
+                          <input v-model.trim="poolRouteTest.session_id" type="text" placeholder="sess-demo" class="input mono" />
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                          <label class="form-label">目标域名</label>
+                          <input v-model.trim="poolRouteTest.target_domain" type="text" placeholder="api.example.com" class="input mono" />
+                        </div>
+                        <button @click="onTestPoolRoute()" :disabled="!selectedPoolIdForChain || isActionRunning('testPoolRoute-' + selectedPoolIdForChain)" class="btn btn-secondary self-end">测试池路由</button>
+                      </div>
+                      <div v-if="poolRouteTestResult" style="margin-top: 12px;">
+                        <pre class="mono text-xs" style="white-space: pre-wrap;">{{ JSON.stringify(poolRouteTestResult, null, 2) }}</pre>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                </div>
+
+                <div v-show="proxyPoolTab === 'gateway'" class="tab-panel fade-in">
+                <h3 class="section-divider">HTTP 代理端点</h3>
+                <p class="form-hint" style="margin-bottom: 12px;">每个端点监听一个标准 HTTP/HTTPS 代理地址，网关层按该端点绑定的代理池顺序决定多跳路由和会话粘性。</p>
+
+                <div class="card" style="margin-bottom: 12px; border: 1px dashed var(--line);">
+                  <div class="card-body">
+                    <h3 class="settings-title">创建 / 编辑 HTTP 端点</h3>
+                    <div class="settings-row">
+                      <div class="form-group" style="flex: 1.4;">
+                        <label class="form-label">名称</label>
+                        <input v-model.trim="gatewayEndpointForm.name" type="text" placeholder="如 gateway-openai" class="input" />
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">监听地址</label>
+                        <input v-model.trim="gatewayEndpointForm.listen_host" class="input mono" />
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">监听端口</label>
+                        <input v-model.number="gatewayEndpointForm.listen_port" type="number" min="1" class="input mono" />
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">启用</label>
+                        <select v-model="gatewayEndpointForm.enabled" class="select">
+                          <option :value="true">开启</option>
+                          <option :value="false">关闭</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="settings-row" style="margin-top: 8px;">
+                      <div class="form-group" style="flex: 1.6;">
+                        <label class="form-label">多跳代理池顺序</label>
+                        <el-select v-model="gatewayEndpointForm.hop_pool_ids" multiple collapse-tags collapse-tags-tooltip clearable placeholder="先选择需要的跳点池" size="small" style="width: 100%">
+                          <el-option v-for="item in proxyPools" :key="'ep-hop-' + item.id" :label="`${item.name} (#${item.id})`" :value="Number(item.id)"></el-option>
+                        </el-select>
+                        <div class="table-wrap" style="margin-top: 8px;">
+                          <table class="data-table data-table-compact">
+                            <thead>
+                              <tr>
+                                <th style="width: 60px;">顺序</th>
+                                <th>代理池</th>
+                                <th style="width: 120px;">操作</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr v-for="(poolId, idx) in gatewayEndpointForm.hop_pool_ids" :key="'ep-hop-order-' + poolId + '-' + idx">
+                                <td class="mono text-xs">#{{ idx + 1 }}</td>
+                                <td class="text-xs">{{ proxyPools.find(item => Number(item.id) === Number(poolId))?.name || ('#' + poolId) }}</td>
+                                <td>
+                                  <div class="btn-group">
+                                    <button @click="moveGatewayEndpointHop(idx, -1)" :disabled="idx === 0" class="btn btn-xs btn-ghost">上移</button>
+                                    <button @click="moveGatewayEndpointHop(idx, 1)" :disabled="idx >= gatewayEndpointForm.hop_pool_ids.length - 1" class="btn btn-xs btn-ghost">下移</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">粘性 TTL(秒)</label>
+                        <input v-model.number="gatewayEndpointForm.sticky_ttl_sec" type="number" min="1" class="input mono" />
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">缺失会话动作</label>
+                        <select v-model="gatewayEndpointForm.session_missing_action" class="select">
+                          <option value="RANDOM">RANDOM</option>
+                          <option value="REJECT">REJECT</option>
+                        </select>
+                      </div>
+                      <button @click="onSaveGatewayEndpoint" :disabled="isActionRunning('saveGatewayEndpoint')" class="btn btn-primary self-end">保存端点</button>
+                    </div>
+                    <div class="settings-row" style="margin-top: 8px;">
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">HTTP 会话头</label>
+                        <textarea v-model="gatewayEndpointForm.session_header_names_text" class="textarea mono" style="height: 88px;" placeholder="X-ProxyPool-Session"></textarea>
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">HTTP 会话 Query</label>
+                        <textarea v-model="gatewayEndpointForm.session_query_param_names_text" class="textarea mono" style="height: 88px;" placeholder="session"></textarea>
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">CONNECT 会话头</label>
+                        <textarea v-model="gatewayEndpointForm.connect_session_header_names_text" class="textarea mono" style="height: 88px;" placeholder="X-ProxyPool-Session"></textarea>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="table-wrap" style="margin-bottom: 12px;">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th style="width: 50px;">ID</th>
+                        <th style="width: 140px;">名称</th>
+                        <th style="width: 140px;">监听</th>
+                        <th>跳点顺序</th>
+                        <th style="width: 70px;">状态</th>
+                        <th style="width: 220px;">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="item in gatewayEndpoints" :key="'ep-' + item.id">
+                        <td class="mono text-muted">{{ item.id }}</td>
+                        <td>{{ item.name }}</td>
+                        <td class="mono text-xs">{{ item.listen_host }}:{{ item.listen_port }}</td>
+                        <td class="text-xs text-muted">{{ formatEndpointHops(item) }}</td>
+                        <td><span class="badge" :class="item.enabled ? 'badge-success' : 'badge-neutral'">{{ item.enabled ? 'ENABLED' : 'DISABLED' }}</span></td>
+                        <td>
+                          <div class="btn-group">
+                            <button @click="editGatewayEndpoint(item)" class="btn btn-xs btn-ghost">编辑</button>
+                            <button @click="onSelectGatewayEndpoint(item)" class="btn btn-xs btn-secondary">设为默认</button>
+                            <button @click="onRunGatewayEndpointRouteTest(item)" :disabled="isActionRunning('routeTestEndpoint-' + item.id)" class="btn btn-xs btn-ghost">测路由</button>
+                            <button @click="onDeleteGatewayEndpoint(item.id)" :disabled="isActionRunning('deleteGatewayEndpoint-' + item.id)" class="btn btn-xs btn-danger">删除</button>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <h3 class="section-divider">统一 HTTP 网关</h3>
+                <p class="form-hint" style="margin-bottom: 12px;">保留一个默认接入配置用于兼容旧入口；实际运行时会并行启动所有已启用端点。</p>
 
                 <div class="card" style="margin-bottom: 12px;">
                   <div class="card-body">
@@ -616,10 +967,10 @@
                         <input v-model.number="gatewayConfigForm.listen_port" type="number" min="1" class="input mono" />
                       </div>
                       <div class="form-group" style="flex: 1.4;">
-                        <label class="form-label">默认池</label>
-                        <select v-model.number="gatewayConfigForm.default_pool_id" class="select">
+                        <label class="form-label">默认端点</label>
+                        <select v-model.number="gatewayConfigForm.endpoint_id" class="select">
                           <option :value="0">未选择</option>
-                          <option v-for="item in proxyPools" :key="'gateway-pool-' + item.id" :value="Number(item.id)">{{ item.name }} (#{{ item.id }})</option>
+                          <option v-for="item in gatewayEndpoints" :key="'gateway-endpoint-' + item.id" :value="Number(item.id)">{{ item.name }} (#{{ item.id }})</option>
                         </select>
                       </div>
                       <div class="form-group" style="flex: 1;">
@@ -652,8 +1003,9 @@
                   <div class="card">
                     <div class="card-body">
                       <h3 class="settings-title">接入方式</h3>
-                      <p class="form-hint">HTTP proxy = {{ gatewayConfigForm.listen_host }}:{{ gatewayConfigForm.listen_port }}</p>
-                      <p class="form-hint">HTTPS proxy = {{ gatewayConfigForm.listen_host }}:{{ gatewayConfigForm.listen_port }}</p>
+                      <p class="form-hint">默认 HTTP proxy = {{ gatewayConfigForm.listen_host }}:{{ gatewayConfigForm.listen_port }}</p>
+                      <p class="form-hint">默认 HTTPS proxy = {{ gatewayConfigForm.listen_host }}:{{ gatewayConfigForm.listen_port }}</p>
+                      <p v-for="item in gatewayEndpoints" :key="'access-' + item.id" class="form-hint">端点 {{ item.name }} = {{ item.listen_host }}:{{ item.listen_port }} / {{ formatEndpointHops(item) }}</p>
                       <button @click="onLoadGatewayStatus()" :disabled="isActionRunning('loadGatewayStatus')" class="btn btn-secondary">刷新网关状态</button>
                       <div v-if="gatewayStatus" style="margin-top: 12px;">
                         <div class="status-bar">
@@ -669,7 +1021,12 @@
                             <span class="text-muted">实例数</span>
                             <span class="mono text-xs">{{ (gatewayStatus.instances || []).length }}</span>
                           </div>
+                          <div class="status-item">
+                            <span class="text-muted">端点监听</span>
+                            <span class="mono text-xs">{{ (gatewayStatus.runtime?.items || []).length }}</span>
+                          </div>
                         </div>
+                        <pre class="mono text-xs" style="white-space: pre-wrap; margin-top: 12px;">{{ JSON.stringify(gatewayStatus.runtime, null, 2) }}</pre>
                       </div>
                     </div>
                   </div>
@@ -683,6 +1040,13 @@
                           <input v-model.trim="gatewayTestForm.target_url" type="text" placeholder="https://www.cloudflare.com/cdn-cgi/trace" class="input mono" />
                         </div>
                         <div class="form-group" style="flex: 1;">
+                          <label class="form-label">端点</label>
+                          <select v-model.number="gatewayTestForm.endpoint_id" class="select">
+                            <option :value="0">使用默认端点</option>
+                            <option v-for="item in gatewayEndpoints" :key="'gateway-test-' + item.id" :value="Number(item.id)">{{ item.name }} (#{{ item.id }})</option>
+                          </select>
+                        </div>
+                        <div class="form-group" style="flex: 1;">
                           <label class="form-label">会话 ID</label>
                           <input v-model.trim="gatewayTestForm.session_id" type="text" placeholder="留空则按配置处理" class="input mono" />
                         </div>
@@ -694,41 +1058,183 @@
                     </div>
                   </div>
                 </div>
-              </div>
-            </section>
 
-            <!-- ==================== sing-box 后端 ==================== -->
-            <section v-show="activePage === 'backend'" class="card fade-in">
-              <div class="card-body">
-                <div class="section-header">
-                  <h2 class="section-title">sing-box 后端</h2>
                 </div>
 
-                <!-- Status bar -->
-                <div class="status-bar">
-                  <div class="status-item">
-                    <span class="text-muted">后端</span>
-                    <span class="font-semibold">{{ backendStatus.backend || '-' }}</span>
-                  </div>
-                  <div class="status-item">
-                    <span class="text-muted">运行</span>
-                    <span class="badge" :class="backendStatus.running ? 'badge-success' : 'badge-neutral'">{{ backendStatus.running ? 'YES' : 'NO' }}</span>
-                  </div>
-                  <div class="status-item">
-                    <span class="text-muted">PID</span>
-                    <span class="mono">{{ formatBackendPid(backendStatus.pid) }}</span>
-                  </div>
-                  <div class="status-item">
-                    <span class="text-muted">路由</span>
-                    <span>{{ backendStatus.routes_count || 0 }} 条</span>
-                  </div>
-                </div>
-
-                <!-- Instance management -->
-                <div class="card" style="margin-bottom: 12px; border: 1px dashed var(--line);">
+                <div v-show="proxyPoolTab === 'chain'" class="tab-panel fade-in">
+                <h3 class="section-divider">代理链服务</h3>
+                <div class="card" style="margin-bottom: 12px;">
                   <div class="card-body">
-                    <h3 class="settings-title">实例管理</h3>
-                    <div class="settings-row">
+                    <div class="section-header">
+                      <h3 class="settings-title">前置 / 后置节点池</h3>
+                      <div class="btn-group">
+                        <button @click="loadChainStatus" :disabled="isActionRunning('loadChainStatus')" class="btn btn-secondary">刷新状态</button>
+                        <button @click="chainStart" :disabled="isActionRunning('chainStart')" class="btn btn-primary">启动服务</button>
+                        <button @click="chainStop" :disabled="isActionRunning('chainStop')" class="btn btn-danger">停止服务</button>
+                      </div>
+                    </div>
+                    <div class="status-bar">
+                      <div class="status-item">
+                        <span class="text-muted">服务状态</span>
+                        <span class="badge" :class="chainStatus.front_pool ? 'badge-success' : 'badge-neutral'">{{ chainStatus.front_pool ? '已加载' : '未加载' }}</span>
+                      </div>
+                      <div class="status-item">
+                        <span class="text-muted">前置节点</span>
+                        <span class="font-semibold">{{ chainStatus.front_pool?.healthy_nodes || 0 }} / {{ chainStatus.front_pool?.total_nodes || 0 }}</span>
+                      </div>
+                      <div class="status-item">
+                        <span class="text-muted">后置节点</span>
+                        <span class="font-semibold">{{ chainStatus.exit_pool?.healthy_nodes || 0 }} / {{ chainStatus.exit_pool?.total_nodes || 0 }}</span>
+                      </div>
+                      <div class="status-item">
+                        <span class="text-muted">健康检测</span>
+                        <span class="badge" :class="chainHealth.running ? 'badge-success' : 'badge-neutral'">{{ chainHealth.running ? '运行中' : '已停止' }}</span>
+                      </div>
+                    </div>
+                    <div class="settings-row" style="margin-top: 12px;">
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">前置节点池正则</label>
+                        <textarea v-model="chainPoolForm.front_filters" class="textarea mono" rows="3" placeholder="front-.*&#10;entry-.*"></textarea>
+                        <button @click="saveChainPool('front')" :disabled="isActionRunning('saveChainPoolFront')" class="btn btn-secondary" style="margin-top: 8px;">保存前置池</button>
+                      </div>
+                      <div class="form-group" style="flex: 1;">
+                        <label class="form-label">后置节点池正则</label>
+                        <textarea v-model="chainPoolForm.exit_filters" class="textarea mono" rows="3" placeholder="exit-.*&#10;proxy-.*"></textarea>
+                        <button @click="saveChainPool('exit')" :disabled="isActionRunning('saveChainPoolExit')" class="btn btn-secondary" style="margin-top: 8px;">保存后置池</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="settings-grid" style="margin-bottom: 12px;">
+                  <div class="card">
+                    <div class="card-body">
+                      <div class="section-header">
+                        <h3 class="settings-title">节点与租约</h3>
+                        <div class="btn-group">
+                          <button @click="loadChainLeases" :disabled="isActionRunning('loadChainLeases')" class="btn btn-secondary">刷新租约</button>
+                          <button @click="cleanupChainLeases" :disabled="isActionRunning('cleanupChainLeases')" class="btn btn-danger">清理过期</button>
+                        </div>
+                      </div>
+                      <div class="tabs">
+                        <button @click="chainNodeTab = 'front'" :class="{ active: chainNodeTab === 'front' }" class="tab-btn">前置节点 ({{ chainStatus.front_pool?.total_nodes || 0 }})</button>
+                        <button @click="chainNodeTab = 'exit'" :class="{ active: chainNodeTab === 'exit' }" class="tab-btn">后置节点 ({{ chainStatus.exit_pool?.total_nodes || 0 }})</button>
+                        <button @click="chainNodeTab = 'leases'" :class="{ active: chainNodeTab === 'leases' }" class="tab-btn">粘性租约</button>
+                      </div>
+                      <div v-show="chainNodeTab === 'front'" class="table-wrap" style="margin-top: 12px;">
+                        <table class="data-table data-table-compact">
+                          <thead>
+                            <tr>
+                              <th>名称</th>
+                              <th>协议</th>
+                              <th>地址</th>
+                              <th>状态</th>
+                              <th>失败次数</th>
+                              <th>延迟</th>
+                              <th>出口IP</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr v-for="node in chainStatus.front_pool?.nodes || []" :key="'front-node-' + node.key">
+                              <td class="text-xs">{{ node.name || '-' }}</td>
+                              <td class="text-xs">{{ node.protocol }}</td>
+                              <td class="mono text-xs">{{ node.host }}:{{ node.port }}</td>
+                              <td><span class="badge" :class="node.healthy ? 'badge-success' : 'badge-danger'">{{ node.healthy ? '健康' : '熔断' }}</span></td>
+                              <td class="text-xs">{{ node.failure_count }}</td>
+                              <td class="text-xs">{{ node.latency_ms ? node.latency_ms + 'ms' : '-' }}</td>
+                              <td class="mono text-xs">{{ node.egress_ip || '-' }}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div v-show="chainNodeTab === 'exit'" class="table-wrap" style="margin-top: 12px;">
+                        <table class="data-table data-table-compact">
+                          <thead>
+                            <tr>
+                              <th>名称</th>
+                              <th>协议</th>
+                              <th>地址</th>
+                              <th>状态</th>
+                              <th>失败次数</th>
+                              <th>延迟</th>
+                              <th>出口IP</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr v-for="node in chainStatus.exit_pool?.nodes || []" :key="'exit-node-' + node.key">
+                              <td class="text-xs">{{ node.name || '-' }}</td>
+                              <td class="text-xs">{{ node.protocol }}</td>
+                              <td class="mono text-xs">{{ node.host }}:{{ node.port }}</td>
+                              <td><span class="badge" :class="node.healthy ? 'badge-success' : 'badge-danger'">{{ node.healthy ? '健康' : '熔断' }}</span></td>
+                              <td class="text-xs">{{ node.failure_count }}</td>
+                              <td class="text-xs">{{ node.latency_ms ? node.latency_ms + 'ms' : '-' }}</td>
+                              <td class="mono text-xs">{{ node.egress_ip || '-' }}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div v-show="chainNodeTab === 'leases'" class="table-wrap" style="margin-top: 12px;">
+                        <table class="data-table data-table-compact">
+                          <thead>
+                            <tr>
+                              <th>会话ID</th>
+                              <th>池ID</th>
+                              <th>出口节点</th>
+                              <th>出口IP</th>
+                              <th>过期时间</th>
+                              <th>最后访问</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr v-for="lease in chainLeases" :key="'chain-lease-' + lease.session_id + '-' + lease.pool_id">
+                              <td class="mono text-xs">{{ lease.session_id }}</td>
+                              <td class="text-xs">{{ lease.pool_id }}</td>
+                              <td class="mono text-xs truncate" style="max-width: 150px;">{{ lease.exit_node_key }}</td>
+                              <td class="mono text-xs">{{ lease.egress_ip }}</td>
+                              <td class="text-xs">{{ formatTime(lease.expires_at) }}</td>
+                              <td class="text-xs">{{ formatTime(lease.last_accessed) }}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+                </div>
+
+                <div v-show="proxyPoolTab === 'backend'" class="tab-panel fade-in">
+                <h3 class="section-divider">多跳实例与后端</h3>
+                <div class="card" style="margin-bottom: 12px;">
+                  <div class="card-body">
+                    <div class="section-header">
+                      <h3 class="settings-title">后端状态与实例管理</h3>
+                      <div class="btn-group">
+                        <button @click="onBackendStart" :disabled="isActionRunning('backendStart')" class="btn btn-secondary">启动后端</button>
+                        <button @click="onBackendStop" :disabled="isActionRunning('backendStop')" class="btn btn-secondary">停止后端</button>
+                        <button @click="onBackendRestart" :disabled="isActionRunning('backendRestart')" class="btn btn-primary">重启后端</button>
+                      </div>
+                    </div>
+                    <div class="status-bar">
+                      <div class="status-item">
+                        <span class="text-muted">后端</span>
+                        <span class="font-semibold">{{ backendStatus.backend || '-' }}</span>
+                      </div>
+                      <div class="status-item">
+                        <span class="text-muted">运行</span>
+                        <span class="badge" :class="backendStatus.running ? 'badge-success' : 'badge-neutral'">{{ backendStatus.running ? 'YES' : 'NO' }}</span>
+                      </div>
+                      <div class="status-item">
+                        <span class="text-muted">PID</span>
+                        <span class="mono">{{ formatBackendPid(backendStatus.pid) }}</span>
+                      </div>
+                      <div class="status-item">
+                        <span class="text-muted">路由</span>
+                        <span>{{ backendStatus.routes_count || 0 }} 条</span>
+                      </div>
+                    </div>
+                    <div class="settings-row" style="margin-top: 12px;">
                       <div class="form-group" style="flex: 2;">
                         <label class="form-label">实例 ID</label>
                         <input v-model.trim="backendInstanceId" type="text" placeholder="如 alpha" class="input" />
@@ -738,57 +1244,52 @@
                       <button @click="onBackendInstanceStop" :disabled="isActionRunning('backendInstanceStop')" class="btn btn-secondary self-end">停止</button>
                       <button @click="onBackendInstanceDelete" :disabled="isActionRunning('backendInstanceDelete')" class="btn btn-danger self-end">删除</button>
                     </div>
+                    <div class="table-wrap" style="margin-top: 12px;">
+                      <table class="data-table data-table-compact">
+                        <thead>
+                          <tr>
+                            <th>实例</th>
+                            <th>状态</th>
+                            <th>PID</th>
+                            <th>监听</th>
+                            <th>端口</th>
+                            <th>配置</th>
+                            <th>错误</th>
+                            <th style="width: 180px;">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="item in backendInstances" :key="'backend-instance-' + item.instance_id">
+                            <td class="mono">{{ item.instance_id }}</td>
+                            <td><span class="badge" :class="item.status === 'running' ? 'badge-success' : 'badge-neutral'">{{ item.status || '-' }}</span></td>
+                            <td class="mono">{{ formatBackendPid(item.pid) }}</td>
+                            <td>{{ item.listen || '-' }}</td>
+                            <td class="mono text-xs">{{ (item.ports || []).join(', ') || '-' }}</td>
+                            <td class="mono text-xs text-muted truncate" style="max-width: 120px;">{{ shortPath(item.config_file) }}</td>
+                            <td class="text-xs text-rose-600 truncate" style="max-width: 150px;">{{ item.last_error || '-' }}</td>
+                            <td>
+                              <div class="btn-group">
+                                <button @click="onOpenBackendInstanceConfig(item)" class="btn btn-xs btn-ghost">配置</button>
+                                <button @click="onBackendInstanceStart(item.instance_id)" :disabled="isActionRunning('backendInstanceStart-' + item.instance_id)" class="btn btn-xs btn-secondary">启动</button>
+                                <button @click="onBackendInstanceStop(item.instance_id)" :disabled="isActionRunning('backendInstanceStop-' + item.instance_id)" class="btn btn-xs btn-secondary">停止</button>
+                                <button @click="onBackendInstanceDelete(item.instance_id)" :disabled="isActionRunning('backendInstanceDelete-' + item.instance_id)" class="btn btn-xs btn-danger">删除</button>
+                              </div>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
 
-                <!-- Instance table -->
-                <div class="table-wrap" style="margin-bottom: 16px;">
-                  <table class="data-table data-table-compact">
-                    <thead>
-                      <tr>
-                        <th>实例</th>
-                        <th>状态</th>
-                        <th>PID</th>
-                        <th>监听</th>
-                        <th>端口</th>
-                        <th>配置</th>
-                        <th>错误</th>
-                        <th style="width: 180px;">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="item in backendInstances" :key="item.instance_id">
-                        <td class="mono">{{ item.instance_id }}</td>
-                        <td><span class="badge" :class="item.status === 'running' ? 'badge-success' : 'badge-neutral'">{{ item.status || '-' }}</span></td>
-                        <td class="mono">{{ formatBackendPid(item.pid) }}</td>
-                        <td>{{ item.listen || '-' }}</td>
-                        <td class="mono text-xs">{{ (item.ports || []).join(', ') || '-' }}</td>
-                        <td class="mono text-xs text-muted truncate" style="max-width: 120px;">{{ shortPath(item.config_file) }}</td>
-                        <td class="text-xs text-rose-600 truncate" style="max-width: 150px;">{{ item.last_error || '-' }}</td>
-                        <td>
-                          <div class="btn-group">
-                            <button @click="onOpenBackendInstanceConfig(item)" class="btn btn-xs btn-ghost">配置</button>
-                            <button @click="onBackendInstanceStart(item.instance_id)" :disabled="isActionRunning('backendInstanceStart-' + item.instance_id)" class="btn btn-xs btn-secondary">启动</button>
-                            <button @click="onBackendInstanceStop(item.instance_id)" :disabled="isActionRunning('backendInstanceStop-' + item.instance_id)" class="btn btn-xs btn-secondary">停止</button>
-                            <button @click="onBackendInstanceDelete(item.instance_id)" :disabled="isActionRunning('backendInstanceDelete-' + item.instance_id)" class="btn btn-xs btn-danger">删除</button>
-                          </div>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-
-                <!-- Config management -->
-                <h3 class="section-divider">配置管理 — {{ backendConfigInstanceId || 'default' }}</h3>
-
-                <!-- Default listen & port range -->
+                <h3 class="section-divider">sing-box 链路配置</h3>
+                <p class="form-hint" style="margin-bottom: 12px;">配置管理入口已合并到本页，无需再切换到独立后端页面。</p>
+                <p class="form-hint" style="margin-bottom: 12px;">当前编辑实例: <span class="mono">{{ backendConfigInstanceId || 'default' }}</span>。链路顺序为前置 → 中间 → 落地，单跳时只填落地。</p>
                 <div class="card" style="margin-bottom: 12px;">
                   <div class="card-body">
-                    <h3 class="settings-title">默认监听与端口范围</h3>
-                    <p class="form-hint">新增链路/按地区生成链路时使用。自动分配未占用端口。</p>
                     <div class="settings-row">
                       <div class="form-group" style="flex: 1;">
-                        <label class="form-label">监听地址</label>
+                        <label class="form-label">默认监听地址</label>
                         <input v-model.trim="backendDefaultListen" type="text" class="input" />
                       </div>
                       <div class="form-group" style="flex: 1;">
@@ -802,14 +1303,33 @@
                       <button @click="onSaveBackendDefaultListen" :disabled="isActionRunning('saveBackendDefaultListen')" class="btn btn-secondary self-end">保存监听</button>
                       <button @click="onSaveBackendPortRange" :disabled="isActionRunning('saveBackendPortRange')" class="btn btn-secondary self-end">保存范围</button>
                     </div>
+                    <div class="table-wrap" style="margin-top: 12px;">
+                      <table class="data-table data-table-compact">
+                        <thead>
+                          <tr>
+                            <th>实例</th>
+                            <th>端点</th>
+                            <th>入口池</th>
+                            <th>监听</th>
+                            <th>路由</th>
+                            <th>状态</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="item in gatewayStatus?.instances || []" :key="'gw-inst-' + item.instance_id">
+                            <td class="mono text-xs">{{ item.instance_id }}</td>
+                            <td class="mono text-xs">{{ item.endpoint_id || 0 }}</td>
+                            <td class="mono text-xs">{{ item.pool_id || 0 }}</td>
+                            <td class="mono text-xs">{{ item.listen }}:{{ item.port }}</td>
+                            <td class="text-xs text-muted">{{ item.route_signature || '-' }}</td>
+                            <td><span class="badge" :class="item.status === 'running' ? 'badge-success' : 'badge-neutral'">{{ item.status || '-' }}</span></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
 
-                <!-- Chain proxy management -->
-                <h3 class="section-divider">链式代理管理</h3>
-                <p class="form-hint" style="margin-bottom: 12px;">链路顺序：前置 → 中间 → 落地。单跳时只填落地。使用序号如 <code>#12</code>。</p>
-
-                <!-- Default proxy keys -->
                 <div class="card" style="margin-bottom: 12px;">
                   <div class="card-body">
                     <h3 class="settings-title">默认代理序号</h3>
@@ -833,7 +1353,6 @@
                   </div>
                 </div>
 
-                <!-- Geo fill -->
                 <div class="card" style="margin-bottom: 12px;">
                   <div class="card-body">
                     <h3 class="settings-title">按条件批量填充链路</h3>
@@ -843,7 +1362,7 @@
                         <label class="form-label">地区</label>
                         <select v-model="routeGeoFill.geo_location" class="select">
                           <option value="">全部地区</option>
-                          <option v-for="g in geoLocationOptions" :key="'rg-' + g" :value="g">{{ g }}</option>
+                          <option v-for="g in geoLocationOptions" :key="'route-fill-' + g" :value="g">{{ g }}</option>
                         </select>
                       </div>
                       <div class="form-group" style="flex: 1;">
@@ -878,7 +1397,6 @@
                   </div>
                 </div>
 
-                <!-- Routes table -->
                 <div class="table-wrap" style="margin-bottom: 8px;">
                   <table class="data-table data-table-compact">
                     <thead>
@@ -894,7 +1412,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      <tr v-for="row in paginatedRouteEntries" :key="row.idx">
+                      <tr v-for="row in paginatedRouteEntries" :key="'route-entry-' + row.idx">
                         <td><input v-model.number="row.item.inbound_port" type="number" min="1" max="65535" class="inline-input" style="width: 60px;" /></td>
                         <td>
                           <select v-model="row.item.inbound_type" class="inline-input" style="width: 60px;">
@@ -917,7 +1435,7 @@
                   <div class="pagination-info">
                     <span class="text-muted">每页</span>
                     <select v-model.number="pagination.routes.perPage" @change="onPaginationPageSizeChange('routes')" class="select input-sm" style="width: 56px;">
-                      <option v-for="n in pageSizeOptions" :key="'route-' + n" :value="n">{{ n }}</option>
+                      <option v-for="n in pageSizeOptions" :key="'route-page-' + n" :value="n">{{ n }}</option>
                     </select>
                     <span class="text-muted">{{ pageIndicator('routes') }}</span>
                   </div>
@@ -933,7 +1451,6 @@
                   <button @click="onCheckRouteLatency" :disabled="isActionRunning('checkRouteLatency')" class="btn btn-secondary">检测延迟</button>
                 </div>
 
-                <!-- JSON editor -->
                 <details class="details" style="margin-top: 16px;">
                   <summary>高级模式：JSON 编辑</summary>
                   <textarea v-model="routesJson" class="textarea mono" style="margin-top: 8px; height: 120px;"></textarea>
@@ -943,7 +1460,9 @@
                   </div>
                 </details>
 
-                <!-- Process events -->
+                </div>
+
+                <div v-show="proxyPoolTab === 'events'" class="tab-panel fade-in">
                 <h3 class="section-divider">进程记录</h3>
                 <div class="table-wrap">
                   <table class="data-table data-table-compact">
@@ -958,7 +1477,7 @@
                       </tr>
                     </thead>
                     <tbody>
-                      <tr v-for="item in paginatedBackendEvents" :key="item.id">
+                      <tr v-for="item in paginatedBackendEvents" :key="'backend-event-' + item.id">
                         <td class="text-xs text-muted">{{ formatTime(item.created_at) }}</td>
                         <td class="font-semibold text-xs">{{ item.action || '-' }}</td>
                         <td class="text-xs">{{ item.result || '-' }}</td>
@@ -974,7 +1493,7 @@
                   <div class="pagination-info">
                     <span class="text-muted">每页</span>
                     <select v-model.number="pagination.backendEvents.perPage" @change="onPaginationPageSizeChange('backendEvents')" class="select input-sm" style="width: 56px;">
-                      <option v-for="n in pageSizeOptions" :key="'ev-' + n" :value="n">{{ n }}</option>
+                      <option v-for="n in pageSizeOptions" :key="'backend-event-page-' + n" :value="n">{{ n }}</option>
                     </select>
                     <span class="text-muted">{{ pageIndicator('backendEvents') }}</span>
                   </div>
@@ -983,214 +1502,6 @@
                     <button @click="goNextPage('backendEvents')" :disabled="!canNextPage('backendEvents')" class="btn btn-xs btn-ghost">下一页</button>
                   </div>
                 </div>
-              </div>
-            </section>
-
-            <!-- ==================== 代理链管理 ==================== -->
-            <section v-show="activePage === 'chain'" class="card fade-in">
-              <div class="card-body">
-                <div class="section-header">
-                  <h2 class="section-title">代理链管理</h2>
-                  <div class="btn-group">
-                    <button @click="loadChainStatus" :disabled="isActionRunning('loadChainStatus')" class="btn btn-secondary">刷新状态</button>
-                    <button @click="chainStart" :disabled="isActionRunning('chainStart')" class="btn btn-primary">启动服务</button>
-                    <button @click="chainStop" :disabled="isActionRunning('chainStop')" class="btn btn-danger">停止服务</button>
-                  </div>
-                </div>
-
-                <!-- Status bar -->
-                <div class="status-bar">
-                  <div class="status-item">
-                    <span class="text-muted">服务状态</span>
-                    <span class="badge" :class="chainStatus.front_pool ? 'badge-success' : 'badge-neutral'">{{ chainStatus.front_pool ? '已加载' : '未加载' }}</span>
-                  </div>
-                  <div class="status-item">
-                    <span class="text-muted">前置节点</span>
-                    <span class="font-semibold">{{ chainStatus.front_pool?.healthy_nodes || 0 }} / {{ chainStatus.front_pool?.total_nodes || 0 }}</span>
-                  </div>
-                  <div class="status-item">
-                    <span class="text-muted">后置节点</span>
-                    <span class="font-semibold">{{ chainStatus.exit_pool?.healthy_nodes || 0 }} / {{ chainStatus.exit_pool?.total_nodes || 0 }}</span>
-                  </div>
-                  <div class="status-item">
-                    <span class="text-muted">健康检测</span>
-                    <span class="badge" :class="chainHealth.running ? 'badge-success' : 'badge-neutral'">{{ chainHealth.running ? '运行中' : '已停止' }}</span>
-                  </div>
-                </div>
-
-                <!-- Pool Configuration -->
-                <h3 class="section-divider">节点池配置</h3>
-                <p class="form-hint" style="margin-bottom: 12px;">通过正则表达式过滤节点标签，将节点分配到前置池或后置池。</p>
-
-                <div class="card" style="margin-bottom: 12px;">
-                  <div class="card-body">
-                    <h3 class="settings-title">前置节点池</h3>
-                    <p class="form-hint">用于代理链第一跳的节点，匹配节点名称或标签。</p>
-                    <div class="settings-row">
-                      <div class="form-group" style="flex: 3;">
-                        <label class="form-label">正则过滤器（每行一个）</label>
-                        <textarea v-model="chainPoolForm.front_filters" class="textarea mono" rows="3" placeholder="front-.*\nentry-.*"></textarea>
-                      </div>
-                      <button @click="saveChainPool('front')" :disabled="isActionRunning('saveChainPoolFront')" class="btn btn-secondary self-end">保存前置池</button>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="card" style="margin-bottom: 12px;">
-                  <div class="card-body">
-                    <h3 class="settings-title">后置节点池</h3>
-                    <p class="form-hint">用于代理链出口的节点，匹配节点名称或标签。</p>
-                    <div class="settings-row">
-                      <div class="form-group" style="flex: 3;">
-                        <label class="form-label">正则过滤器（每行一个）</label>
-                        <textarea v-model="chainPoolForm.exit_filters" class="textarea mono" rows="3" placeholder="exit-.*\nproxy-.*"></textarea>
-                      </div>
-                      <button @click="saveChainPool('exit')" :disabled="isActionRunning('saveChainPoolExit')" class="btn btn-secondary self-end">保存后置池</button>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Node Tables -->
-                <h3 class="section-divider">节点列表</h3>
-                <div class="tabs">
-                  <button @click="chainNodeTab = 'front'" :class="{ active: chainNodeTab === 'front' }" class="tab-btn">前置节点 ({{ chainStatus.front_pool?.total_nodes || 0 }})</button>
-                  <button @click="chainNodeTab = 'exit'" :class="{ active: chainNodeTab === 'exit' }" class="tab-btn">后置节点 ({{ chainStatus.exit_pool?.total_nodes || 0 }})</button>
-                  <button @click="chainNodeTab = 'leases'" :class="{ active: chainNodeTab === 'leases' }" class="tab-btn">粘性租约</button>
-                </div>
-
-                <!-- Front nodes -->
-                <div v-show="chainNodeTab === 'front'">
-                  <div class="table-wrap" style="margin-top: 12px;">
-                    <table class="data-table data-table-compact">
-                      <thead>
-                        <tr>
-                          <th>名称</th>
-                          <th>协议</th>
-                          <th>地址</th>
-                          <th>状态</th>
-                          <th>失败次数</th>
-                          <th>延迟</th>
-                          <th>出口IP</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr v-for="node in chainStatus.front_pool?.nodes || []" :key="node.key">
-                          <td class="text-xs">{{ node.name || '-' }}</td>
-                          <td class="text-xs">{{ node.protocol }}</td>
-                          <td class="mono text-xs">{{ node.host }}:{{ node.port }}</td>
-                          <td><span class="badge" :class="node.healthy ? 'badge-success' : 'badge-danger'">{{ node.healthy ? '健康' : '熔断' }}</span></td>
-                          <td class="text-xs">{{ node.failure_count }}</td>
-                          <td class="text-xs">{{ node.latency_ms ? node.latency_ms + 'ms' : '-' }}</td>
-                          <td class="mono text-xs">{{ node.egress_ip || '-' }}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <!-- Exit nodes -->
-                <div v-show="chainNodeTab === 'exit'">
-                  <div class="table-wrap" style="margin-top: 12px;">
-                    <table class="data-table data-table-compact">
-                      <thead>
-                        <tr>
-                          <th>名称</th>
-                          <th>协议</th>
-                          <th>地址</th>
-                          <th>状态</th>
-                          <th>失败次数</th>
-                          <th>延迟</th>
-                          <th>出口IP</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr v-for="node in chainStatus.exit_pool?.nodes || []" :key="node.key">
-                          <td class="text-xs">{{ node.name || '-' }}</td>
-                          <td class="text-xs">{{ node.protocol }}</td>
-                          <td class="mono text-xs">{{ node.host }}:{{ node.port }}</td>
-                          <td><span class="badge" :class="node.healthy ? 'badge-success' : 'badge-danger'">{{ node.healthy ? '健康' : '熔断' }}</span></td>
-                          <td class="text-xs">{{ node.failure_count }}</td>
-                          <td class="text-xs">{{ node.latency_ms ? node.latency_ms + 'ms' : '-' }}</td>
-                          <td class="mono text-xs">{{ node.egress_ip || '-' }}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <!-- Sticky leases -->
-                <div v-show="chainNodeTab === 'leases'">
-                  <div class="btn-group" style="margin-top: 12px; margin-bottom: 12px;">
-                    <button @click="loadChainLeases" :disabled="isActionRunning('loadChainLeases')" class="btn btn-secondary">刷新租约</button>
-                    <button @click="cleanupChainLeases" :disabled="isActionRunning('cleanupChainLeases')" class="btn btn-danger">清理过期</button>
-                  </div>
-                  <div class="table-wrap">
-                    <table class="data-table data-table-compact">
-                      <thead>
-                        <tr>
-                          <th>会话ID</th>
-                          <th>池ID</th>
-                          <th>出口节点</th>
-                          <th>出口IP</th>
-                          <th>过期时间</th>
-                          <th>最后访问</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr v-for="lease in chainLeases" :key="lease.session_id + '-' + lease.pool_id">
-                          <td class="mono text-xs">{{ lease.session_id }}</td>
-                          <td class="text-xs">{{ lease.pool_id }}</td>
-                          <td class="mono text-xs truncate" style="max-width: 150px;">{{ lease.exit_node_key }}</td>
-                          <td class="mono text-xs">{{ lease.egress_ip }}</td>
-                          <td class="text-xs">{{ formatTime(lease.expires_at) }}</td>
-                          <td class="text-xs">{{ formatTime(lease.last_accessed) }}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <!-- Route Test -->
-                <h3 class="section-divider">路由测试</h3>
-                <div class="card" style="margin-bottom: 12px;">
-                  <div class="card-body">
-                    <div class="settings-row">
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">会话ID</label>
-                        <input v-model="chainRouteTest.session_id" type="text" placeholder="留空则随机路由" class="input" />
-                      </div>
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">池ID</label>
-                        <input v-model.number="chainRouteTest.pool_id" type="number" min="0" class="input" />
-                      </div>
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">目标域名</label>
-                        <input v-model="chainRouteTest.target_domain" type="text" placeholder="example.com" class="input" />
-                      </div>
-                      <button @click="testChainRoute" :disabled="isActionRunning('testChainRoute')" class="btn btn-primary self-end">测试路由</button>
-                    </div>
-                    <div v-if="chainRouteResult" style="margin-top: 12px;">
-                      <h4 class="settings-title">路由结果</h4>
-                      <div class="status-bar">
-                        <div class="status-item">
-                          <span class="text-muted">前置节点</span>
-                          <span class="mono text-xs">{{ chainRouteResult.front_node?.name || chainRouteResult.front_node?.key }}</span>
-                        </div>
-                        <div class="status-item">
-                          <span class="text-muted">后置节点</span>
-                          <span class="mono text-xs">{{ chainRouteResult.exit_node?.name || chainRouteResult.exit_node?.key }}</span>
-                        </div>
-                        <div class="status-item">
-                          <span class="text-muted">出口IP</span>
-                          <span class="mono text-xs">{{ chainRouteResult.exit_node?.egress_ip || '-' }}</span>
-                        </div>
-                        <div class="status-item">
-                          <span class="text-muted">创建租约</span>
-                          <span class="badge" :class="chainRouteResult.lease_created ? 'badge-success' : 'badge-neutral'">{{ chainRouteResult.lease_created ? '是' : '否' }}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
             </section>
@@ -1219,6 +1530,9 @@
                   <div class="pagination-nav">
                     <button @click="onCopySelectedProxyLinks" :disabled="!selectedProxyKeys.length || isActionRunning('copySelectedProxyLinks')" class="btn btn-xs btn-secondary">
                       {{ buttonLabel('copySelectedProxyLinks', '复制选中(' + selectedProxyKeys.length + ')', '...') }}
+                    </button>
+                    <button @click="onDeleteSelectedProxies" :disabled="!selectedProxyKeys.length || isActionRunning('deleteSelectedProxies')" class="btn btn-xs btn-danger">
+                      {{ buttonLabel('deleteSelectedProxies', '删除选中(' + selectedProxyKeys.length + ')', '...') }}
                     </button>
                     <button @click="onLoadDataClick" :disabled="isActionRunning('loadData')" class="btn btn-xs btn-secondary">
                       {{ buttonLabel('loadData', '刷新', '...') }}
@@ -1268,6 +1582,9 @@
                           <el-select v-model="proxyFilters.available" clearable :placeholder="`状态 (${allProxyCount})`" size="small" style="width: 180px">
                             <el-option v-for="opt in statusFilterOptions" :key="'fs-' + opt.value" :label="opt.label" :value="opt.value"></el-option>
                           </el-select>
+                        </template>
+                        <template v-else-if="row.key === 'bandwidth'">
+                          <el-input v-model="proxyFilters.speed_min_mbps" clearable placeholder="带宽 > Mbps" size="small" style="width: 180px" />
                         </template>
                         <template v-else-if="row.key === 'geo'">
                           <div class="flex flex-wrap gap-2">
@@ -1330,6 +1647,7 @@
                           <template v-else-if="col.key === 'protocol'"><span class="font-semibold">{{ item.protocol }}</span></template>
                           <template v-else-if="col.key === 'address'"><span>{{ item.host }}:{{ item.port }}</span></template>
                           <template v-else-if="col.key === 'latency'"><span>{{ item.latency_ms ? item.latency_ms + ' ms' : '-' }}</span></template>
+                          <template v-else-if="col.key === 'bandwidth'"><span class="mono text-xs">{{ formatBandwidthMbps(item) }}</span></template>
                           <template v-else-if="col.key === 'status'"><span class="badge" :class="item.available ? 'badge-success' : 'badge-danger'">{{ item.available ? 'UP' : 'DOWN' }}</span></template>
                           <template v-else-if="col.key === 'checked_at'"><span class="text-xs text-muted">{{ formatTime(item.last_checked_at) }}</span></template>
                           <template v-else-if="col.key === 'geo'"><span class="text-xs text-muted">{{ formatGeo(item) }}</span></template>
@@ -1356,6 +1674,6 @@
       </el-config-provider>
     </div>
 
-    <script src="js/app.js"></script>
+    <script src="js/app.js?v=20260518-subscription-stats"></script>
   </body>
 </html>

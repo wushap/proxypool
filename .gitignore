@@ -7,15 +7,17 @@ __pycache__/
 .mypy_cache/
 .codex/
 .worktrees/
-
+.playwright-cli
+.agent/
+bin/
+configs/*
+scripts/
+docs/
 # local runtime/state
 data/
 *.log
 *.pid
 proxies.db
-
-# local binary/runtime downloads
-bin/sing-box
 
 # local import/export artifacts
 output/

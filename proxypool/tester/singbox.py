@@ -22,6 +22,16 @@ class ProbeResult:
     error: str = ""
 
 
+@dataclass(slots=True)
+class SpeedTestResult:
+    normalized_key: str
+    ok: bool
+    elapsed_ms: int
+    bytes_downloaded: int
+    speed_mbps: float
+    error: str = ""
+
+
 def build_singbox_outbound(node: dict[str, Any], tag: str = "probe-out") -> dict[str, Any] | None:
     protocol = str(node.get("protocol") or "").lower()
     host = str(node.get("host") or "")
@@ -559,6 +569,73 @@ class SingboxProber:
             finally:
                 await _stop_process_async(proc)
 
+    async def speed_test_async(
+        self,
+        node: dict[str, Any],
+        url: str,
+        timeout_sec: float = 30.0,
+    ) -> SpeedTestResult:
+        key = str(node.get("normalized_key") or "")
+        if not key:
+            return SpeedTestResult("", False, 0, 0, 0.0, "missing normalized_key")
+
+        outbound = build_singbox_outbound(node, tag="probe-out")
+        if outbound is None:
+            return SpeedTestResult(key, False, 0, 0, 0.0, "unsupported protocol")
+        if shutil.which(self.binary) is None:
+            return SpeedTestResult(key, False, 0, 0, 0.0, "sing-box not found")
+        curl = shutil.which("curl")
+        if curl is None:
+            return SpeedTestResult(key, False, 0, 0, 0.0, "curl not found")
+
+        try:
+            local_port = _find_free_port()
+        except OSError as exc:
+            return SpeedTestResult(key, False, 0, 0, 0.0, f"local socket unavailable: {exc}")
+
+        config = self._build_runtime_config(outbound, local_port)
+        with tempfile.TemporaryDirectory(prefix="pp-speedtest-") as td:
+            config_path = Path(td) / "config.json"
+            config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+            proc = await asyncio.create_subprocess_exec(
+                self.binary,
+                "run",
+                "-c",
+                str(config_path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                if not await self._wait_port_async("127.0.0.1", local_port, self.startup_timeout_sec):
+                    return SpeedTestResult(key, False, 0, 0, 0.0, "sing-box startup timeout")
+
+                started = time.perf_counter()
+                cmd = [
+                    curl,
+                    "-L",
+                    "-sS",
+                    "-o",
+                    "/dev/null",
+                    "-w",
+                    "%{size_download} %{time_total}",
+                    "--max-time",
+                    str(max(1, int(timeout_sec))),
+                    "--proxy",
+                    f"socks5h://127.0.0.1:{local_port}",
+                    str(url),
+                ]
+                returncode, stdout_text, stderr_text = await _run_command_async(cmd, timeout_sec=max(2.0, float(timeout_sec) + 1.0))
+                elapsed_ms = max(1, int((time.perf_counter() - started) * 1000))
+                if returncode != 0:
+                    error = (stderr_text or "").strip() or f"curl exit={returncode}"
+                    return SpeedTestResult(key, False, elapsed_ms, 0, 0.0, error[:1000])
+                bytes_downloaded, curl_elapsed_ms = _parse_curl_speed_metrics(stdout_text)
+                elapsed_ms = curl_elapsed_ms or elapsed_ms
+                speed_mbps = round((bytes_downloaded * 8) / (elapsed_ms / 1000) / 1_000_000, 3) if bytes_downloaded > 0 else 0.0
+                return SpeedTestResult(key, True, elapsed_ms, bytes_downloaded, speed_mbps)
+            finally:
+                await _stop_process_async(proc)
+
     def _build_runtime_config(self, outbound: dict[str, Any], local_port: int) -> dict[str, Any]:
         return self._build_runtime_config_with_chain(outbounds=[outbound], final_tag="probe-out", local_port=local_port)
 
@@ -750,6 +827,17 @@ def _parse_curl_time_ms(text: str) -> int | None:
         return int(float(text) * 1000)
     except ValueError:
         return None
+
+
+def _parse_curl_speed_metrics(text: str) -> tuple[int, int | None]:
+    parts = str(text or "").strip().split()
+    if len(parts) < 2:
+        return 0, None
+    try:
+        bytes_downloaded = int(float(parts[0]))
+    except ValueError:
+        bytes_downloaded = 0
+    return bytes_downloaded, _parse_curl_time_ms(parts[1])
 
 
 def _stop_process(proc: subprocess.Popen[Any]) -> None:

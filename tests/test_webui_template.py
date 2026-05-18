@@ -81,11 +81,22 @@ def test_webui_should_copy_proxy_links_from_proxy_table() -> None:
     assert "selectedProxyKeys" in content
     assert "onCopyProxyLink" in content
     assert "onCopySelectedProxyLinks" in content
+    assert "onDeleteSelectedProxies" in content
+    assert "/api/proxies/delete-selected" in content
     assert "proxyRawLink" in content
     assert "fallbackCopyTextToClipboard" in content
     assert "document.execCommand(\"copy\")" in content
     # Text may be shortened
     assert ("复制" in content) or ("copy" in content.lower())
+
+
+def test_webui_proxy_table_should_show_and_filter_bandwidth() -> None:
+    content = _read_webui()
+    assert "bandwidth" in content
+    assert "带宽 Mbps" in content
+    assert "formatBandwidthMbps" in content
+    assert "proxyFilters.speed_min_mbps" in content
+    assert "speed_min_mbps" in content
 
 
 def test_webui_should_use_pragmatic_element_plus_console_shell() -> None:
@@ -109,22 +120,58 @@ def test_webui_should_use_pragmatic_element_plus_console_shell() -> None:
     assert "Proxy Pool" in html
 
 
+def test_webui_should_expose_unified_multi_hop_pool_menu() -> None:
+    html = _read_html()
+    assert 'index="proxy-pools">多跳代理池<' in html
+    assert 'index="backend">sing-box 后端<' not in html
+    assert 'index="chain">代理链管理<' not in html
+
+
 def test_webui_should_render_published_subscription_management_page() -> None:
     content = _read_webui()
     assert "订阅发布" in content
     assert "publishedSubscriptions" in content
     assert "publishedSubscriptionForm" in content
+    assert "publishedSubscriptionForm.format" in content
+    assert "Clash YAML" in content
+    assert "formatPublishedSubscriptionOutput" in content
     assert "loadPublishedSubscriptions" in content
     assert "createPublishedSubscription" in content
     assert "publishedSubscriptionExportUrl" in content
     assert "/api/published-subscriptions" in content
 
 
+def test_webui_subscription_stats_should_be_labeled() -> None:
+    content = _read_webui()
+    assert "subscription-stats" in content
+    assert "解析 {{ item.last_parsed || 0 }}" in content
+    assert "新增 {{ item.last_inserted || 0 }}" in content
+    assert "更新 {{ item.last_updated || 0 }}" in content
+    assert "无效 {{ item.last_invalid || 0 }}" in content
+    assert "去重 {{ item.last_deduped || 0 }}" in content
+
+
+def test_webui_task_delete_button_should_call_existing_handler() -> None:
+    content = _read_webui()
+    assert "onDeleteTaskBtn(task)" in content
+    assert "() => this.onDeleteTask(task)" in content
+    assert "this.deleteTask(task)" not in content
+
+
+def test_webui_click_handlers_should_exist_in_app_methods() -> None:
+    html = _read_html()
+    js = (WEBUI_DIR / "js/app.js").read_text(encoding="utf-8")
+    refs = set(re.findall(r'@click="\s*(on[A-Za-z0-9_]+)\b', html))
+    defs = set(re.findall(r"async\s+(on[A-Za-z0-9_]+)\s*\(", js))
+    assert sorted(refs - defs) == []
+
+
 def test_webui_chain_view_should_use_session_id_instead_of_account() -> None:
     content = _read_webui()
-    assert "chainRouteTest.session_id" in content
     assert "session_id" in content
     assert "lease.session_id" in content
+    assert "链服务路由测试" not in content
+    assert "testChainRoute" not in content
     assert "chainRouteTest.account" not in content
     assert "lease.account" not in content
     assert "params.set('account'" not in content
@@ -135,12 +182,50 @@ def test_webui_should_support_global_http_gateway_config() -> None:
     assert "gatewayConfigForm.enabled" in content
     assert "gatewayConfigForm.listen_host" in content
     assert "gatewayConfigForm.listen_port" in content
+    assert "gatewayConfigForm.endpoint_id" in content
     assert "gatewayConfigForm.default_pool_id" in content
     assert "gatewayConfigForm.http_session_header_names_text" in content
     assert "gatewayConfigForm.http_session_query_names_text" in content
     assert "gatewayConfigForm.connect_session_header_names_text" in content
     assert "gatewayApiBase()" in content
     assert "http-config" in content
+
+
+def test_webui_should_support_http_proxy_endpoint_management() -> None:
+    content = _read_webui()
+    assert "gatewayEndpoints" in content
+    assert "gatewayEndpointForm.hop_pool_ids" in content
+    assert "loadGatewayEndpoints" in content
+    assert "saveGatewayEndpoint" in content
+    assert "formatEndpointHops" in content
+    assert "moveGatewayEndpointHop" in content
+    assert "上移" in content
+    assert "下移" in content
+    assert "/api/http-proxy-endpoints" in content
+
+
+def test_webui_unified_multi_hop_page_should_include_pool_chain_chain_service_and_backend_config() -> None:
+    content = _read_webui()
+    assert "proxyPoolTab" in content
+    assert "HTTP 网关" in content
+    assert "后端链路" in content
+    assert "进程记录" in content
+    assert "池级链路配置" in content
+    assert "selectedPoolNameForChain" in content
+    assert "poolChainForm.gateway_path_prefix" in content
+    assert "会话规则" in content
+    assert "poolSessionRuleForm.url_prefix" in content
+    assert "测试池路由" in content
+    assert "代理链服务" in content
+    assert "chainPoolForm.front_filters" in content
+    assert "chainPoolForm.exit_filters" in content
+    assert "后端状态与实例管理" in content
+    assert "onBackendStart" in content
+    assert "onBackendStop" in content
+    assert "onBackendRestart" in content
+    assert "sing-box 链路配置" in content
+    assert "当前编辑实例" in content
+    assert "链服务路由测试" not in content
 
 
 def test_webui_should_show_standard_proxy_usage_and_gateway_test() -> None:
@@ -187,3 +272,25 @@ def test_webui_should_surface_backend_instances_default_listen_and_replacement()
     assert "backendActionInstanceId" in content
     assert 'typeof instanceId === "string"' in content
     assert "replace_failed_with_available" in content
+
+
+def test_webui_proxy_pool_form_should_use_route_mode_filter() -> None:
+    content = _read_webui()
+    assert "proxyPoolForm.filters.route_mode_filter" in content
+    assert "直连</option>" in content
+    assert "链式</option>" in content
+    assert "不可连接</option>" in content
+    assert "proxyPoolForm.filters.available" not in content
+
+
+def test_webui_proxy_pool_form_should_support_multi_geo_country() -> None:
+    content = _read_webui()
+    assert "proxyPoolForm.filters.geo_countries" in content
+    assert "multiple" in content
+
+
+def test_webui_should_not_render_resin_controls() -> None:
+    content = _read_webui()
+    assert "resinStatus" not in content
+    assert "Resin" not in content
+    assert "/api/resin/" not in content

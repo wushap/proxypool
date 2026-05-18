@@ -72,3 +72,44 @@ async def test_published_subscription_crud_and_filtered_export(tmp_path: Path) -
         delete_resp = await client.delete(f"/api/published-subscriptions/{item['id']}")
         assert delete_resp.status_code == 200
         assert delete_resp.json()["deleted"] == 1
+
+
+@pytest.mark.anyio
+async def test_published_subscription_can_export_clash_yaml(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    node = ProxyNode(
+        protocol="trojan",
+        host="us.example.com",
+        port=443,
+        name="us-node",
+        raw_link="trojan://secret@us.example.com:443#us-node",
+        extra={"password": "secret", "security": "tls", "sni": "us.example.com"},
+    )
+    storage.upsert_proxy(node)
+    storage.update_test_result(node.normalized_key(), available=True, latency_ms=100, openai_unlocked=True)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_resp = await client.post(
+            "/api/published-subscriptions",
+            json={
+                "name": "Clash",
+                "enabled": True,
+                "format": "clash",
+                "filters": {"available": "true"},
+            },
+        )
+        assert create_resp.status_code == 200
+        item = create_resp.json()["item"]
+        assert item["format"] == "clash"
+
+        export_resp = await client.get(f"/api/published-subscriptions/{item['id']}/subscription")
+        assert export_resp.status_code == 200
+        assert "proxies:" in export_resp.text
+        assert "proxy-groups:" in export_resp.text
+        assert "type: trojan" in export_resp.text
+        assert "server: us.example.com" in export_resp.text
+        assert "password: secret" in export_resp.text
+        assert "MATCH,Proxy" in export_resp.text

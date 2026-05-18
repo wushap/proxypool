@@ -14,6 +14,7 @@ class HttpGatewayConfig:
     enabled: bool = False
     listen_host: str = "127.0.0.1"
     listen_port: int = 8899
+    endpoint_id: int = 0
     default_pool_id: int = 0
     sticky_ttl_sec: int = 3600
     session_missing_action: str = "RANDOM"
@@ -26,6 +27,7 @@ class HttpGatewayConfig:
         self.listen_port = int(self.listen_port)
         if self.listen_port < 1 or self.listen_port > 65535:
             raise ValueError("listen_port must be between 1 and 65535")
+        self.endpoint_id = max(0, int(self.endpoint_id))
         self.default_pool_id = max(0, int(self.default_pool_id))
         self.sticky_ttl_sec = max(1, int(self.sticky_ttl_sec))
         action = str(self.session_missing_action or "RANDOM").strip().upper() or "RANDOM"

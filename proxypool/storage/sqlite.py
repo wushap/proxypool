@@ -45,6 +45,8 @@ class SQLiteProxyStorage:
             extra_json TEXT NOT NULL DEFAULT '{}',
             available INTEGER NOT NULL DEFAULT 0,
             latency_ms INTEGER,
+            speed_mbps REAL,
+            speed_tested_at TEXT,
             fail_count INTEGER NOT NULL DEFAULT 0,
             last_error TEXT NOT NULL DEFAULT '',
             resolved_ip TEXT NOT NULL DEFAULT '',
@@ -113,6 +115,7 @@ class SQLiteProxyStorage:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             filters_json TEXT NOT NULL DEFAULT '{}',
+            format TEXT NOT NULL DEFAULT 'raw',
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -122,8 +125,6 @@ class SQLiteProxyStorage:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             published_subscription_id INTEGER,
-            resin_subscription_id TEXT NOT NULL DEFAULT '',
-            resin_platform_id TEXT NOT NULL DEFAULT '',
             filters_json TEXT NOT NULL DEFAULT '{}',
             listen TEXT NOT NULL DEFAULT '0.0.0.0',
             inbound_type TEXT NOT NULL DEFAULT 'http',
@@ -154,6 +155,33 @@ class SQLiteProxyStorage:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS http_proxy_endpoints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            listen_host TEXT NOT NULL DEFAULT '127.0.0.1',
+            listen_port INTEGER NOT NULL DEFAULT 8899,
+            inbound_type TEXT NOT NULL DEFAULT 'http',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            sticky_ttl_sec INTEGER NOT NULL DEFAULT 3600,
+            session_missing_action TEXT NOT NULL DEFAULT 'RANDOM',
+            session_header_names_json TEXT NOT NULL DEFAULT '[]',
+            session_query_param_names_json TEXT NOT NULL DEFAULT '[]',
+            connect_session_header_names_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'stopped',
+            last_error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_http_proxy_endpoints_enabled ON http_proxy_endpoints(enabled, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS http_proxy_endpoint_hops (
+            endpoint_id INTEGER NOT NULL,
+            hop_index INTEGER NOT NULL,
+            pool_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (endpoint_id, hop_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_http_proxy_endpoint_hops_pool ON http_proxy_endpoint_hops(pool_id, endpoint_id);
         CREATE TABLE IF NOT EXISTS node_health (
             node_key TEXT PRIMARY KEY,
             failure_count INTEGER NOT NULL DEFAULT 0,
@@ -169,9 +197,12 @@ class SQLiteProxyStorage:
         CREATE TABLE IF NOT EXISTS chain_egress_instances (
             instance_id TEXT PRIMARY KEY,
             pool_id INTEGER NOT NULL,
+            endpoint_id INTEGER NOT NULL DEFAULT 0,
             backend_type TEXT NOT NULL DEFAULT 'mihomo',
             front_node_key TEXT NOT NULL DEFAULT '',
             exit_node_key TEXT NOT NULL DEFAULT '',
+            hop_node_keys_json TEXT NOT NULL DEFAULT '[]',
+            route_signature TEXT NOT NULL DEFAULT '',
             listen TEXT NOT NULL DEFAULT '127.0.0.1',
             port INTEGER NOT NULL DEFAULT 0,
             inbound_type TEXT NOT NULL DEFAULT 'http',
@@ -188,12 +219,13 @@ class SQLiteProxyStorage:
         CREATE TABLE IF NOT EXISTS sticky_leases (
             session_id TEXT NOT NULL,
             pool_id INTEGER NOT NULL,
+            endpoint_id INTEGER NOT NULL DEFAULT 0,
             instance_id TEXT NOT NULL DEFAULT '',
             exit_node_key TEXT NOT NULL,
             egress_ip TEXT NOT NULL,
             expires_at TEXT NOT NULL,
             last_accessed TEXT NOT NULL,
-            PRIMARY KEY (session_id, pool_id)
+            PRIMARY KEY (session_id, pool_id, endpoint_id)
         );
         CREATE TABLE IF NOT EXISTS pool_session_header_rules (
             pool_id INTEGER NOT NULL,
@@ -238,12 +270,22 @@ class SQLiteProxyStorage:
             conn.execute("ALTER TABLE proxies ADD COLUMN openai_checked_at TEXT")
         if "fallback_front_keys_json" not in columns:
             conn.execute("ALTER TABLE proxies ADD COLUMN fallback_front_keys_json TEXT NOT NULL DEFAULT '[]'")
+        if "speed_mbps" not in columns:
+            conn.execute("ALTER TABLE proxies ADD COLUMN speed_mbps REAL")
+        if "speed_tested_at" not in columns:
+            conn.execute("ALTER TABLE proxies ADD COLUMN speed_tested_at TEXT")
 
         sub_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(subscriptions)").fetchall()
         }
         if "update_proxy_key" not in sub_columns:
             conn.execute("ALTER TABLE subscriptions ADD COLUMN update_proxy_key TEXT NOT NULL DEFAULT ''")
+
+        pub_sub_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(published_subscriptions)").fetchall()
+        }
+        if "format" not in pub_sub_columns:
+            conn.execute("ALTER TABLE published_subscriptions ADD COLUMN format TEXT NOT NULL DEFAULT 'raw'")
 
         pool_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(proxy_pools)").fetchall()
@@ -266,9 +308,12 @@ class SQLiteProxyStorage:
             CREATE TABLE IF NOT EXISTS chain_egress_instances (
                 instance_id TEXT PRIMARY KEY,
                 pool_id INTEGER NOT NULL,
+                endpoint_id INTEGER NOT NULL DEFAULT 0,
                 backend_type TEXT NOT NULL DEFAULT 'mihomo',
                 front_node_key TEXT NOT NULL DEFAULT '',
                 exit_node_key TEXT NOT NULL DEFAULT '',
+                hop_node_keys_json TEXT NOT NULL DEFAULT '[]',
+                route_signature TEXT NOT NULL DEFAULT '',
                 listen TEXT NOT NULL DEFAULT '127.0.0.1',
                 port INTEGER NOT NULL DEFAULT 0,
                 inbound_type TEXT NOT NULL DEFAULT 'http',
@@ -285,6 +330,15 @@ class SQLiteProxyStorage:
                 ON chain_egress_instances(pool_id, updated_at DESC);
             """
         )
+        chain_instance_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(chain_egress_instances)").fetchall()
+        }
+        if "endpoint_id" not in chain_instance_columns:
+            conn.execute("ALTER TABLE chain_egress_instances ADD COLUMN endpoint_id INTEGER NOT NULL DEFAULT 0")
+        if "hop_node_keys_json" not in chain_instance_columns:
+            conn.execute("ALTER TABLE chain_egress_instances ADD COLUMN hop_node_keys_json TEXT NOT NULL DEFAULT '[]'")
+        if "route_signature" not in chain_instance_columns:
+            conn.execute("ALTER TABLE chain_egress_instances ADD COLUMN route_signature TEXT NOT NULL DEFAULT ''")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS pool_session_header_rules (
@@ -294,6 +348,39 @@ class SQLiteProxyStorage:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (pool_id, url_prefix)
             );
+            """
+        )
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS http_proxy_endpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                listen_host TEXT NOT NULL DEFAULT '127.0.0.1',
+                listen_port INTEGER NOT NULL DEFAULT 8899,
+                inbound_type TEXT NOT NULL DEFAULT 'http',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                sticky_ttl_sec INTEGER NOT NULL DEFAULT 3600,
+                session_missing_action TEXT NOT NULL DEFAULT 'RANDOM',
+                session_header_names_json TEXT NOT NULL DEFAULT '[]',
+                session_query_param_names_json TEXT NOT NULL DEFAULT '[]',
+                connect_session_header_names_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'stopped',
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_http_proxy_endpoints_enabled
+                ON http_proxy_endpoints(enabled, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS http_proxy_endpoint_hops (
+                endpoint_id INTEGER NOT NULL,
+                hop_index INTEGER NOT NULL,
+                pool_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (endpoint_id, hop_index)
+            );
+            CREATE INDEX IF NOT EXISTS idx_http_proxy_endpoint_hops_pool
+                ON http_proxy_endpoint_hops(pool_id, endpoint_id);
             """
         )
 
@@ -308,27 +395,58 @@ class SQLiteProxyStorage:
                 CREATE TABLE sticky_leases (
                     session_id TEXT NOT NULL,
                     pool_id INTEGER NOT NULL,
+                    endpoint_id INTEGER NOT NULL DEFAULT 0,
                     instance_id TEXT NOT NULL DEFAULT '',
                     exit_node_key TEXT NOT NULL,
                     egress_ip TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     last_accessed TEXT NOT NULL,
-                    PRIMARY KEY (session_id, pool_id)
+                    PRIMARY KEY (session_id, pool_id, endpoint_id)
                 )
                 """
             )
             conn.execute(
                 """
                 INSERT INTO sticky_leases (
-                    session_id, pool_id, instance_id, exit_node_key, egress_ip, expires_at, last_accessed
+                    session_id, pool_id, endpoint_id, instance_id, exit_node_key, egress_ip, expires_at, last_accessed
                 )
-                SELECT account, pool_id, '', exit_node_key, egress_ip, expires_at, last_accessed
+                SELECT account, pool_id, 0, '', exit_node_key, egress_ip, expires_at, last_accessed
                 FROM sticky_leases_legacy
                 """
             )
             conn.execute("DROP TABLE sticky_leases_legacy")
         elif sticky_columns and "instance_id" not in sticky_column_set:
             conn.execute("ALTER TABLE sticky_leases ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''")
+        sticky_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(sticky_leases)").fetchall()
+        }
+        if "endpoint_id" not in sticky_columns:
+            conn.execute("ALTER TABLE sticky_leases RENAME TO sticky_leases_legacy_v2")
+            conn.execute(
+                """
+                CREATE TABLE sticky_leases (
+                    session_id TEXT NOT NULL,
+                    pool_id INTEGER NOT NULL,
+                    endpoint_id INTEGER NOT NULL DEFAULT 0,
+                    instance_id TEXT NOT NULL DEFAULT '',
+                    exit_node_key TEXT NOT NULL,
+                    egress_ip TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    last_accessed TEXT NOT NULL,
+                    PRIMARY KEY (session_id, pool_id, endpoint_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO sticky_leases (
+                    session_id, pool_id, endpoint_id, instance_id, exit_node_key, egress_ip, expires_at, last_accessed
+                )
+                SELECT session_id, pool_id, 0, instance_id, exit_node_key, egress_ip, expires_at, last_accessed
+                FROM sticky_leases_legacy_v2
+                """
+            )
+            conn.execute("DROP TABLE sticky_leases_legacy_v2")
 
     def upsert_proxy(self, node: ProxyNode, source: str = "") -> str:
         now = _utc_now()
@@ -395,9 +513,11 @@ class SQLiteProxyStorage:
         offset: int = 0,
         protocol: str | None = None,
         available: bool | None = None,
+        route_mode_filter: str | None = None,
         source_keyword: str | None = None,
         geo_filter: str | None = None,
         geo_country: str | None = None,
+        geo_countries: list[str] | None = None,
         geo_location: str | None = None,
         openai_filter: str | None = None,
         ip_purity_filter: str | None = None,
@@ -406,6 +526,7 @@ class SQLiteProxyStorage:
         sort_order: str = "asc",
         latency_min: int | None = None,
         latency_max: int | None = None,
+        speed_min_mbps: float | None = None,
         freshness_hours: int | None = None,
         exclude_keys: set[str] | None = None,
     ) -> list[dict[str, Any]]:
@@ -415,7 +536,15 @@ class SQLiteProxyStorage:
         if protocol:
             where.append("protocol = ?")
             params.append(protocol)
-        if available is not None:
+        if route_mode_filter == "direct":
+            where.append("available = 1")
+            where.append("fallback_front_keys_json = '[]'")
+        elif route_mode_filter == "chain":
+            where.append("available = 1")
+            where.append("fallback_front_keys_json <> '[]'")
+        elif route_mode_filter == "unreachable":
+            where.append("available = 0")
+        elif available is not None:
             where.append("available = ?")
             params.append(1 if available else 0)
         if source_keyword:
@@ -429,7 +558,20 @@ class SQLiteProxyStorage:
             where.append("(country <> '' OR city <> '')")
         elif geo_filter == "none":
             where.append("(country = '' AND city = '')")
-        if geo_country:
+        if geo_countries:
+            selected_countries = _normalize_string_list(geo_countries, max_items=64)
+            concrete = [country for country in selected_countries if country != "-"]
+            include_unknown = "-" in selected_countries
+            clauses: list[str] = []
+            if concrete:
+                placeholders = ", ".join("?" for _ in concrete)
+                clauses.append(f"country IN ({placeholders})")
+                params.extend(concrete)
+            if include_unknown:
+                clauses.append("country = ''")
+            if clauses:
+                where.append(f"({' OR '.join(clauses)})")
+        elif geo_country:
             country_text = str(geo_country).strip()
             if country_text == "-":
                 where.append("country = ''")
@@ -481,6 +623,10 @@ class SQLiteProxyStorage:
         if latency_max is not None and int(latency_max) >= 0:
             where.append("latency_ms <= ?")
             params.append(int(latency_max))
+        if speed_min_mbps is not None and float(speed_min_mbps) >= 0:
+            where.append("speed_mbps IS NOT NULL")
+            where.append("speed_mbps > ?")
+            params.append(float(speed_min_mbps))
         if freshness_hours is not None and int(freshness_hours) > 0:
             cutoff = (datetime.now(timezone.utc) - timedelta(hours=int(freshness_hours))).isoformat()
             where.append("last_checked_at >= ?")
@@ -606,6 +752,35 @@ class SQLiteProxyStorage:
                     )
                 conn.commit()
 
+    def update_speed_test_result(
+        self,
+        normalized_key: str,
+        ok: bool,
+        speed_mbps: float | None = None,
+    ) -> None:
+        now = _utc_now()
+        with self._write_lock:
+            with self._connect() as conn:
+                if ok and speed_mbps is not None and float(speed_mbps) >= 0:
+                    conn.execute(
+                        """
+                        UPDATE proxies
+                        SET speed_mbps = ?, speed_tested_at = ?, updated_at = ?
+                        WHERE normalized_key = ?
+                        """,
+                        (round(float(speed_mbps), 3), now, now, normalized_key),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE proxies
+                        SET speed_tested_at = ?, updated_at = ?
+                        WHERE normalized_key = ?
+                        """,
+                        (now, now, normalized_key),
+                    )
+                conn.commit()
+
     def get_proxies_by_keys(self, normalized_keys: list[str]) -> list[dict[str, Any]]:
         keys = [str(key).strip() for key in normalized_keys if str(key).strip()]
         if not keys:
@@ -663,6 +838,27 @@ class SQLiteProxyStorage:
                 cursor = conn.execute("DELETE FROM proxies WHERE available = 0")
                 conn.commit()
                 return int(cursor.rowcount)
+
+    def delete_proxies_by_keys(self, normalized_keys: list[str]) -> int:
+        keys: list[str] = []
+        seen: set[str] = set()
+        for item in normalized_keys:
+            key = str(item or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            keys.append(key)
+        if not keys:
+            return 0
+        placeholders = ",".join("?" for _ in keys)
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    f"DELETE FROM proxies WHERE normalized_key IN ({placeholders})",
+                    keys,
+                )
+                conn.commit()
+        return int(cursor.rowcount or 0)
 
     def get_stats(self) -> dict[str, Any]:
         with self._connect() as conn:
@@ -980,19 +1176,22 @@ class SQLiteProxyStorage:
         name: str,
         filters: dict[str, Any] | None = None,
         enabled: bool = True,
+        format: str = "raw",
     ) -> dict[str, Any]:
         now = _utc_now()
         filters_json = json.dumps(_normalize_published_subscription_filters(filters), ensure_ascii=False, separators=(",", ":"))
+        output_format = _normalize_published_subscription_format(format)
         with self._write_lock:
             with self._connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO published_subscriptions (name, filters_json, enabled, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO published_subscriptions (name, filters_json, format, enabled, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         (str(name or "").strip() or "published-subscription")[:120],
                         filters_json,
+                        output_format,
                         1 if enabled else 0,
                         now,
                         now,
@@ -1012,6 +1211,7 @@ class SQLiteProxyStorage:
         name: str | None = None,
         filters: dict[str, Any] | None = None,
         enabled: bool | None = None,
+        format: str | None = None,
     ) -> dict[str, Any]:
         updates: list[str] = []
         params: list[Any] = []
@@ -1024,6 +1224,9 @@ class SQLiteProxyStorage:
         if enabled is not None:
             updates.append("enabled = ?")
             params.append(1 if enabled else 0)
+        if format is not None:
+            updates.append("format = ?")
+            params.append(_normalize_published_subscription_format(format))
         updates.append("updated_at = ?")
         params.append(_utc_now())
         params.append(int(subscription_id))
@@ -1055,6 +1258,12 @@ class SQLiteProxyStorage:
         if item is None:
             raise ValueError("published subscription not found")
         return self.get_subscription_links(limit=limit, **_filters_to_subscription_link_kwargs(item.get("filters") or {}))
+
+    def get_published_subscription_proxies(self, subscription_id: int, limit: int = 5000) -> list[dict[str, Any]]:
+        item = self.get_published_subscription(subscription_id)
+        if item is None:
+            raise ValueError("published subscription not found")
+        return self.list_proxies_filtered(limit=limit, **_filters_to_proxy_list_kwargs(item.get("filters") or {}))
 
     def get_app_setting(self, key: str, default: str = "") -> str:
         safe_key = str(key or "").strip()
@@ -1192,8 +1401,6 @@ class SQLiteProxyStorage:
         listen: str | None = None,
         inbound_type: str | None = None,
         published_subscription_id: int | None = None,
-        resin_subscription_id: str | None = None,
-        resin_platform_id: str | None = None,
         chain_enabled: bool | None = None,
         sticky_ttl_sec: int | None = None,
         session_missing_action: str | None = None,
@@ -1218,12 +1425,6 @@ class SQLiteProxyStorage:
         if published_subscription_id is not None:
             updates.append("published_subscription_id = ?")
             params.append(int(published_subscription_id))
-        if resin_subscription_id is not None:
-            updates.append("resin_subscription_id = ?")
-            params.append(str(resin_subscription_id))
-        if resin_platform_id is not None:
-            updates.append("resin_platform_id = ?")
-            params.append(str(resin_platform_id))
         if chain_enabled is not None:
             updates.append("chain_enabled = ?")
             params.append(1 if chain_enabled else 0)
@@ -1282,6 +1483,20 @@ class SQLiteProxyStorage:
             ).fetchall()
         return [self._pool_row_to_dict(row) for row in rows]
 
+    def list_proxy_pool_candidates(
+        self,
+        pool_id: int,
+        limit: int = 500,
+        exclude_keys: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        pool = self.get_proxy_pool(pool_id)
+        if pool is None:
+            raise ValueError("proxy pool not found")
+        kwargs = _pool_filters_to_list_kwargs(pool.get("filters") or {})
+        kwargs["limit"] = max(1, int(limit))
+        kwargs["exclude_keys"] = exclude_keys
+        return self.list_proxies_filtered(**kwargs)
+
     def update_proxy_pool_status(
         self,
         pool_id: int,
@@ -1312,6 +1527,8 @@ class SQLiteProxyStorage:
         data["session_header_names"] = _loads_json_array(data.get("session_header_names_json"))
         data["session_query_param_names"] = _loads_json_array(data.get("session_query_param_names_json"))
         data["gateway_path_prefix"] = str(data.get("gateway_path_prefix") or "")
+        data.pop("resin_subscription_id", None)
+        data.pop("resin_platform_id", None)
         data.pop("filters_json", None)
         data.pop("session_header_names_json", None)
         data.pop("session_query_param_names_json", None)
@@ -1493,9 +1710,11 @@ class SQLiteProxyStorage:
         protocol: str | None = None,
         limit: int = 5000,
         available: bool | None = None,
+        route_mode_filter: str | None = None,
         source_keyword: str | None = None,
         geo_filter: str | None = None,
         geo_country: str | None = None,
+        geo_countries: list[str] | None = None,
         geo_location: str | None = None,
         openai_filter: str | None = None,
         ip_purity_filter: str | None = None,
@@ -1504,7 +1723,15 @@ class SQLiteProxyStorage:
         where: list[str] = []
         params: list[Any] = []
 
-        if available is not None:
+        if route_mode_filter == "direct":
+            where.append("available = 1")
+            where.append("fallback_front_keys_json = '[]'")
+        elif route_mode_filter == "chain":
+            where.append("available = 1")
+            where.append("fallback_front_keys_json <> '[]'")
+        elif route_mode_filter == "unreachable":
+            where.append("available = 0")
+        elif available is not None:
             where.append("available = ?")
             params.append(1 if available else 0)
         elif only_available:
@@ -1523,7 +1750,20 @@ class SQLiteProxyStorage:
             where.append("(country <> '' OR city <> '')")
         elif geo_filter == "none":
             where.append("(country = '' AND city = '')")
-        if geo_country:
+        if geo_countries:
+            selected_countries = _normalize_string_list(geo_countries, max_items=64)
+            concrete = [country for country in selected_countries if country != "-"]
+            include_unknown = "-" in selected_countries
+            clauses: list[str] = []
+            if concrete:
+                placeholders = ", ".join("?" for _ in concrete)
+                clauses.append(f"country IN ({placeholders})")
+                params.extend(concrete)
+            if include_unknown:
+                clauses.append("country = ''")
+            if clauses:
+                where.append(f"({' OR '.join(clauses)})")
+        elif geo_country:
             country_text = str(geo_country).strip()
             if country_text == "-":
                 where.append("country = ''")
@@ -1644,6 +1884,7 @@ class SQLiteProxyStorage:
     def _published_subscription_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
         data["enabled"] = bool(data.get("enabled"))
+        data["format"] = _normalize_published_subscription_format(data.get("format"))
         filters = _normalize_published_subscription_filters(_loads_json_object(data.get("filters_json")))
         data["filters"] = filters
         data["match_count"] = len(self.list_proxies_filtered(limit=20000, **_filters_to_proxy_list_kwargs(filters)))
@@ -1722,8 +1963,33 @@ class SQLiteProxyStorage:
     def _chain_egress_instance_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
         data["pool_id"] = int(data.get("pool_id") or 0)
+        data["endpoint_id"] = int(data.get("endpoint_id") or 0)
         data["port"] = int(data.get("port") or 0)
         data["pid"] = int(data.get("pid") or -1)
+        data["hop_node_keys"] = _loads_json_array(data.get("hop_node_keys_json"))
+        data.pop("hop_node_keys_json", None)
+        return data
+
+    def _http_proxy_endpoint_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["enabled"] = bool(data.get("enabled"))
+        data["listen_port"] = int(data.get("listen_port") or 0)
+        data["sticky_ttl_sec"] = int(data.get("sticky_ttl_sec") or 3600)
+        data["session_missing_action"] = _normalize_session_missing_action(data.get("session_missing_action"))
+        data["session_header_names"] = _loads_json_array(data.get("session_header_names_json"))
+        data["session_query_param_names"] = _loads_json_array(data.get("session_query_param_names_json"))
+        data["connect_session_header_names"] = _loads_json_array(data.get("connect_session_header_names_json"))
+        data.pop("session_header_names_json", None)
+        data.pop("session_query_param_names_json", None)
+        data.pop("connect_session_header_names_json", None)
+        data["hops"] = self.list_http_proxy_endpoint_hops(int(data["id"]))
+        return data
+
+    def _http_proxy_endpoint_hop_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        data["endpoint_id"] = int(data.get("endpoint_id") or 0)
+        data["hop_index"] = int(data.get("hop_index") or 0)
+        data["pool_id"] = int(data.get("pool_id") or 0)
         return data
 
     def _pool_session_rule_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -1844,9 +2110,12 @@ class SQLiteProxyStorage:
         self,
         instance_id: str,
         pool_id: int,
+        endpoint_id: int,
         backend_type: str,
         front_node_key: str,
         exit_node_key: str,
+        hop_node_keys: list[str] | None,
+        route_signature: str,
         listen: str,
         port: int,
         inbound_type: str,
@@ -1864,15 +2133,19 @@ class SQLiteProxyStorage:
                 conn.execute(
                     """
                     INSERT INTO chain_egress_instances (
-                        instance_id, pool_id, backend_type, front_node_key, exit_node_key,
+                        instance_id, pool_id, endpoint_id, backend_type, front_node_key, exit_node_key,
+                        hop_node_keys_json, route_signature,
                         listen, port, inbound_type, status, pid, config_file, log_file,
                         egress_ip, last_error, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(instance_id) DO UPDATE SET
                         pool_id = excluded.pool_id,
+                        endpoint_id = excluded.endpoint_id,
                         backend_type = excluded.backend_type,
                         front_node_key = excluded.front_node_key,
                         exit_node_key = excluded.exit_node_key,
+                        hop_node_keys_json = excluded.hop_node_keys_json,
+                        route_signature = excluded.route_signature,
                         listen = excluded.listen,
                         port = excluded.port,
                         inbound_type = excluded.inbound_type,
@@ -1887,9 +2160,12 @@ class SQLiteProxyStorage:
                     (
                         safe_id,
                         int(pool_id),
+                        int(endpoint_id),
                         str(backend_type or "mihomo").strip()[:32] or "mihomo",
                         str(front_node_key or "").strip()[:300],
                         str(exit_node_key or "").strip()[:300],
+                        json.dumps(_normalize_string_list(hop_node_keys), ensure_ascii=False, separators=(",", ":")),
+                        str(route_signature or "").strip()[:500],
                         str(listen or "127.0.0.1").strip()[:80] or "127.0.0.1",
                         max(0, int(port)),
                         str(inbound_type or "http").strip().lower()[:32] or "http",
@@ -1922,15 +2198,39 @@ class SQLiteProxyStorage:
             return None
         return self._chain_egress_instance_row_to_dict(row)
 
-    def list_chain_egress_instances(self, pool_id: int | None = None) -> list[dict[str, Any]]:
+    def list_chain_egress_instances(
+        self,
+        pool_id: int | None = None,
+        endpoint_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            if pool_id is None:
+            if pool_id is None and endpoint_id is None:
                 rows = conn.execute(
                     """
                     SELECT *
                     FROM chain_egress_instances
                     ORDER BY updated_at DESC, instance_id ASC
                     """
+                ).fetchall()
+            elif pool_id is not None and endpoint_id is not None:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM chain_egress_instances
+                    WHERE pool_id = ? AND endpoint_id = ?
+                    ORDER BY updated_at DESC, instance_id ASC
+                    """,
+                    (int(pool_id), int(endpoint_id)),
+                ).fetchall()
+            elif endpoint_id is not None:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM chain_egress_instances
+                    WHERE endpoint_id = ?
+                    ORDER BY updated_at DESC, instance_id ASC
+                    """,
+                    (int(endpoint_id),),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -2024,6 +2324,7 @@ class SQLiteProxyStorage:
         self,
         session_id: str,
         pool_id: int,
+        endpoint_id: int,
         instance_id: str,
         exit_node_key: str,
         egress_ip: str,
@@ -2036,10 +2337,10 @@ class SQLiteProxyStorage:
                 conn.execute(
                     """
                     INSERT INTO sticky_leases (
-                        session_id, pool_id, instance_id, exit_node_key, egress_ip, expires_at, last_accessed
+                        session_id, pool_id, endpoint_id, instance_id, exit_node_key, egress_ip, expires_at, last_accessed
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(session_id, pool_id) DO UPDATE SET
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id, pool_id, endpoint_id) DO UPDATE SET
                         instance_id = excluded.instance_id,
                         exit_node_key = excluded.exit_node_key,
                         egress_ip = excluded.egress_ip,
@@ -2049,6 +2350,7 @@ class SQLiteProxyStorage:
                     (
                         str(session_id or "").strip(),
                         int(pool_id),
+                        int(endpoint_id),
                         str(instance_id or "").strip()[:120],
                         str(exit_node_key or "").strip()[:300],
                         str(egress_ip or "").strip()[:120],
@@ -2057,41 +2359,219 @@ class SQLiteProxyStorage:
                     ),
                 )
                 conn.commit()
-        return self.get_sticky_lease(session_id, pool_id) or {}
+        return self.get_sticky_lease(session_id, pool_id, endpoint_id) or {}
 
-    def get_sticky_lease(self, session_id: str, pool_id: int) -> dict[str, Any] | None:
+    def get_sticky_lease(self, session_id: str, pool_id: int, endpoint_id: int = 0) -> dict[str, Any] | None:
         """Get a sticky lease."""
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM sticky_leases WHERE session_id = ? AND pool_id = ?",
-                (str(session_id or "").strip(), int(pool_id)),
+                "SELECT * FROM sticky_leases WHERE session_id = ? AND pool_id = ? AND endpoint_id = ?",
+                (str(session_id or "").strip(), int(pool_id), int(endpoint_id)),
             ).fetchone()
             return dict(row) if row else None
 
-    def list_sticky_leases(self, pool_id: int | None = None) -> list[dict[str, Any]]:
+    def list_sticky_leases(self, pool_id: int | None = None, endpoint_id: int | None = None) -> list[dict[str, Any]]:
         """List all sticky leases, optionally filtered by pool_id."""
         with self._connect() as conn:
-            if pool_id is not None:
+            if pool_id is not None and endpoint_id is not None:
+                rows = conn.execute(
+                    "SELECT * FROM sticky_leases WHERE pool_id = ? AND endpoint_id = ? ORDER BY session_id",
+                    (int(pool_id), int(endpoint_id)),
+                ).fetchall()
+            elif pool_id is not None:
                 rows = conn.execute(
                     "SELECT * FROM sticky_leases WHERE pool_id = ? ORDER BY session_id",
                     (int(pool_id),),
                 ).fetchall()
+            elif endpoint_id is not None:
+                rows = conn.execute(
+                    "SELECT * FROM sticky_leases WHERE endpoint_id = ? ORDER BY pool_id, session_id",
+                    (int(endpoint_id),),
+                ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM sticky_leases ORDER BY pool_id, session_id"
+                    "SELECT * FROM sticky_leases ORDER BY endpoint_id, pool_id, session_id"
                 ).fetchall()
             return [dict(row) for row in rows]
 
-    def delete_sticky_lease(self, session_id: str, pool_id: int) -> int:
+    def delete_sticky_lease(self, session_id: str, pool_id: int, endpoint_id: int = 0) -> int:
         """Delete a sticky lease."""
         with self._write_lock:
             with self._connect() as conn:
                 cursor = conn.execute(
-                    "DELETE FROM sticky_leases WHERE session_id = ? AND pool_id = ?",
-                    (str(session_id or "").strip(), int(pool_id)),
+                    "DELETE FROM sticky_leases WHERE session_id = ? AND pool_id = ? AND endpoint_id = ?",
+                    (str(session_id or "").strip(), int(pool_id), int(endpoint_id)),
                 )
                 conn.commit()
                 return int(cursor.rowcount or 0)
+
+    def create_http_proxy_endpoint(
+        self,
+        name: str,
+        listen_host: str = "127.0.0.1",
+        listen_port: int = 8899,
+        inbound_type: str = "http",
+        enabled: bool = True,
+        sticky_ttl_sec: int = 3600,
+        session_missing_action: str = "RANDOM",
+        session_header_names: list[str] | None = None,
+        session_query_param_names: list[str] | None = None,
+        connect_session_header_names: list[str] | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO http_proxy_endpoints (
+                        name, listen_host, listen_port, inbound_type, enabled, sticky_ttl_sec,
+                        session_missing_action, session_header_names_json, session_query_param_names_json,
+                        connect_session_header_names_json, status, last_error, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', '', ?, ?)
+                    """,
+                    (
+                        (str(name or "").strip() or "http-endpoint")[:120],
+                        str(listen_host or "127.0.0.1").strip()[:80] or "127.0.0.1",
+                        max(1, int(listen_port)),
+                        str(inbound_type or "http").strip().lower()[:32] or "http",
+                        1 if enabled else 0,
+                        max(1, int(sticky_ttl_sec)),
+                        _normalize_session_missing_action(session_missing_action),
+                        json.dumps(_normalize_string_list(session_header_names), ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(_normalize_string_list(session_query_param_names), ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(_normalize_string_list(connect_session_header_names), ensure_ascii=False, separators=(",", ":")),
+                        now,
+                        now,
+                    ),
+                )
+                endpoint_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+                row = conn.execute("SELECT * FROM http_proxy_endpoints WHERE id = ?", (endpoint_id,)).fetchone()
+                conn.commit()
+        if row is None:
+            raise RuntimeError("failed to create http proxy endpoint")
+        return self._http_proxy_endpoint_row_to_dict(row)
+
+    def update_http_proxy_endpoint(
+        self,
+        endpoint_id: int,
+        name: str | None = None,
+        listen_host: str | None = None,
+        listen_port: int | None = None,
+        inbound_type: str | None = None,
+        enabled: bool | None = None,
+        sticky_ttl_sec: int | None = None,
+        session_missing_action: str | None = None,
+        session_header_names: list[str] | None = None,
+        session_query_param_names: list[str] | None = None,
+        connect_session_header_names: list[str] | None = None,
+        status: str | None = None,
+        last_error: str | None = None,
+    ) -> dict[str, Any]:
+        updates: list[str] = []
+        params: list[Any] = []
+        if name is not None:
+            updates.append("name = ?")
+            params.append((str(name or "").strip() or "http-endpoint")[:120])
+        if listen_host is not None:
+            updates.append("listen_host = ?")
+            params.append(str(listen_host or "127.0.0.1").strip()[:80] or "127.0.0.1")
+        if listen_port is not None:
+            updates.append("listen_port = ?")
+            params.append(max(1, int(listen_port)))
+        if inbound_type is not None:
+            updates.append("inbound_type = ?")
+            params.append(str(inbound_type or "http").strip().lower()[:32] or "http")
+        if enabled is not None:
+            updates.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if sticky_ttl_sec is not None:
+            updates.append("sticky_ttl_sec = ?")
+            params.append(max(1, int(sticky_ttl_sec)))
+        if session_missing_action is not None:
+            updates.append("session_missing_action = ?")
+            params.append(_normalize_session_missing_action(session_missing_action))
+        if session_header_names is not None:
+            updates.append("session_header_names_json = ?")
+            params.append(json.dumps(_normalize_string_list(session_header_names), ensure_ascii=False, separators=(",", ":")))
+        if session_query_param_names is not None:
+            updates.append("session_query_param_names_json = ?")
+            params.append(json.dumps(_normalize_string_list(session_query_param_names), ensure_ascii=False, separators=(",", ":")))
+        if connect_session_header_names is not None:
+            updates.append("connect_session_header_names_json = ?")
+            params.append(json.dumps(_normalize_string_list(connect_session_header_names), ensure_ascii=False, separators=(",", ":")))
+        if status is not None:
+            updates.append("status = ?")
+            params.append(str(status or "stopped").strip()[:32] or "stopped")
+        if last_error is not None:
+            updates.append("last_error = ?")
+            params.append(str(last_error or "")[:1000])
+        if not updates:
+            return self.get_http_proxy_endpoint(endpoint_id) or {}
+        updates.append("updated_at = ?")
+        params.append(_utc_now())
+        params.append(int(endpoint_id))
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(f"UPDATE http_proxy_endpoints SET {', '.join(updates)} WHERE id = ?", params)
+                row = conn.execute("SELECT * FROM http_proxy_endpoints WHERE id = ?", (int(endpoint_id),)).fetchone()
+                conn.commit()
+        if row is None:
+            raise ValueError("http proxy endpoint not found")
+        return self._http_proxy_endpoint_row_to_dict(row)
+
+    def get_http_proxy_endpoint(self, endpoint_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM http_proxy_endpoints WHERE id = ? LIMIT 1", (int(endpoint_id),)).fetchone()
+        if row is None:
+            return None
+        return self._http_proxy_endpoint_row_to_dict(row)
+
+    def list_http_proxy_endpoints(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM http_proxy_endpoints ORDER BY updated_at DESC, id DESC").fetchall()
+        return [self._http_proxy_endpoint_row_to_dict(row) for row in rows]
+
+    def delete_http_proxy_endpoint(self, endpoint_id: int) -> int:
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute("DELETE FROM http_proxy_endpoint_hops WHERE endpoint_id = ?", (int(endpoint_id),))
+                cursor = conn.execute("DELETE FROM http_proxy_endpoints WHERE id = ?", (int(endpoint_id),))
+                conn.commit()
+        return int(cursor.rowcount or 0)
+
+    def replace_http_proxy_endpoint_hops(self, endpoint_id: int, pool_ids: list[int]) -> list[dict[str, Any]]:
+        now = _utc_now()
+        safe_endpoint_id = int(endpoint_id)
+        safe_pool_ids = [int(pool_id) for pool_id in pool_ids if int(pool_id) > 0]
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute("DELETE FROM http_proxy_endpoint_hops WHERE endpoint_id = ?", (safe_endpoint_id,))
+                for hop_index, pool_id in enumerate(safe_pool_ids):
+                    conn.execute(
+                        """
+                        INSERT INTO http_proxy_endpoint_hops (
+                            endpoint_id, hop_index, pool_id, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (safe_endpoint_id, int(hop_index), int(pool_id), now, now),
+                    )
+                conn.commit()
+        return self.list_http_proxy_endpoint_hops(safe_endpoint_id)
+
+    def list_http_proxy_endpoint_hops(self, endpoint_id: int) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT endpoint_id, hop_index, pool_id, created_at, updated_at
+                FROM http_proxy_endpoint_hops
+                WHERE endpoint_id = ?
+                ORDER BY hop_index ASC
+                """,
+                (int(endpoint_id),),
+            ).fetchall()
+        return [self._http_proxy_endpoint_hop_row_to_dict(row) for row in rows]
 
     def cleanup_expired_leases(self) -> int:
         """Delete expired sticky leases."""
@@ -2128,9 +2608,13 @@ def _loads_json_array(value: Any) -> list[str]:
     return _normalize_string_list(parsed)
 
 
-def _normalize_pool_filters(filters: dict[str, Any] | None) -> dict[str, str]:
+def _normalize_pool_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
     out = _normalize_published_subscription_filters(filters)
     raw = filters or {}
+    geo_countries = _normalize_string_list(raw.get("geo_countries"), max_items=64)
+    if geo_countries:
+        out["geo_countries"] = geo_countries
+        out.pop("geo_country", None)
     for key in ("latency_min", "latency_max", "freshness_hours"):
         value = str(raw.get(key) or "").strip()
         if value:
@@ -2178,6 +2662,10 @@ def _pool_filters_to_list_kwargs(filters: dict[str, Any]) -> dict[str, Any]:
                 kwargs[key] = int(float(value))
             except (ValueError, TypeError):
                 pass
+    geo_countries = _normalize_string_list(filters.get("geo_countries"), max_items=64)
+    if geo_countries:
+        kwargs["geo_countries"] = geo_countries
+        kwargs.pop("geo_country", None)
     return kwargs
 
 
@@ -2187,6 +2675,7 @@ def _normalize_published_subscription_filters(filters: dict[str, Any] | None) ->
     allowed = {
         "protocol",
         "available",
+        "route_mode_filter",
         "source",
         "geo_filter",
         "geo_country",
@@ -2199,6 +2688,8 @@ def _normalize_published_subscription_filters(filters: dict[str, Any] | None) ->
         value = str(raw.get(key) or "").strip()
         if value:
             out[key] = value[:300]
+    if out.get("route_mode_filter") not in {None, "direct", "chain", "unreachable"}:
+        out.pop("route_mode_filter", None)
     if out.get("available") not in {None, "true", "false"}:
         out.pop("available", None)
     if out.get("geo_filter") not in {None, "has", "none"}:
@@ -2209,13 +2700,34 @@ def _normalize_published_subscription_filters(filters: dict[str, Any] | None) ->
         out.pop("ip_purity_filter", None)
     if out.get("fallback_front_filter") not in {None, "has", "none"}:
         out.pop("fallback_front_filter", None)
+    if out.get("route_mode_filter"):
+        out.pop("available", None)
+        out.pop("fallback_front_filter", None)
     return out
 
 
+def _normalize_published_subscription_format(value: Any) -> str:
+    text = str(value or "raw").strip().lower() or "raw"
+    if text not in {"raw", "clash"}:
+        return "raw"
+    return text
+
+
 def _filters_to_proxy_list_kwargs(filters: dict[str, Any]) -> dict[str, Any]:
+    route_mode_filter = str(filters.get("route_mode_filter") or "").strip()
     available_text = str(filters.get("available") or "").strip()
     available: bool | None
-    if available_text == "true":
+    fallback_front_filter = str(filters.get("fallback_front_filter") or "").strip() or None
+    if route_mode_filter == "direct":
+        available = True
+        fallback_front_filter = "none"
+    elif route_mode_filter == "chain":
+        available = True
+        fallback_front_filter = "has"
+    elif route_mode_filter == "unreachable":
+        available = False
+        fallback_front_filter = None
+    elif available_text == "true":
         available = True
     elif available_text == "false":
         available = False
@@ -2224,13 +2736,14 @@ def _filters_to_proxy_list_kwargs(filters: dict[str, Any]) -> dict[str, Any]:
     return {
         "protocol": str(filters.get("protocol") or "").strip() or None,
         "available": available,
+        "route_mode_filter": route_mode_filter or None,
         "source_keyword": str(filters.get("source") or "").strip() or None,
         "geo_filter": str(filters.get("geo_filter") or "").strip() or None,
         "geo_country": str(filters.get("geo_country") or "").strip() or None,
         "geo_location": str(filters.get("geo_location") or "").strip() or None,
         "openai_filter": str(filters.get("openai_filter") or "").strip() or None,
         "ip_purity_filter": str(filters.get("ip_purity_filter") or "").strip() or None,
-        "fallback_front_filter": str(filters.get("fallback_front_filter") or "").strip() or None,
+        "fallback_front_filter": fallback_front_filter,
         "sort_by": "latency",
         "sort_order": "asc",
     }
@@ -2238,11 +2751,10 @@ def _filters_to_proxy_list_kwargs(filters: dict[str, Any]) -> dict[str, Any]:
 
 def _filters_to_subscription_link_kwargs(filters: dict[str, Any]) -> dict[str, Any]:
     kwargs = _filters_to_proxy_list_kwargs(filters)
-    kwargs["only_available"] = kwargs.pop("available") is not False
-    if str(filters.get("available") or "").strip() == "true":
-        kwargs["available"] = True
-    elif str(filters.get("available") or "").strip() == "false":
-        kwargs["available"] = False
+    available = kwargs.pop("available")
+    kwargs["only_available"] = available is not False
+    if available is not None:
+        kwargs["available"] = available
     kwargs.pop("sort_by", None)
     kwargs.pop("sort_order", None)
     return kwargs

@@ -19,6 +19,8 @@ class HttpGatewayConfigService:
         if not raw:
             return HttpGatewayConfig()
         data = json.loads(raw)
+        if "endpoint_id" not in data:
+            data["endpoint_id"] = 0
         return HttpGatewayConfig(**data)
 
     def update_config(self, **kwargs: Any) -> HttpGatewayConfig:

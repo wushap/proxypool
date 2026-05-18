@@ -130,16 +130,18 @@ def test_ensure_instance_restarts_stale_running_record(tmp_path: Path):
     storage.upsert_proxy(exit_node)
     instance_id = ChainInstanceManager(storage=storage, backend=FakeBackend()).build_instance_id(
         pool_id=1,
-        front_node_key=front.normalized_key(),
-        exit_node_key=exit_node.normalized_key(),
+        hop_node_keys=[front.normalized_key(), exit_node.normalized_key()],
         inbound_type="http",
     )
     storage.upsert_chain_egress_instance(
         instance_id=instance_id,
         pool_id=1,
+        endpoint_id=0,
         backend_type="mihomo",
         front_node_key=front.normalized_key(),
         exit_node_key=exit_node.normalized_key(),
+        hop_node_keys=[front.normalized_key(), exit_node.normalized_key()],
+        route_signature="front>exit",
         listen="127.0.0.1",
         port=18080,
         inbound_type="http",
@@ -185,6 +187,33 @@ def test_allocate_port_skips_ports_already_bound_on_host(tmp_path: Path):
     assert port != 19081
 
 
+def test_allocate_port_ignores_failed_records_with_free_ports(tmp_path: Path):
+    storage = SQLiteProxyStorage(tmp_path / "failed-ports.db")
+    storage.set_backend_default_port_range(start=19081, end=19082)
+    storage.upsert_chain_egress_instance(
+        instance_id="failed-chain",
+        pool_id=1,
+        endpoint_id=0,
+        backend_type="mihomo",
+        front_node_key="front-1",
+        exit_node_key="exit-1",
+        hop_node_keys=["front-1", "exit-1"],
+        route_signature="front-1>exit-1",
+        listen="127.0.0.1",
+        port=19081,
+        inbound_type="http",
+        status="failed",
+        pid=-1,
+        config_file="/tmp/test.yaml",
+        log_file="/tmp/test.log",
+        egress_ip="",
+        last_error="tls failed",
+    )
+    manager = ChainInstanceManager(storage=storage, backend=FakeBackend())
+
+    assert manager._allocate_port() == 19081
+
+
 def test_ensure_instance_reuses_live_running_record_without_reassigning_port(tmp_path: Path):
     storage = SQLiteProxyStorage(tmp_path / "reuse.db")
     front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
@@ -226,9 +255,12 @@ def test_list_running_instance_ids_excludes_stale_records(tmp_path: Path):
     storage.upsert_chain_egress_instance(
         instance_id="chain-a",
         pool_id=1,
+        endpoint_id=0,
         backend_type="mihomo",
         front_node_key="front-1",
         exit_node_key="exit-1",
+        hop_node_keys=["front-1", "exit-1"],
+        route_signature="front-1>exit-1",
         listen="127.0.0.1",
         port=18080,
         inbound_type="http",
@@ -264,16 +296,18 @@ def test_ensure_instance_reassigns_port_when_stale_port_is_occupied(tmp_path: Pa
     storage.upsert_proxy(exit_node)
     instance_id = ChainInstanceManager(storage=storage, backend=FakeBackend()).build_instance_id(
         pool_id=1,
-        front_node_key=front.normalized_key(),
-        exit_node_key=exit_node.normalized_key(),
+        hop_node_keys=[front.normalized_key(), exit_node.normalized_key()],
         inbound_type="http",
     )
     storage.upsert_chain_egress_instance(
         instance_id=instance_id,
         pool_id=1,
+        endpoint_id=0,
         backend_type="mihomo",
         front_node_key=front.normalized_key(),
         exit_node_key=exit_node.normalized_key(),
+        hop_node_keys=[front.normalized_key(), exit_node.normalized_key()],
+        route_signature="front>exit",
         listen="127.0.0.1",
         port=19081,
         inbound_type="http",
@@ -340,3 +374,33 @@ def test_start_instance_waits_for_listener_ready(tmp_path: Path):
         backend.close()
 
     assert elapsed >= 0.15
+
+
+def test_chain_instance_manager_supports_multi_hop_instance(tmp_path: Path):
+    storage = SQLiteProxyStorage(tmp_path / "multi-hop.db")
+    hop1 = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="hop-1")
+    hop2 = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="hop-2")
+    hop3 = ProxyNode(protocol="trojan", host="3.3.3.3", port=443, raw_link="trojan://3.3.3.3:443", name="hop-3", extra={"password": "p"})
+    storage.upsert_proxy(hop1)
+    storage.upsert_proxy(hop2)
+    storage.upsert_proxy(hop3)
+
+    backend = FakeBackend()
+    manager = ChainInstanceManager(storage=storage, backend=backend)
+    try:
+        item = manager.ensure_instance(
+            pool_id=1,
+            endpoint_id=9,
+            front_node_key=hop1.normalized_key(),
+            exit_node_key=hop3.normalized_key(),
+            hop_node_keys=[hop1.normalized_key(), hop2.normalized_key(), hop3.normalized_key()],
+            route_signature="pool1>pool3>pool2",
+            inbound_type="http",
+        )
+    finally:
+        backend.close()
+
+    assert item["status"] == "running"
+    assert item["endpoint_id"] == 9
+    assert item["hop_node_keys"] == [hop1.normalized_key(), hop2.normalized_key(), hop3.normalized_key()]
+    assert item["route_signature"] == "pool1>pool3>pool2"

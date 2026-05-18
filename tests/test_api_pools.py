@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import socket
 from pathlib import Path
+import asyncio
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
 
+import proxypool.api.app as api_app
 from proxypool.api.app import create_app
 from proxypool.models import ProxyNode
 from proxypool.settings import AppSettings
@@ -57,6 +60,8 @@ async def test_pool_crud_endpoints(tmp_path: Path) -> None:
         pool = data["item"]
         assert pool["name"] == "my-pool"
         assert pool["status"] == "stopped"
+        assert "resin_subscription_id" not in pool
+        assert "resin_platform_id" not in pool
         pool_id = pool["id"]
 
         # List pools
@@ -107,9 +112,9 @@ async def test_pool_create_with_all_filters(tmp_path: Path) -> None:
         resp = await client.post("/api/pools", json={
             "name": "filtered-pool",
             "filters": {
-                "available": "true",
+                "route_mode_filter": "direct",
                 "protocol": "trojan",
-                "geo_country": "US",
+                "geo_countries": ["US", "JP"],
                 "openai_filter": "unlocked",
                 "ip_purity_filter": "residential",
                 "latency_min": "50",
@@ -119,32 +124,11 @@ async def test_pool_create_with_all_filters(tmp_path: Path) -> None:
         })
         assert resp.status_code == 200
         pool = resp.json()["item"]
+        assert pool["filters"]["route_mode_filter"] == "direct"
+        assert pool["filters"]["geo_countries"] == ["US", "JP"]
         assert pool["filters"]["latency_min"] == "50"
         assert pool["filters"]["latency_max"] == "500"
         assert pool["filters"]["freshness_hours"] == "24"
-
-
-@pytest.mark.anyio
-async def test_resin_status_endpoint(tmp_path: Path) -> None:
-    settings = _make_settings(tmp_path)
-    app = create_app(settings)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/api/resin/status")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "running" in data
-        assert data["running"] is False
-
-
-@pytest.mark.anyio
-async def test_resin_info_when_not_running(tmp_path: Path) -> None:
-    settings = _make_settings(tmp_path)
-    app = create_app(settings)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/api/resin/info")
-        assert resp.status_code == 503
 
 
 @pytest.mark.anyio
@@ -191,6 +175,16 @@ async def test_http_gateway_config_api_round_trip(tmp_path: Path) -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         create_resp = await client.post("/api/pools", json={"name": "pool-a"})
         pool_id = create_resp.json()["item"]["id"]
+        endpoint_resp = await client.post(
+            "/api/http-proxy-endpoints",
+            json={
+                "name": "pool-a",
+                "listen_host": "127.0.0.1",
+                "listen_port": 18899,
+                "hop_pool_ids": [pool_id],
+            },
+        )
+        endpoint_id = endpoint_resp.json()["item"]["id"]
 
         put_resp = await client.put(
             "/api/gateway/http-config",
@@ -198,6 +192,7 @@ async def test_http_gateway_config_api_round_trip(tmp_path: Path) -> None:
                 "enabled": True,
                 "listen_host": "127.0.0.1",
                 "listen_port": 18899,
+                "endpoint_id": endpoint_id,
                 "default_pool_id": pool_id,
                 "sticky_ttl_sec": 7200,
                 "session_missing_action": "RANDOM",
@@ -212,6 +207,161 @@ async def test_http_gateway_config_api_round_trip(tmp_path: Path) -> None:
         get_resp = await client.get("/api/gateway/http-config")
         assert get_resp.status_code == 200
         assert get_resp.json()["item"]["listen_port"] == 18899
+        assert get_resp.json()["item"]["endpoint_id"] == endpoint_id
+
+
+@pytest.mark.anyio
+async def test_http_proxy_endpoint_crud_and_route_test(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    transport = httpx.ASGITransport(app=app)
+
+    node1 = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="hop-1")
+    node2 = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="hop-2")
+    storage.upsert_proxy(node1)
+    storage.upsert_proxy(node2)
+    storage.update_test_result(node1.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(node2.normalized_key(), available=True, latency_ms=20)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        pool1 = (await client.post("/api/pools", json={"name": "pool-1", "filters": {"protocol": "http", "available": "true"}})).json()["item"]
+        pool2 = (await client.post("/api/pools", json={"name": "pool-2", "filters": {"protocol": "socks", "available": "true"}})).json()["item"]
+
+        create_resp = await client.post(
+            "/api/http-proxy-endpoints",
+            json={
+                "name": "ep-a",
+                "listen_host": "127.0.0.1",
+                "listen_port": 18888,
+                "hop_pool_ids": [pool1["id"], pool2["id"]],
+            },
+        )
+        assert create_resp.status_code == 200
+        endpoint = create_resp.json()["item"]
+        endpoint_id = endpoint["id"]
+        assert [item["pool_id"] for item in endpoint["hops"]] == [pool1["id"], pool2["id"]]
+
+        list_resp = await client.get("/api/http-proxy-endpoints")
+        assert list_resp.status_code == 200
+        assert any(int(item["id"]) == int(endpoint_id) for item in list_resp.json()["items"])
+
+        route_resp = await client.get(
+            f"/api/http-proxy-endpoints/{endpoint_id}/route-test",
+            params={"session_id": "sess-1", "target_domain": "api.example.com"},
+        )
+        assert route_resp.status_code == 200
+        route = route_resp.json()
+        assert route["endpoint_id"] == endpoint_id
+        assert len(route["hop_node_keys"]) == 2
+        assert "route_signature" in route
+
+
+@pytest.mark.anyio
+async def test_http_proxy_endpoint_update_reorders_hops_and_status_reflects_instances(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    transport = httpx.ASGITransport(app=app)
+
+    hop1 = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="hop-1")
+    hop2 = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="hop-2")
+    hop3 = ProxyNode(protocol="trojan", host="3.3.3.3", port=443, raw_link="trojan://3.3.3.3:443", name="hop-3")
+    storage.upsert_proxy(hop1)
+    storage.upsert_proxy(hop2)
+    storage.upsert_proxy(hop3)
+    storage.update_test_result(hop1.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(hop2.normalized_key(), available=True, latency_ms=20)
+    storage.update_test_result(hop3.normalized_key(), available=True, latency_ms=30)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        pool1 = (await client.post("/api/pools", json={"name": "pool-1x", "filters": {"protocol": "http", "available": "true"}})).json()["item"]
+        pool2 = (await client.post("/api/pools", json={"name": "pool-2x", "filters": {"protocol": "socks", "available": "true"}})).json()["item"]
+        pool3 = (await client.post("/api/pools", json={"name": "pool-3x", "filters": {"protocol": "trojan", "available": "true"}})).json()["item"]
+
+        endpoint = (await client.post("/api/http-proxy-endpoints", json={
+            "name": "ep-status",
+            "listen_host": "127.0.0.1",
+            "listen_port": _pick_free_port(),
+            "hop_pool_ids": [pool1["id"], pool2["id"]],
+        })).json()["item"]
+
+        update_resp = await client.put(
+            f"/api/http-proxy-endpoints/{endpoint['id']}",
+            json={"hop_pool_ids": [pool1["id"], pool3["id"], pool2["id"]]},
+        )
+        assert update_resp.status_code == 200
+        assert [item["pool_id"] for item in update_resp.json()["item"]["hops"]] == [pool1["id"], pool3["id"], pool2["id"]]
+
+        route_resp = await client.get(
+            f"/api/http-proxy-endpoints/{endpoint['id']}/route-test",
+            params={"session_id": "sess-status", "target_domain": "api.example.com"},
+        )
+        route = route_resp.json()
+        assert route_resp.status_code == 200
+        assert len(route["hop_node_keys"]) == 3
+
+        status_resp = await client.get(f"/api/http-proxy-endpoints/{endpoint['id']}/status")
+        assert status_resp.status_code == 200
+        status_data = status_resp.json()
+        assert status_data["item"]["id"] == endpoint["id"]
+        assert isinstance(status_data["leases"], list)
+        assert isinstance(status_data["instances"], list)
+
+
+@pytest.mark.anyio
+async def test_http_proxy_endpoint_can_chain_multiple_filtered_pools_in_order(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    transport = httpx.ASGITransport(app=app)
+
+    node_us = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="us-hop")
+    node_jp = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="jp-hop")
+    node_sg = ProxyNode(protocol="trojan", host="3.3.3.3", port=443, raw_link="trojan://3.3.3.3:443", name="sg-hop")
+    storage.upsert_proxy(node_us)
+    storage.upsert_proxy(node_jp)
+    storage.upsert_proxy(node_sg)
+    storage.update_test_result(node_us.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(node_jp.normalized_key(), available=True, latency_ms=20)
+    storage.update_test_result(node_sg.normalized_key(), available=True, latency_ms=30)
+    storage.update_geo(node_us.normalized_key(), resolved_ip="1.1.1.1", country="US", city="Los Angeles")
+    storage.update_geo(node_jp.normalized_key(), resolved_ip="2.2.2.2", country="JP", city="Tokyo")
+    storage.update_geo(node_sg.normalized_key(), resolved_ip="3.3.3.3", country="SG", city="Singapore")
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        pool1 = (await client.post("/api/pools", json={
+            "name": "pool-us-direct",
+            "filters": {"protocol": "http", "route_mode_filter": "direct", "geo_countries": ["US"]},
+        })).json()["item"]
+        pool2 = (await client.post("/api/pools", json={
+            "name": "pool-sg-direct",
+            "filters": {"protocol": "trojan", "route_mode_filter": "direct", "geo_countries": ["SG"]},
+        })).json()["item"]
+        pool3 = (await client.post("/api/pools", json={
+            "name": "pool-jp-chain",
+            "filters": {"protocol": "socks", "route_mode_filter": "direct", "geo_countries": ["JP"]},
+        })).json()["item"]
+
+        endpoint_resp = await client.post("/api/http-proxy-endpoints", json={
+            "name": "endpoint-multi-hop",
+            "listen_host": "127.0.0.1",
+            "listen_port": _pick_free_port(),
+            "hop_pool_ids": [pool1["id"], pool3["id"], pool2["id"]],
+        })
+        assert endpoint_resp.status_code == 200
+        endpoint = endpoint_resp.json()["item"]
+        assert [item["pool_id"] for item in endpoint["hops"]] == [pool1["id"], pool3["id"], pool2["id"]]
+
+        route_resp = await client.get(
+            f"/api/http-proxy-endpoints/{endpoint['id']}/route-test",
+            params={"session_id": "sess-multi-hop", "target_domain": "api.example.com"},
+        )
+        assert route_resp.status_code == 200
+        route = route_resp.json()
+        assert route["endpoint_id"] == endpoint["id"]
+        assert len(route["hop_node_keys"]) == 3
+        assert route["route_signature"].count(">") == 2
 
 
 @pytest.mark.anyio
@@ -226,6 +376,109 @@ async def test_http_gateway_status_api_exposes_runtime_state(tmp_path: Path) -> 
     assert resp.status_code == 200
     assert "runtime" in resp.json()
     assert "config" in resp.json()
+
+
+@pytest.mark.anyio
+async def test_http_gateway_status_lists_multiple_enabled_endpoints(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    transport = httpx.ASGITransport(app=app)
+
+    hop1 = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="hop-1")
+    hop2 = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="hop-2")
+    storage.upsert_proxy(hop1)
+    storage.upsert_proxy(hop2)
+    storage.update_test_result(hop1.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(hop2.normalized_key(), available=True, latency_ms=20)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        pool1 = (await client.post("/api/pools", json={"name": "pool-a", "filters": {"protocol": "http"}})).json()["item"]
+        pool2 = (await client.post("/api/pools", json={"name": "pool-b", "filters": {"protocol": "socks"}})).json()["item"]
+
+        ep1 = (await client.post("/api/http-proxy-endpoints", json={
+            "name": "ep-1",
+            "listen_host": "127.0.0.1",
+            "listen_port": _pick_free_port(),
+            "hop_pool_ids": [pool1["id"]],
+        })).json()["item"]
+        ep2 = (await client.post("/api/http-proxy-endpoints", json={
+            "name": "ep-2",
+            "listen_host": "127.0.0.1",
+            "listen_port": _pick_free_port(),
+            "hop_pool_ids": [pool2["id"]],
+        })).json()["item"]
+
+        put_resp = await client.put("/api/gateway/http-config", json={
+            "enabled": True,
+            "listen_host": "127.0.0.1",
+            "listen_port": _pick_free_port(),
+            "endpoint_id": ep1["id"],
+            "default_pool_id": pool1["id"],
+        })
+        assert put_resp.status_code == 200
+
+        status_resp = await client.get("/api/gateway/http-status")
+        assert status_resp.status_code == 200
+        runtime_items = status_resp.json()["runtime"]["items"]
+        assert len(runtime_items) >= 2
+        assert {int(item["endpoint_id"]) for item in runtime_items} >= {int(ep1["id"]), int(ep2["id"])}
+
+
+@pytest.mark.anyio
+async def test_multiple_http_proxy_endpoints_can_listen_simultaneously(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage = app.state.storage
+    transport = httpx.ASGITransport(app=app)
+
+    http_node = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="hop-http")
+    socks_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="hop-socks")
+    storage.upsert_proxy(http_node)
+    storage.upsert_proxy(socks_node)
+    storage.update_test_result(http_node.normalized_key(), available=True, latency_ms=10)
+    storage.update_test_result(socks_node.normalized_key(), available=True, latency_ms=20)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        pool_http = (await client.post("/api/pools", json={"name": "pool-http", "filters": {"protocol": "http"}})).json()["item"]
+        pool_socks = (await client.post("/api/pools", json={"name": "pool-socks", "filters": {"protocol": "socks"}})).json()["item"]
+
+        ep1_port = _pick_free_port()
+        ep2_port = _pick_free_port()
+        ep1 = (await client.post("/api/http-proxy-endpoints", json={
+            "name": "ep-http",
+            "listen_host": "127.0.0.1",
+            "listen_port": ep1_port,
+            "hop_pool_ids": [pool_http["id"]],
+        })).json()["item"]
+        ep2 = (await client.post("/api/http-proxy-endpoints", json={
+            "name": "ep-socks",
+            "listen_host": "127.0.0.1",
+            "listen_port": ep2_port,
+            "hop_pool_ids": [pool_socks["id"]],
+        })).json()["item"]
+
+        enable_resp = await client.put("/api/gateway/http-config", json={
+            "enabled": True,
+            "listen_host": "127.0.0.1",
+            "listen_port": _pick_free_port(),
+            "endpoint_id": ep1["id"],
+            "default_pool_id": pool_http["id"],
+        })
+        assert enable_resp.status_code == 200
+
+        reader1, writer1 = await asyncio.open_connection("127.0.0.1", ep1_port)
+        writer1.close()
+        await writer1.wait_closed()
+
+        reader2, writer2 = await asyncio.open_connection("127.0.0.1", ep2_port)
+        writer2.close()
+        await writer2.wait_closed()
+
+        status_resp = await client.get("/api/gateway/http-status")
+        assert status_resp.status_code == 200
+        runtime_items = status_resp.json()["runtime"]["items"]
+        assert {int(item["endpoint_id"]) for item in runtime_items} >= {int(ep1["id"]), int(ep2["id"])}
 
 
 @pytest.mark.anyio
@@ -341,6 +594,128 @@ async def test_http_gateway_test_api_returns_result_shape(tmp_path: Path) -> Non
     assert resp.status_code == 200
     assert "ok" in resp.json()
     assert "detail" in resp.json()
+
+
+@pytest.mark.anyio
+async def test_http_gateway_test_api_performs_proxy_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    calls: dict[str, object] = {}
+
+    def fake_resolve_route(raw_target: str, headers: dict[str, str]) -> dict:
+        calls["resolve_target"] = raw_target
+        calls["resolve_headers"] = dict(headers)
+        return {
+            "endpoint": {"id": 9, "listen_host": "127.0.0.1", "listen_port": 18899},
+            "pool": {"id": 1},
+            "session_id": str(headers.get("X-ProxyPool-Session") or ""),
+            "route": {"hop_node_keys": ["front", "exit"], "route_signature": "pool-1>pool-2"},
+            "instance": {"instance_id": "gw-test"},
+            "target": urlsplit(raw_target),
+        }
+
+    async def fake_request(
+        target_url: str,
+        proxy_url: str,
+        proxy_headers: dict[str, str],
+        timeout_sec: float = 15.0,
+    ) -> dict:
+        calls["request"] = {
+            "target_url": target_url,
+            "proxy_url": proxy_url,
+            "proxy_headers": dict(proxy_headers),
+            "timeout_sec": timeout_sec,
+        }
+        return {
+            "request_ok": True,
+            "status_code": 200,
+            "elapsed_ms": 12,
+            "body_preview": "ok",
+        }
+
+    app.state.forward_gateway.resolve_route_for_http = fake_resolve_route
+    monkeypatch.setattr(api_app, "_request_via_forward_proxy", fake_request)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/gateway/http-test",
+            json={"target_url": "https://ipinfo.io", "session_id": "sess-1"},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["detail"] == "request succeeded"
+    assert data["proxy_url"] == "http://127.0.0.1:18899"
+    assert data["request"]["status_code"] == 200
+    assert calls["resolve_headers"] == {"X-ProxyPool-Session": "sess-1"}
+    assert calls["request"] == {
+        "target_url": "https://ipinfo.io",
+        "proxy_url": "http://127.0.0.1:18899",
+        "proxy_headers": {"X-ProxyPool-Session": "sess-1"},
+        "timeout_sec": 15.0,
+    }
+
+
+@pytest.mark.anyio
+async def test_http_gateway_test_api_marks_failed_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    calls: dict[str, object] = {}
+
+    def fake_resolve_route(raw_target: str, headers: dict[str, str]) -> dict:
+        return {
+            "endpoint": {"id": 9, "listen_host": "127.0.0.1", "listen_port": 18899},
+            "pool": {"id": 1},
+            "session_id": str(headers.get("X-ProxyPool-Session") or ""),
+            "route": {"hop_node_keys": ["front", "exit"], "route_signature": "pool-1>pool-2"},
+            "instance": {"instance_id": "gw-test"},
+            "target": urlsplit(raw_target),
+        }
+
+    async def fake_request(
+        target_url: str,
+        proxy_url: str,
+        proxy_headers: dict[str, str],
+        timeout_sec: float = 15.0,
+    ) -> dict:
+        return {
+            "request_ok": False,
+            "elapsed_ms": 12,
+            "error_type": "ConnectError",
+            "error": "tls failed",
+        }
+
+    def fake_report_failure(**kwargs: object) -> None:
+        calls["failure"] = kwargs
+
+    def fake_mark_failed(instance_id: str, error: str = "") -> None:
+        calls["mark_failed"] = {"instance_id": instance_id, "error": error}
+
+    app.state.forward_gateway.resolve_route_for_http = fake_resolve_route
+    app.state.chain_service.report_endpoint_route_failure = fake_report_failure
+    app.state.chain_instance_manager.mark_instance_failed = fake_mark_failed
+    monkeypatch.setattr(api_app, "_request_via_forward_proxy", fake_request)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/gateway/http-test",
+            json={"target_url": "https://ipinfo.io", "session_id": "sess-1"},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert data["detail"] == "tls failed"
+    assert calls["failure"] == {
+        "endpoint_id": 9,
+        "pool_id": 1,
+        "session_id": "sess-1",
+        "hop_node_keys": ["front", "exit"],
+    }
+    assert calls["mark_failed"] == {"instance_id": "gw-test", "error": "tls failed"}
 
 
 @pytest.mark.anyio

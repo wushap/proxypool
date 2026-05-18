@@ -297,6 +297,11 @@ button, input, select, textarea { font: inherit; }
   gap: 6px;
 }
 
+.btn-group-nowrap {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
 /* --- Form Controls (consistent) --- */
 .form-group {
   display: flex;
@@ -466,6 +471,39 @@ button, input, select, textarea { font: inherit; }
   border: 1px solid var(--line);
 }
 
+.subscription-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 220px;
+}
+
+.stat-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--panel-muted);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+
+.stat-pill-success {
+  background: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success-text);
+}
+
+.stat-pill-danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+}
+
 /* --- Header --- */
 .header {
   padding: 0 0 16px;
@@ -524,6 +562,89 @@ button, input, select, textarea { font: inherit; }
 }
 
 /* --- Task Center --- */
+.task-dashboard {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "quick"
+    "list"
+    "settings";
+  gap: 12px;
+  align-items: start;
+  width: 100%;
+}
+
+.task-dashboard .card-body {
+  padding: 12px;
+}
+
+.task-quick-card {
+  grid-area: quick;
+}
+
+.settings-grid.task-settings-grid {
+  grid-area: settings;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.settings-grid.task-settings-grid .card {
+  box-shadow: var(--shadow-sm);
+}
+
+.settings-grid.task-settings-grid .settings-title {
+  margin-bottom: 6px;
+}
+
+.settings-grid.task-settings-grid .settings-row {
+  gap: 6px;
+}
+
+.settings-grid.task-settings-grid .form-group {
+  min-width: 118px;
+}
+
+.settings-grid.task-settings-grid .input,
+.settings-grid.task-settings-grid .select {
+  height: 30px;
+}
+
+.settings-grid.task-settings-grid .form-label {
+  margin-bottom: 3px;
+  font-size: 11px;
+}
+
+.task-list-card {
+  grid-area: list;
+}
+
+.task-list-card .card-body {
+  min-height: 220px;
+  overflow: auto;
+}
+
+.task-ops-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.task-ops-header .form-hint {
+  margin-top: 4px;
+}
+
+.action-bar.task-action-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.action-bar.task-action-bar .btn {
+  width: 100%;
+}
+
 .task-center {
   background: var(--panel-muted);
   border: 1px solid var(--line);
@@ -538,7 +659,6 @@ button, input, select, textarea { font: inherit; }
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
   padding: 10px;
-  margin-top: 8px;
 }
 
 .task-progress {
@@ -560,11 +680,19 @@ button, input, select, textarea { font: inherit; }
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   margin-top: 6px;
   font-size: 11px;
   color: var(--muted);
+}
+
+.task-message {
+  min-width: 0;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* --- Message Bar --- */
@@ -922,6 +1050,8 @@ button, input, select, textarea { font: inherit; }
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .task-name {
@@ -932,6 +1062,7 @@ button, input, select, textarea { font: inherit; }
 .task-actions {
   display: flex;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .badge-sm {
@@ -948,6 +1079,9 @@ button, input, select, textarea { font: inherit; }
 
 /* --- Responsive --- */
 @media (max-width: 900px) {
+  .action-bar.task-action-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .settings-grid {
     grid-template-columns: 1fr;
   }
@@ -999,6 +1133,67 @@ button, input, select, textarea { font: inherit; }
   font-weight: 600;
   position: relative;
   top: 1px;
+}
+
+.workspace-tabs {
+  margin-top: 4px;
+  margin-bottom: 16px;
+  overflow-x: auto;
+}
+
+.tab-panel {
+  display: block;
+}
+
+.tab-panel > .section-divider:first-child {
+  margin-top: 0;
+}
+
+.compact-workspace-card {
+  border-color: var(--line-soft);
+  box-shadow: none;
+}
+
+.compact-workspace-card:hover {
+  box-shadow: none;
+  border-color: var(--line);
+}
+
+.pool-create-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.pool-create-grid .form-group {
+  grid-column: span 2;
+}
+
+.pool-create-grid .pool-field-wide {
+  grid-column: span 3;
+}
+
+.pool-create-action {
+  grid-column: span 1;
+  align-self: end;
+  width: 100%;
+}
+
+@media (max-width: 1200px) {
+  .pool-create-grid .form-group,
+  .pool-create-grid .pool-field-wide,
+  .pool-create-action {
+    grid-column: span 4;
+  }
+}
+
+@media (max-width: 760px) {
+  .pool-create-grid .form-group,
+  .pool-create-grid .pool-field-wide,
+  .pool-create-action {
+    grid-column: 1 / -1;
+  }
 }
 
 /* --- Chain Node Status --- */

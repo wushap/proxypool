@@ -23,6 +23,8 @@ def test_webui_should_render_multi_task_panel() -> None:
     html = (WEBUI_DIR / "index.html").read_text(encoding="utf-8")
     assert "任务中心" in html
     assert "v-for=\"task in taskItems\"" in html
+    assert "删除记录" in html
+    assert "taskMessageText(task)" in html
 
 
 def test_webui_should_support_stop_task_and_unlimited_openai_check() -> None:
@@ -42,3 +44,13 @@ def test_webui_should_start_subscription_refresh_task_from_bulk_button() -> None
     # Task label mapping (may use object lookup or if/else)
     assert "subscriptions_refresh" in content
     assert "订阅刷新任务" in content
+
+
+def test_webui_should_support_speed_test_and_auto_tasks() -> None:
+    content = _read_webui()
+    assert "测试网速" in content
+    assert "speedTestForm" in content
+    assert "/api/tasks/speed-test/start" in content
+    assert "自动任务" in content
+    assert "autoTaskConfig" in content
+    assert "/api/tasks/auto-config" in content

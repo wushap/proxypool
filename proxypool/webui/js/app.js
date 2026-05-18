@@ -9,6 +9,7 @@ const DEFAULT_PROXY_COLUMN_CONFIGS = {
   protocol:       { label: "协议",       visible: true },
   address:        { label: "地址",       visible: true },
   latency:        { label: "延迟",       visible: true },
+  bandwidth:      { label: "带宽 Mbps",  visible: true },
   status:         { label: "状态",       visible: true },
   checked_at:     { label: "最后检测",   visible: true },
   geo:            { label: "IP位置",     visible: true },
@@ -20,13 +21,13 @@ const DEFAULT_PROXY_COLUMN_CONFIGS = {
 };
 
 const DEFAULT_PROXY_COLUMN_ORDER = [
-  "serial", "protocol", "address", "latency", "status", "checked_at",
+  "serial", "protocol", "address", "latency", "bandwidth", "status", "checked_at",
   "geo", "purity", "unlock", "fallback_front", "source", "action",
 ];
 
 const DEFAULT_PROXY_FILTERS = {
   protocol: "", available: "", geo: "", geo_country: "", geo_location: "",
-  openai: "", ip_purity: "", fallback_front: "", source: "",
+  openai: "", ip_purity: "", fallback_front: "", source: "", speed_min_mbps: "",
 };
 
 function cloneProxyColumnConfigs() {
@@ -42,6 +43,7 @@ const app = createApp({
   data() {
     return {
       activePage: "tasks",
+      proxyPoolTab: "pools",
       stats: {},
       proxies: [],
       allProxies: [],
@@ -88,6 +90,7 @@ const app = createApp({
       publishedSubscriptions: [],
       publishedSubscriptionForm: {
         name: "",
+        format: "raw",
         filters: {
           available: "true", geo_country: "", geo_location: "",
           openai_filter: "", ip_purity_filter: "", fallback_front_filter: "", source: "",
@@ -98,8 +101,8 @@ const app = createApp({
       proxyPoolForm: {
         name: "", listen: "0.0.0.0", inbound_type: "http",
         filters: {
-          available: "true", geo_country: "", geo_location: "",
-          openai_filter: "", ip_purity_filter: "", fallback_front_filter: "",
+          route_mode_filter: "direct", geo_countries: [], geo_country: "", geo_location: "",
+          openai_filter: "", ip_purity_filter: "",
           source: "", protocol: "", latency_min: "", latency_max: "", freshness_hours: "",
         },
       },
@@ -107,6 +110,7 @@ const app = createApp({
         enabled: false,
         listen_host: "127.0.0.1",
         listen_port: 8899,
+        endpoint_id: 0,
         default_pool_id: 0,
         sticky_ttl_sec: 3600,
         session_missing_action: "RANDOM",
@@ -114,9 +118,24 @@ const app = createApp({
         http_session_query_names_text: "session",
         connect_session_header_names_text: "X-ProxyPool-Session",
       },
+      gatewayEndpoints: [],
+      gatewayEndpointForm: {
+        id: 0,
+        name: "",
+        listen_host: "127.0.0.1",
+        listen_port: 18899,
+        enabled: true,
+        sticky_ttl_sec: 3600,
+        session_missing_action: "RANDOM",
+        session_header_names_text: "X-ProxyPool-Session",
+        session_query_param_names_text: "session",
+        connect_session_header_names_text: "X-ProxyPool-Session",
+        hop_pool_ids: [],
+      },
       gatewayStatus: null,
       gatewayTestForm: {
         target_url: "https://www.cloudflare.com/cdn-cgi/trace",
+        endpoint_id: 0,
         session_id: "",
       },
       gatewayTestResult: null,
@@ -140,7 +159,6 @@ const app = createApp({
         target_domain: "",
       },
       poolRouteTestResult: null,
-      resinStatus: {},
       chainStatus: {},
       chainHealth: {},
       chainLeases: [],
@@ -149,16 +167,31 @@ const app = createApp({
         front_filters: '',
         exit_filters: '',
       },
-      chainRouteTest: {
-        session_id: '',
-        pool_id: 0,
-        target_domain: '',
-      },
-      chainRouteResult: null,
       taskItems: [],
       taskPollingTimer: null,
       taskListLoading: false,
       pendingTaskResultRefresh: false,
+      speedTestForm: {
+        url: "https://speed.cloudflare.com/__down?bytes=10000000",
+        limit: 0,
+        timeout_sec: 30,
+        only_available: true,
+      },
+      autoTaskConfig: {
+        enabled: false,
+        subscription_refresh_enabled: true,
+        subscription_refresh_minutes: 60,
+        tester_enabled: false,
+        tester_minutes: 60,
+        tester_limit: 0,
+        tester_concurrency: 50,
+        speed_test_enabled: false,
+        speed_test_minutes: 120,
+        speed_test_url: "https://speed.cloudflare.com/__down?bytes=10000000",
+        speed_test_limit: 0,
+        speed_test_timeout_sec: 30,
+      },
+      autoTaskStatus: null,
       proxyConfigDialogVisible: false,
       selectedProxyKeys: [],
     };
@@ -316,10 +349,18 @@ const app = createApp({
     // --- Navigation ---
     selectPage(key) {
       this.activePage = key;
-      if (key === "proxy-pools") { this.loadProxyPools(); this.loadResinStatus(); }
+      if (key === "proxy-pools") {
+        this.loadProxyPools();
+        this.loadGatewayEndpoints();
+        this.loadGatewayConfig();
+        this.loadGatewayStatus();
+        this.loadBackendPortRange();
+        this.loadBackendDefaultListen();
+        this.loadBackendStatus();
+        this.loadChainStatus();
+        this.loadChainHealth();
+      }
       else if (key === "published-subscriptions") { this.loadPublishedSubscriptions(); }
-      else if (key === "backend") { this.loadBackendStatus(); }
-      else if (key === "chain") { this.loadChainStatus(); this.loadChainHealth(); }
     },
 
     // --- Button State Management ---
@@ -560,6 +601,8 @@ const app = createApp({
         const ipPurity = this.normalizeFilterValue(filters.ip_purity);
         const fallbackFront = this.normalizeFilterValue(filters.fallback_front);
         const source = this.normalizeFilterValue(filters.source);
+        const speedMinText = this.normalizeFilterValue(filters.speed_min_mbps);
+        const speedMinMbps = Number(speedMinText);
 
         if (protocol) params.set("protocol", protocol);
         if (available === "true" || available === "false") params.set("available", available);
@@ -569,6 +612,7 @@ const app = createApp({
         if (["unlocked", "blocked", "unchecked"].includes(openai)) params.set("openai_filter", openai);
         if (["checked", "unchecked", "residential", "non_residential", "unknown"].includes(ipPurity)) params.set("ip_purity_filter", ipPurity);
         if (fallbackFront === "has" || fallbackFront === "none") params.set("fallback_front_filter", fallbackFront);
+        if (speedMinText && Number.isFinite(speedMinMbps) && speedMinMbps >= 0) params.set("speed_min_mbps", String(speedMinMbps));
         if (source) params.set("source", source);
         params.set("sort_by", "latency");
         params.set("sort_order", "asc");
@@ -705,6 +749,10 @@ const app = createApp({
         } catch (err) { this.setMessage("删除订阅失败: " + err, true); }
       });
     },
+    async onLoadSubscriptions() { await this.runWithButtonState("loadSubscriptions", () => this.loadSubscriptions()); },
+    async onCreateSubscription() { await this.runWithButtonState("createSubscription", () => this.createSubscription()); },
+    async onRefreshAllSubscriptions() { await this.runWithButtonState("refreshAllSubscriptions", () => this.refreshAllSubscriptions()); },
+    async onDeleteUnavailableSubscriptions() { await this.runWithButtonState("deleteUnavailableSubscriptions", () => this.deleteUnavailableSubscriptions()); },
 
     // --- Subscription Update Proxy ---
     async loadSubscriptionUpdateProxy() {
@@ -730,6 +778,7 @@ const app = createApp({
         this.setMessage("全局订阅更新代理已保存");
       } catch (err) { this.setMessage("保存全局更新代理失败: " + err, true); }
     },
+    async onSaveSubscriptionUpdateProxy() { await this.runWithButtonState("saveSubUpdateProxy", () => this.saveSubscriptionUpdateProxy()); },
 
     // --- Published Subscriptions ---
     normalizePublishedSubscriptionFilters(filters) {
@@ -773,12 +822,20 @@ const app = createApp({
     },
     applyPublishedSubscriptionFiltersToForm(item) {
       this.publishedSubscriptionForm.name = String(item?.name || "");
+      this.publishedSubscriptionForm.format = this.normalizePublishedSubscriptionFormat(item?.format);
       this.publishedSubscriptionForm.filters = {
         available: "", geo_country: "", geo_location: "",
         openai_filter: "", ip_purity_filter: "", fallback_front_filter: "", source: "",
         ...(item?.filters || {}),
       };
       this.setMessage("已套用发布订阅筛选,可修改后保存当前筛选");
+    },
+    normalizePublishedSubscriptionFormat(value) {
+      const text = String(value || "raw").trim().toLowerCase();
+      return text === "clash" ? "clash" : "raw";
+    },
+    formatPublishedSubscriptionOutput(value) {
+      return this.normalizePublishedSubscriptionFormat(value) === "clash" ? "Clash" : "原始链接";
     },
     async createPublishedSubscription() {
       const name = String(this.publishedSubscriptionForm.name || "").trim();
@@ -789,6 +846,7 @@ const app = createApp({
           body: JSON.stringify({
             name: name || "published-subscription",
             enabled: true,
+            format: this.normalizePublishedSubscriptionFormat(this.publishedSubscriptionForm.format),
             filters: this.normalizePublishedSubscriptionFilters(this.publishedSubscriptionForm.filters),
           }),
         });
@@ -837,7 +895,10 @@ const app = createApp({
           const resp = await fetch(`/api/published-subscriptions/${item.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ filters: this.normalizePublishedSubscriptionFilters(this.publishedSubscriptionForm.filters) }),
+            body: JSON.stringify({
+              format: this.normalizePublishedSubscriptionFormat(this.publishedSubscriptionForm.format),
+              filters: this.normalizePublishedSubscriptionFilters(this.publishedSubscriptionForm.filters),
+            }),
           });
           const data = await resp.json();
           if (!resp.ok) throw new Error(data.detail || "保存失败");
@@ -865,6 +926,8 @@ const app = createApp({
         } catch (err) { this.setMessage("删除发布订阅失败: " + err, true); }
       });
     },
+    async onLoadPublishedSubscriptions() { await this.runWithButtonState("loadPublishedSubscriptions", () => this.loadPublishedSubscriptions()); },
+    async onCreatePublishedSubscription() { await this.runWithButtonState("createPublishedSubscription", () => this.createPublishedSubscription()); },
 
     // --- Proxy Pools ---
     async loadProxyPools() {
@@ -885,43 +948,43 @@ const app = createApp({
         this.resetPage("proxyPools");
       } catch (err) { this.setMessage("加载代理池失败: " + err, true); }
     },
-    async loadResinStatus() {
-      try {
-        const resp = await fetch("/api/resin/status");
-        this.resinStatus = await resp.json();
-      } catch { this.resinStatus = { running: false, healthy: false }; }
-    },
-    async resinStart() {
-      try {
-        const resp = await fetch("/api/resin/start", { method: "POST" });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || "启动 Resin 失败");
-        this.resinStatus = data;
-        this.setMessage("Resin 已启动");
-      } catch (err) { this.setMessage("启动 Resin 失败: " + err, true); }
-    },
-    async resinStop() {
-      try {
-        const resp = await fetch("/api/resin/stop", { method: "POST" });
-        this.resinStatus = await resp.json();
-        this.setMessage("Resin 已停止");
-      } catch (err) { this.setMessage("停止 Resin 失败: " + err, true); }
-    },
     normalizePoolFilters(filters) {
       const out = {};
       for (const [k, v] of Object.entries(filters || {})) {
+        if (k === "geo_countries") {
+          const countries = Array.isArray(v) ? v.map(item => String(item || "").trim()).filter(Boolean) : [];
+          if (countries.length) out[k] = countries;
+          continue;
+        }
         const s = String(v ?? "").trim();
         if (s) out[k] = s;
       }
       return out;
     },
+    routeModeFilterFromLegacyFilters(filters) {
+      const f = filters || {};
+      const routeMode = String(f.route_mode_filter || "").trim();
+      if (["direct", "chain", "unreachable"].includes(routeMode)) return routeMode;
+      const available = String(f.available || "").trim();
+      const fallbackFront = String(f.fallback_front_filter || "").trim();
+      if (available === "false") return "unreachable";
+      if (available === "true" && fallbackFront === "has") return "chain";
+      if (available === "true" && fallbackFront === "none") return "direct";
+      return "";
+    },
     formatPoolFilters(filters) {
       const f = filters || {};
       const parts = [];
-      if (f.available === "true") parts.push("可直连");
-      else if (f.available === "false") parts.push("不可直连");
+      const routeMode = this.routeModeFilterFromLegacyFilters(f);
+      if (routeMode === "direct") parts.push("直连");
+      else if (routeMode === "chain") parts.push("链式");
+      else if (routeMode === "unreachable") parts.push("不可连接");
+      else if (f.available === "true") parts.push("可用");
+      else if (f.available === "false") parts.push("不可用");
       if (f.protocol) parts.push(f.protocol);
-      if (f.geo_country) parts.push(f.geo_country);
+      const geoCountries = Array.isArray(f.geo_countries) ? f.geo_countries : [];
+      if (geoCountries.length) parts.push(`国家:${geoCountries.join(",")}`);
+      else if (f.geo_country) parts.push(f.geo_country);
       if (f.openai_filter === "unlocked") parts.push("GPT解锁");
       else if (f.openai_filter === "blocked") parts.push("GPT未解锁");
       if (f.ip_purity_filter === "residential") parts.push("家宽");
@@ -935,12 +998,18 @@ const app = createApp({
       this.proxyPoolForm.name = String(item?.name || "");
       this.proxyPoolForm.listen = String(item?.listen || "0.0.0.0");
       this.proxyPoolForm.inbound_type = String(item?.inbound_type || "http");
+      const itemFilters = { ...(item?.filters || {}) };
+      const routeMode = this.routeModeFilterFromLegacyFilters(itemFilters);
+      const geoCountries = Array.isArray(itemFilters.geo_countries)
+        ? itemFilters.geo_countries.map(item => String(item || "").trim()).filter(Boolean)
+        : [];
       this.proxyPoolForm.filters = {
-        available: "", geo_country: "", geo_location: "",
-        openai_filter: "", ip_purity_filter: "", fallback_front_filter: "",
+        route_mode_filter: routeMode, geo_countries: geoCountries, geo_country: "", geo_location: "",
+        openai_filter: "", ip_purity_filter: "",
         source: "", protocol: "", latency_min: "", latency_max: "", freshness_hours: "",
-        ...(item?.filters || {}),
+        ...itemFilters,
       };
+      for (const key of ["available", "fallback_front_filter", "geo_country"]) delete this.proxyPoolForm.filters[key];
       this.setMessage("已套用代理池筛选,可修改后保存");
     },
     listTextToMultiline(value) {
@@ -957,6 +1026,127 @@ const app = createApp({
     },
     gatewayApiBase() {
       return "/api/gateway";
+    },
+    gatewayEndpointsApiBase() {
+      return "/api/http-proxy-endpoints";
+    },
+    resetGatewayEndpointForm() {
+      this.gatewayEndpointForm = {
+        id: 0,
+        name: "",
+        listen_host: "127.0.0.1",
+        listen_port: 18899,
+        enabled: true,
+        sticky_ttl_sec: 3600,
+        session_missing_action: "RANDOM",
+        session_header_names_text: "X-ProxyPool-Session",
+        session_query_param_names_text: "session",
+        connect_session_header_names_text: "X-ProxyPool-Session",
+        hop_pool_ids: [],
+      };
+    },
+    formatEndpointHops(item) {
+      const hops = Array.isArray(item?.hops) ? item.hops : [];
+      if (!hops.length) return "未配置";
+      return hops.map(hop => {
+        const pool = (this.proxyPools || []).find(candidate => Number(candidate.id) === Number(hop.pool_id));
+        return pool ? `${pool.name} (#${pool.id})` : `#${hop.pool_id}`;
+      }).join(" -> ");
+    },
+    moveGatewayEndpointHop(index, delta) {
+      const hops = Array.isArray(this.gatewayEndpointForm.hop_pool_ids) ? [...this.gatewayEndpointForm.hop_pool_ids] : [];
+      const from = Number(index);
+      const to = from + Number(delta || 0);
+      if (from < 0 || from >= hops.length || to < 0 || to >= hops.length) return;
+      const [item] = hops.splice(from, 1);
+      hops.splice(to, 0, item);
+      this.gatewayEndpointForm.hop_pool_ids = hops;
+    },
+    editGatewayEndpoint(item) {
+      this.gatewayEndpointForm = {
+        id: Number(item?.id || 0),
+        name: String(item?.name || ""),
+        listen_host: String(item?.listen_host || "127.0.0.1"),
+        listen_port: Number(item?.listen_port || 18899),
+        enabled: item?.enabled !== false,
+        sticky_ttl_sec: Number(item?.sticky_ttl_sec || 3600),
+        session_missing_action: String(item?.session_missing_action || "RANDOM"),
+        session_header_names_text: this.listTextToMultiline(item?.session_header_names),
+        session_query_param_names_text: this.listTextToMultiline(item?.session_query_param_names),
+        connect_session_header_names_text: this.listTextToMultiline(item?.connect_session_header_names),
+        hop_pool_ids: (item?.hops || []).map(hop => Number(hop.pool_id || 0)).filter(Boolean),
+      };
+    },
+    async loadGatewayEndpoints() {
+      const resp = await fetch(this.gatewayEndpointsApiBase());
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "加载 HTTP 端点失败");
+      this.gatewayEndpoints = data.items || [];
+      if (!this.gatewayEndpointForm.id && this.gatewayEndpoints.length) {
+        const preferred = this.gatewayEndpoints.find(item => Number(item.id) === Number(this.gatewayConfigForm.endpoint_id || 0));
+        if (preferred) this.editGatewayEndpoint(preferred);
+        else this.editGatewayEndpoint(this.gatewayEndpoints[0]);
+      }
+    },
+    gatewayEndpointPayload() {
+      return {
+        name: String(this.gatewayEndpointForm.name || "").trim(),
+        listen_host: String(this.gatewayEndpointForm.listen_host || "").trim() || "127.0.0.1",
+        listen_port: Math.max(1, Number(this.gatewayEndpointForm.listen_port || 18899)),
+        enabled: this.gatewayEndpointForm.enabled === true,
+        sticky_ttl_sec: Math.max(1, Number(this.gatewayEndpointForm.sticky_ttl_sec || 3600)),
+        session_missing_action: String(this.gatewayEndpointForm.session_missing_action || "RANDOM").trim() || "RANDOM",
+        session_header_names: this.parseMultilineList(this.gatewayEndpointForm.session_header_names_text),
+        session_query_param_names: this.parseMultilineList(this.gatewayEndpointForm.session_query_param_names_text),
+        connect_session_header_names: this.parseMultilineList(this.gatewayEndpointForm.connect_session_header_names_text),
+        hop_pool_ids: (this.gatewayEndpointForm.hop_pool_ids || []).map(item => Number(item || 0)).filter(Boolean),
+      };
+    },
+    async saveGatewayEndpoint() {
+      const payload = this.gatewayEndpointPayload();
+      if (!payload.name) throw new Error("请输入端点名称");
+      if (!payload.hop_pool_ids.length) throw new Error("请至少选择一个代理池跳点");
+      const endpointId = Number(this.gatewayEndpointForm.id || 0);
+      const url = endpointId ? `${this.gatewayEndpointsApiBase()}/${endpointId}` : this.gatewayEndpointsApiBase();
+      const method = endpointId ? "PUT" : "POST";
+      const resp = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "保存 HTTP 端点失败");
+      await this.loadGatewayEndpoints();
+      this.editGatewayEndpoint(data.item || {});
+      this.setMessage(`HTTP 端点已保存: ${data.item?.name || payload.name}`);
+    },
+    async deleteGatewayEndpoint(endpointId) {
+      const resp = await fetch(`${this.gatewayEndpointsApiBase()}/${Number(endpointId)}`, { method: "DELETE" });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "删除 HTTP 端点失败");
+      await this.loadGatewayEndpoints();
+      if (Number(this.gatewayConfigForm.endpoint_id || 0) === Number(endpointId)) {
+        this.gatewayConfigForm.endpoint_id = 0;
+      }
+      this.resetGatewayEndpointForm();
+      this.setMessage("HTTP 端点已删除");
+    },
+    async selectGatewayEndpoint(item) {
+      this.gatewayConfigForm.endpoint_id = Number(item?.id || 0);
+      await this.saveGatewayConfig();
+      this.setMessage(`默认端点已切换: ${item?.name || item?.id}`);
+    },
+    async runGatewayEndpointRouteTest(item) {
+      const endpointId = Number(item?.id || 0);
+      if (!endpointId) throw new Error("端点不存在");
+      const params = new URLSearchParams();
+      params.set("session_id", String(this.gatewayTestForm.session_id || "").trim() || "endpoint-demo");
+      params.set("target_domain", "api.example.com");
+      const resp = await fetch(`${this.gatewayEndpointsApiBase()}/${endpointId}/route-test?${params.toString()}`);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "端点路由测试失败");
+      this.gatewayTestResult = data;
+      this.setMessage(`端点路由测试成功: ${item?.name || endpointId}`);
     },
     gatewayPoolPath(poolName) {
       return `/proxy/${encodeURIComponent(poolName)}`;
@@ -1043,6 +1233,7 @@ const app = createApp({
         enabled: item.enabled === true,
         listen_host: String(item.listen_host || "127.0.0.1"),
         listen_port: Number(item.listen_port || 8899),
+        endpoint_id: Number(item.endpoint_id || 0),
         default_pool_id: Number(item.default_pool_id || 0),
         sticky_ttl_sec: Number(item.sticky_ttl_sec || 3600),
         session_missing_action: String(item.session_missing_action || "RANDOM"),
@@ -1056,6 +1247,7 @@ const app = createApp({
         enabled: this.gatewayConfigForm.enabled === true,
         listen_host: String(this.gatewayConfigForm.listen_host || "").trim() || "127.0.0.1",
         listen_port: Math.max(1, Number(this.gatewayConfigForm.listen_port || 8899)),
+        endpoint_id: Math.max(0, Number(this.gatewayConfigForm.endpoint_id || 0)),
         default_pool_id: Math.max(0, Number(this.gatewayConfigForm.default_pool_id || 0)),
         sticky_ttl_sec: Math.max(1, Number(this.gatewayConfigForm.sticky_ttl_sec || 3600)),
         session_missing_action: String(this.gatewayConfigForm.session_missing_action || "RANDOM").trim() || "RANDOM",
@@ -1086,6 +1278,7 @@ const app = createApp({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           target_url: String(this.gatewayTestForm.target_url || "").trim(),
+          endpoint_id: Math.max(0, Number(this.gatewayTestForm.endpoint_id || 0)),
           session_id: String(this.gatewayTestForm.session_id || "").trim(),
         }),
       });
@@ -1213,9 +1406,8 @@ const app = createApp({
       });
     },
     async onCreateProxyPool() { await this.runWithButtonState("createProxyPool", () => this.createProxyPool()); },
+    async onLoadProxyPools() { await this.runWithButtonState("loadProxyPools", () => this.loadProxyPools()); },
     async onSyncPool(poolId) { await this.runWithButtonState(`syncPool-${poolId}`, () => this.syncPool(poolId)); },
-    async onResinStart() { await this.runWithButtonState("resinStart", () => this.resinStart()); },
-    async onResinStop() { await this.runWithButtonState("resinStop", () => this.resinStop()); },
     async onSelectPoolForChain(item) { this.selectPoolForChain(item); },
     async onSavePoolChainConfig(poolId) { await this.runWithButtonState(`savePoolChain-${poolId || this.selectedPoolIdForChain}`, () => this.savePoolChainConfig(poolId)); },
     async onLoadPoolSessionRules(poolId) { await this.runWithButtonState(`loadPoolSessionRules-${poolId || this.selectedPoolIdForChain}`, () => this.loadPoolSessionRules(poolId)); },
@@ -1226,6 +1418,11 @@ const app = createApp({
     async onLoadGatewayConfig() { await this.runWithButtonState("loadGatewayConfig", () => this.loadGatewayConfig()); },
     async onLoadGatewayStatus() { await this.runWithButtonState("loadGatewayStatus", () => this.loadGatewayStatus()); },
     async onRunGatewayTest() { await this.runWithButtonState("runGatewayTest", () => this.runGatewayTest()); },
+    async onLoadGatewayEndpoints() { await this.runWithButtonState("loadGatewayEndpoints", () => this.loadGatewayEndpoints()); },
+    async onSaveGatewayEndpoint() { await this.runWithButtonState("saveGatewayEndpoint", () => this.saveGatewayEndpoint()); },
+    async onDeleteGatewayEndpoint(endpointId) { await this.runWithButtonState(`deleteGatewayEndpoint-${endpointId}`, () => this.deleteGatewayEndpoint(endpointId)); },
+    async onSelectGatewayEndpoint(item) { await this.runWithButtonState(`selectGatewayEndpoint-${item?.id || 0}`, () => this.selectGatewayEndpoint(item)); },
+    async onRunGatewayEndpointRouteTest(item) { await this.runWithButtonState(`routeTestEndpoint-${item?.id || 0}`, () => this.runGatewayEndpointRouteTest(item)); },
 
     // --- Chain Service ---
     async loadChainStatus() {
@@ -1291,20 +1488,6 @@ const app = createApp({
         await this.loadChainLeases();
       });
     },
-    async testChainRoute() {
-      await this.runWithButtonState("testChainRoute", async () => {
-        const params = new URLSearchParams();
-        if (this.chainRouteTest.session_id) params.set('session_id', this.chainRouteTest.session_id);
-        if (this.chainRouteTest.pool_id) params.set('pool_id', this.chainRouteTest.pool_id);
-        if (this.chainRouteTest.target_domain) params.set('target_domain', this.chainRouteTest.target_domain);
-        const resp = await fetch(`/api/chain/route?${params}`);
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || '路由失败');
-        this.chainRouteResult = data;
-        this.setMessage('路由测试成功');
-      });
-    },
-
     // --- Backend ---
     async loadBackendStatus() {
       try {
@@ -1433,6 +1616,19 @@ const app = createApp({
       const id = this.backendActionInstanceId(instanceId);
       await this.runWithButtonState(`backendInstanceDelete${typeof instanceId === "string" && instanceId ? `-${id}` : ""}`, () => this.backendInstanceDelete(id));
     },
+    async onBackendStart() {
+      await this.runWithButtonState("backendStart", () => this.backendStart());
+    },
+    async onBackendStop() {
+      await this.runWithButtonState("backendStop", () => this.backendStop());
+    },
+    async onBackendRestart() {
+      await this.runWithButtonState("backendRestart", () => this.backendRestart());
+    },
+    async onOpenBackendInstanceConfig(item) {
+      const id = String(item?.instance_id || this.backendInstanceId || "default").trim() || "default";
+      await this.runWithButtonState(`openBackendInstanceConfig-${id}`, () => this.openBackendInstanceConfig(item));
+    },
     async openBackendInstanceConfig(item) {
       try {
         const id = String(item?.instance_id || this.backendInstanceId || "default").trim() || "default";
@@ -1508,6 +1704,8 @@ const app = createApp({
         this.setMessage(`默认端口范围已保存: ${this.backendPortRange.start}-${this.backendPortRange.end}`);
       } catch (err) { this.setMessage("保存默认端口范围失败: " + err, true); }
     },
+    async onSaveBackendDefaultListen() { await this.runWithButtonState("saveBackendDefaultListen", () => this.saveBackendDefaultListen()); },
+    async onSaveBackendPortRange() { await this.runWithButtonState("saveBackendPortRange", () => this.saveBackendPortRange()); },
     nextAvailableInboundPort() {
       const range = this.normalizeBackendPortRange(this.backendPortRange || {});
       this.backendPortRange = range;
@@ -1972,13 +2170,31 @@ const app = createApp({
       const map = {
         tester_run: "测速任务", geoip_enrich: "IP位置补全",
         ip_purity_enrich: "IP纯净度检测", openai_check: "ChatGPT解锁检测",
-        subscriptions_refresh: "订阅刷新任务",
+        subscriptions_refresh: "订阅刷新任务", auto_subscriptions_refresh: "自动订阅刷新",
+        speed_test: "网速测试", auto_speed_test: "自动网速测试",
+        auto_tester_run: "自动测速任务",
       };
       return map[String(kind || "")] || kind || "任务";
     },
     taskStatusText(status) {
       const map = { queued: "排队中", running: "运行中", success: "成功", failed: "失败", cancelled: "已停止" };
       return map[String(status || "")] || status || "-";
+    },
+    taskMessageText(task) {
+      const message = String(task?.message || "").trim();
+      const error = String(task?.error || "").trim();
+      const map = {
+        queued: "等待执行",
+        running: "执行中",
+        success: "完成",
+        failed: "失败",
+        cancelled: "已停止",
+        "cancel requested": "正在停止",
+      };
+      if (message && map[message]) return map[message];
+      if (message && message !== String(task?.status || "")) return message;
+      if (error) return error.split("\n")[0].slice(0, 120);
+      return map[String(task?.status || "")] || "-";
     },
     taskStatusClass(status) {
       const map = {
@@ -2012,7 +2228,46 @@ const app = createApp({
       } catch (err) { this.setMessage("删除任务失败: " + err, true); }
     },
     async onStopTask(task) { await this.runWithButtonState(`stopTask-${task.task_id}`, () => this.stopTask(task)); },
-    async onDeleteTaskBtn(task) { await this.runWithButtonState(`deleteTask-${task.task_id}`, () => this.deleteTask(task)); },
+    async onDeleteTaskBtn(task) { await this.runWithButtonState(`deleteTask-${task.task_id}`, () => this.onDeleteTask(task)); },
+    normalizeAutoTaskConfig(data = {}) {
+      return {
+        enabled: data.enabled === true,
+        subscription_refresh_enabled: data.subscription_refresh_enabled !== false,
+        subscription_refresh_minutes: Math.max(1, Math.min(10080, Math.trunc(Number(data.subscription_refresh_minutes || 60)))),
+        tester_enabled: data.tester_enabled === true,
+        tester_minutes: Math.max(1, Math.min(10080, Math.trunc(Number(data.tester_minutes || 60)))),
+        tester_limit: Math.max(0, Math.min(20000, Math.trunc(Number(data.tester_limit || 0)))),
+        tester_concurrency: this.sanitizeTaskConcurrencyValue(data.tester_concurrency, 50),
+        speed_test_enabled: data.speed_test_enabled === true,
+        speed_test_minutes: Math.max(1, Math.min(10080, Math.trunc(Number(data.speed_test_minutes || 120)))),
+        speed_test_url: String(data.speed_test_url || "https://speed.cloudflare.com/__down?bytes=10000000").trim(),
+        speed_test_limit: Math.max(0, Math.min(20000, Math.trunc(Number(data.speed_test_limit || 0)))),
+        speed_test_timeout_sec: Math.max(3, Math.min(300, Number(data.speed_test_timeout_sec || 30))),
+      };
+    },
+    async loadAutoTaskConfig() {
+      const resp = await fetch("/api/tasks/auto-config");
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "加载自动任务配置失败");
+      this.autoTaskConfig = this.normalizeAutoTaskConfig(data.item || {});
+      this.autoTaskStatus = data;
+    },
+    async saveAutoTaskConfig() {
+      const payload = this.normalizeAutoTaskConfig(this.autoTaskConfig);
+      if (payload.speed_test_enabled && !/^https?:\/\//.test(payload.speed_test_url)) throw new Error("网速测试 URL 必须以 http:// 或 https:// 开头");
+      const resp = await fetch("/api/tasks/auto-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "保存自动任务配置失败");
+      this.autoTaskConfig = this.normalizeAutoTaskConfig(data.item || {});
+      this.autoTaskStatus = data;
+      this.setMessage(this.autoTaskConfig.enabled ? "自动任务已启用" : "自动任务已停用");
+    },
+    async onLoadAutoTaskConfig() { await this.runWithButtonState("loadAutoTaskConfig", () => this.loadAutoTaskConfig()); },
+    async onSaveAutoTaskConfig() { await this.runWithButtonState("saveAutoTaskConfig", () => this.saveAutoTaskConfig()); },
     async refreshTaskList({ force = false } = {}) {
       if (this.taskListLoading && !force) return;
       this.taskListLoading = true;
@@ -2080,6 +2335,20 @@ const app = createApp({
           replace_failed_with_available: testFilter.replace_failed_with_available === true,
         }, "测速任务");
       } catch (err) { this.setMessage("测速失败: " + err, true); }
+    },
+    async onRunSpeedTest() { await this.runWithButtonState("runSpeedTest", () => this.runSpeedTest()); },
+    async runSpeedTest() {
+      try {
+        const payload = {
+          url: String(this.speedTestForm.url || "").trim(),
+          limit: Math.max(0, Math.min(20000, Math.trunc(Number(this.speedTestForm.limit || 0)))),
+          timeout_sec: Math.max(3, Math.min(300, Number(this.speedTestForm.timeout_sec || 30))),
+          only_available: this.speedTestForm.only_available === true,
+        };
+        if (!/^https?:\/\//.test(payload.url)) throw new Error("测速文件地址必须以 http:// 或 https:// 开头");
+        this.speedTestForm = payload;
+        await this.startProgressTask("/api/tasks/speed-test/start", payload, "网速测试任务");
+      } catch (err) { this.setMessage("网速测试失败: " + err, true); }
     },
     async onTestSingleProxy(item) {
       await this.runWithButtonState(`testProxy-${item.normalized_key}`, async () => {
@@ -2193,6 +2462,26 @@ const app = createApp({
     async onCopySelectedProxyLinks() {
       await this.runWithButtonState("copySelectedProxyLinks", () => this.copySelectedProxyLinks());
     },
+    async deleteSelectedProxies() {
+      try {
+        const keys = (this.selectedProxyKeys || []).map(key => String(key || "").trim()).filter(Boolean);
+        if (!keys.length) throw new Error("未选择节点");
+        const resp = await fetch("/api/proxies/delete-selected", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ normalized_keys: keys }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "删除选中节点失败");
+        this.selectedProxyKeys = [];
+        this.setMessage(`已删除 ${data.deleted || 0} 个选中节点`);
+        await this.loadData();
+        await this.loadProxyCatalog();
+      } catch (err) { this.setMessage("删除选中节点失败: " + err, true); }
+    },
+    async onDeleteSelectedProxies() {
+      await this.runWithButtonState("deleteSelectedProxies", () => this.deleteSelectedProxies());
+    },
 
     // --- Formatting Helpers ---
     formatTime(ts) {
@@ -2243,6 +2532,12 @@ const app = createApp({
       if (item.openai_unlocked === false) return "未解锁";
       return "未检测";
     },
+    formatBandwidthMbps(item) {
+      if (item?.speed_mbps === null || item?.speed_mbps === undefined || item?.speed_mbps === "") return "-";
+      const value = Number(item.speed_mbps);
+      if (!Number.isFinite(value) || value < 0) return "-";
+      return value >= 100 ? value.toFixed(0) : value.toFixed(2);
+    },
     formatFallbackFront(item) {
       const arr = Array.isArray(item?.fallback_front_keys) ? item.fallback_front_keys : [];
       if (!arr.length) return "-";
@@ -2270,6 +2565,7 @@ const app = createApp({
     this.loadTestFallback();
     this.loadTestRunFilter();
     this.loadTaskConcurrency();
+    await this.loadAutoTaskConfig();
     await this.loadBackendPortRange();
     await this.loadBackendDefaultListen();
     await this.refreshTaskList({ force: true });
@@ -2279,6 +2575,8 @@ const app = createApp({
     await this.loadSubscriptions();
     await this.loadPublishedSubscriptions();
     await this.loadSubscriptionUpdateProxy();
+    await this.loadProxyPools();
+    await this.loadGatewayEndpoints();
     await this.loadBackendStatus();
     await this.loadGatewayConfig();
     await this.loadGatewayStatus();

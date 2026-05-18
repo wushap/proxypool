@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import time
+import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 
 from proxypool.api.schemas import (
+    AutoTaskConfigRequest,
     BackendInstanceCreateRequest,
     BackendPortRangeRequest,
     BackendDefaultListenRequest,
@@ -23,7 +26,10 @@ from proxypool.api.schemas import (
     ImportSourcesRequest,
     ImportUrlsRequest,
     HttpGatewayConfigRequest,
+    HttpProxyEndpointCreateRequest,
+    HttpProxyEndpointUpdateRequest,
     HttpGatewayTestRequest,
+    ProxyBulkDeleteRequest,
     ProxyPoolChainConfigRequest,
     ProxyPoolCreateRequest,
     PoolSessionRuleUpsertRequest,
@@ -33,6 +39,7 @@ from proxypool.api.schemas import (
     RunTestRequest,
     SetSingboxRoutesRequest,
     SingleProxyTestRequest,
+    SpeedTestRequest,
     StickyLeaseInheritRequest,
     SubscriptionCreateRequest,
     SubscriptionRefreshRequest,
@@ -44,11 +51,10 @@ from proxypool.backend.chain_instance_manager import ChainInstanceManager
 from proxypool.gateway.config_service import HttpGatewayConfigService
 from proxypool.gateway.forward_proxy import ForwardProxyGateway
 from proxypool.gateway.http_gateway import GatewayError, UnifiedHttpGateway
-from proxypool.gateway.runtime import ForwardProxyGatewayRuntime
+from proxypool.gateway.runtime import ForwardProxyGatewayRuntimeManager
+from proxypool.backend.mihomo_config import _build_mihomo_proxy
 from proxypool.backend.mihomo_manager import MihomoEgressBackend
 from proxypool.backend.singbox_manager import SingBoxBackendManager, SingBoxRoute
-from proxypool.backend.resin_manager import ResinBackendManager
-from proxypool.backend.resin_client import ResinClient
 from proxypool.pool.service import ProxyPoolService
 from proxypool.collector.service import CollectorService
 from proxypool.geoip.service import GeoIPService
@@ -58,6 +64,60 @@ from proxypool.storage.sqlite import SQLiteProxyStorage
 from proxypool.tasks.manager import TaskManager
 from proxypool.tester.service import TesterService
 from proxypool.tester.singbox import SingboxProber
+
+
+async def _request_via_forward_proxy(
+    target_url: str,
+    proxy_url: str,
+    proxy_headers: dict[str, str],
+    timeout_sec: float = 15.0,
+) -> dict:
+    started = time.perf_counter()
+    try:
+        proxy = httpx.Proxy(proxy_url, headers=proxy_headers or None)
+        async with httpx.AsyncClient(proxy=proxy, timeout=httpx.Timeout(timeout_sec), trust_env=False) as client:
+            resp = await client.get(
+                target_url,
+                headers={
+                    "Accept": "*/*",
+                    "User-Agent": "proxypool-gateway-test/1.0",
+                },
+            )
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        preview = ""
+        with contextlib.suppress(Exception):
+            preview = resp.text[:2048]
+        return {
+            "request_ok": True,
+            "status_code": int(resp.status_code),
+            "elapsed_ms": elapsed_ms,
+            "body_preview": preview,
+        }
+    except Exception as exc:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return {
+            "request_ok": False,
+            "elapsed_ms": elapsed_ms,
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+        }
+
+
+def _default_auto_task_config() -> dict:
+    return {
+        "enabled": False,
+        "subscription_refresh_enabled": True,
+        "subscription_refresh_minutes": 60,
+        "tester_enabled": False,
+        "tester_minutes": 60,
+        "tester_limit": 0,
+        "tester_concurrency": 50,
+        "speed_test_enabled": False,
+        "speed_test_minutes": 120,
+        "speed_test_url": "https://speed.cloudflare.com/__down?bytes=10000000",
+        "speed_test_limit": 0,
+        "speed_test_timeout_sec": 30.0,
+    }
 
 
 def create_app(settings: AppSettings | None = None) -> FastAPI:
@@ -82,22 +142,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     )
     tester.replace_failed_proxy_cb = singbox_manager.replace_failed_exit_proxy
 
-    resin_manager = ResinBackendManager(
-        binary=cfg.resin_binary,
-        port=cfg.resin_port,
-        admin_token=cfg.resin_admin_token,
-        proxy_token=cfg.resin_proxy_token,
-        auth_version=cfg.resin_auth_version,
-        data_dir=cfg.resin_data_dir,
-        log_file=Path(str(cfg.singbox_runtime_log_file).replace("singbox", "resin")),
-        runtime_dir=cfg.singbox_runtime_config_file.parent,
-    )
-    resin_base_url = f"http://127.0.0.1:{cfg.resin_port}"
-    resin_client = ResinClient(base_url=resin_base_url, admin_token=cfg.resin_admin_token)
     pool_service = ProxyPoolService(
         storage=storage,
-        resin_manager=resin_manager,
-        resin_client=resin_client,
     )
 
     # Initialize ProxyChainService
@@ -128,7 +174,14 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         chain_instance_manager=chain_instance_manager,
         config=gateway_config_service.get_config(),
     )
-    gateway_runtime = ForwardProxyGatewayRuntime(forward_gateway)
+    gateway_runtime = ForwardProxyGatewayRuntimeManager(
+        storage=storage,
+        pool_service=pool_service,
+        chain_service=chain_service,
+        chain_instance_manager=chain_instance_manager,
+        config_service=gateway_config_service,
+        legacy_gateway=forward_gateway,
+    )
 
     app = FastAPI(title="Proxy Pool", version="0.1.0")
     app.state.settings = cfg
@@ -139,8 +192,6 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.singbox_manager = singbox_manager
-    app.state.resin_manager = resin_manager
-    app.state.resin_client = resin_client
     app.state.pool_service = pool_service
     app.state.chain_service = chain_service
     app.state.chain_instance_manager = chain_instance_manager
@@ -149,6 +200,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.forward_gateway = forward_gateway
     app.state.gateway_runtime = gateway_runtime
     app.state.backend_health_task = None
+    app.state.auto_task_config = _default_auto_task_config()
+    app.state.auto_task_runner = None
+    app.state.auto_task_last_run = {}
 
     async def _backend_health_loop() -> None:
         interval = max(5, int(cfg.backend_health_check_sec))
@@ -160,31 +214,222 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 # health loop must not crash the API process
                 continue
 
+    def _start_speed_test_task(body: SpeedTestRequest, kind: str = "speed_test") -> str:
+        target_url = str(body.url or "").strip()
+        if not (target_url.startswith("http://") or target_url.startswith("https://")):
+            raise ValueError("speed test url must start with http:// or https://")
+
+        def _runner(update, should_stop):
+            candidates = storage.get_candidates_for_test(
+                limit=int(body.limit or 0),
+                only_available=bool(body.only_available),
+            )
+            total = len(candidates)
+            results: list[dict] = []
+            success = 0
+            failed = 0
+            update(total=total, completed=0, success=0, failed=0, message=f"queued {total} nodes")
+            for idx, node in enumerate(candidates, start=1):
+                if should_stop():
+                    break
+                key = str(node.get("normalized_key") or "")
+                name = str(node.get("name") or node.get("host") or key[:8])
+                update(
+                    total=total,
+                    completed=idx - 1,
+                    success=success,
+                    failed=failed,
+                    message=f"speed testing {idx}/{total} {name}",
+                )
+                result = asyncio.run(
+                    prober.speed_test_async(
+                        node,
+                        target_url,
+                        timeout_sec=float(body.timeout_sec),
+                    )
+                )
+                item = {
+                    "normalized_key": key,
+                    "name": name,
+                    "ok": result.ok,
+                    "elapsed_ms": result.elapsed_ms,
+                    "bytes": result.bytes_downloaded,
+                    "speed_mbps": result.speed_mbps,
+                    "error": result.error[:300],
+                }
+                results.append(item)
+                storage.update_speed_test_result(key, ok=result.ok, speed_mbps=result.speed_mbps)
+                if result.ok:
+                    success += 1
+                else:
+                    failed += 1
+                update(
+                    total=total,
+                    completed=idx,
+                    success=success,
+                    failed=failed,
+                    message=f"speed {idx}/{total} ok={success} failed={failed}",
+                    result={"items": results[-50:], "count": len(results)},
+                )
+            return {"count": len(results), "items": results}
+
+        return task_manager.start_task(kind, _runner)
+
+    def _start_subscription_refresh_task(timeout_sec: float = 12.0, kind: str = "subscriptions_refresh") -> str:
+        def runner(update, should_stop) -> dict:
+            subscriptions = storage.list_enabled_subscriptions()
+            total = len(subscriptions)
+            items: list[dict] = []
+            success = 0
+            failed = 0
+            update(total=total, completed=0, success=0, failed=0, message=f"queued {total} subscriptions")
+
+            for idx, sub in enumerate(subscriptions, start=1):
+                if should_stop():
+                    break
+                sub_id = int(sub.get("id") or 0)
+                sub_name = str(sub.get("name") or "")
+                update(
+                    total=total,
+                    completed=idx - 1,
+                    success=success,
+                    failed=failed,
+                    message=f"refreshing {sub_name or sub_id} ({idx}/{total})",
+                )
+                report = collector.collect_from_subscription(
+                    subscription_id=sub_id,
+                    subscription_name=sub_name,
+                    subscription_url=str(sub.get("url") or ""),
+                    timeout_sec=timeout_sec,
+                )
+                status, error = _subscription_status_from_report(report)
+                storage.mark_subscription_result(
+                    subscription_id=sub_id,
+                    status=status,
+                    error=error,
+                    parsed=report.total_parsed,
+                    inserted=report.total_inserted,
+                    updated=report.total_updated,
+                    invalid=report.total_invalid,
+                    deduped=report.total_deduped,
+                )
+                items.append(
+                    {
+                        "subscription_id": sub_id,
+                        "name": sub_name,
+                        "status": status,
+                        "error": error,
+                        "report": _collect_report_to_dict(report),
+                    }
+                )
+                if status == "success":
+                    success += 1
+                else:
+                    failed += 1
+                update(
+                    total=total,
+                    completed=idx,
+                    success=success,
+                    failed=failed,
+                    message=f"finished {sub_name or sub_id} ({idx}/{total})",
+                    result={"count": len(items), "items": items},
+                )
+
+            return {"count": len(items), "items": items}
+
+        return task_manager.start_task(kind, runner)
+
+    def _start_tester_task(body: RunTestRequest, kind: str = "tester_run") -> str:
+        def _runner(update, should_stop):
+            def _progress(payload: dict) -> None:
+                update(
+                    total=payload.get("total", 0),
+                    completed=payload.get("completed", 0),
+                    success=payload.get("available", 0),
+                    failed=payload.get("unavailable", 0),
+                    message=f"tester {payload.get('completed', 0)}/{payload.get('total', 0)}",
+                )
+
+            report = asyncio.run(
+                tester.run_batch(
+                    limit=body.limit,
+                    concurrency=body.concurrency,
+                    only_unchecked=body.only_unchecked,
+                    only_available=body.only_available,
+                    only_unavailable=body.only_unavailable,
+                    min_last_checked_age_hours=body.min_last_checked_age_hours,
+                    protocols=body.protocols,
+                    fallback_front_proxy_keys=body.fallback_front_proxy_keys,
+                    fallback_front_max_attempts=body.fallback_front_max_attempts,
+                    replace_failed_with_available=body.replace_failed_with_available,
+                    progress_cb=_progress,
+                    stop_cb=should_stop,
+                )
+            )
+            return asdict(report)
+
+        return task_manager.start_task(kind, _runner)
+
+    async def _auto_task_loop() -> None:
+        while True:
+            await asyncio.sleep(5)
+            config = dict(app.state.auto_task_config or {})
+            if not bool(config.get("enabled")):
+                continue
+            now = time.monotonic()
+            last_run: dict = app.state.auto_task_last_run
+
+            def _due(name: str, minutes: int) -> bool:
+                interval = max(60.0, float(max(1, int(minutes or 1)) * 60))
+                return now - float(last_run.get(name) or 0.0) >= interval
+
+            try:
+                if bool(config.get("subscription_refresh_enabled")) and _due("subscriptions_refresh", int(config.get("subscription_refresh_minutes") or 60)):
+                    last_run["subscriptions_refresh"] = now
+                    _start_subscription_refresh_task(kind="auto_subscriptions_refresh")
+                if bool(config.get("tester_enabled")) and _due("tester_run", int(config.get("tester_minutes") or 60)):
+                    last_run["tester_run"] = now
+                    _start_tester_task(
+                        RunTestRequest(
+                            limit=int(config.get("tester_limit") or 0),
+                            concurrency=int(config.get("tester_concurrency") or 50),
+                        ),
+                        kind="auto_tester_run",
+                    )
+                if bool(config.get("speed_test_enabled")) and _due("speed_test", int(config.get("speed_test_minutes") or 120)):
+                    last_run["speed_test"] = now
+                    _start_speed_test_task(
+                        SpeedTestRequest(
+                            url=str(config.get("speed_test_url") or "https://speed.cloudflare.com/__down?bytes=10000000"),
+                            limit=int(config.get("speed_test_limit") or 0),
+                            timeout_sec=float(config.get("speed_test_timeout_sec") or 30.0),
+                            only_available=True,
+                        ),
+                        kind="auto_speed_test",
+                    )
+            except Exception:
+                continue
+
     @app.on_event("startup")
     async def on_startup() -> None:
         app.state.backend_health_task = asyncio.create_task(_backend_health_loop())
+        app.state.auto_task_runner = asyncio.create_task(_auto_task_loop())
         if gateway_config_service.get_config().enabled:
             try:
                 await gateway_runtime.start()
             except Exception:
                 pass
-        # Start Resin if it was running before (persisted) or resin_auto_start is set.
-        if resin_manager.get_desired_running() or cfg.resin_auto_start:
-            if not resin_manager.is_running():
-                try:
-                    resin_manager.start()
-                except Exception:
-                    pass
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
-        task = app.state.backend_health_task
-        if task is None:
-            return
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-        app.state.backend_health_task = None
+        for attr in ("backend_health_task", "auto_task_runner"):
+            task = getattr(app.state, attr, None)
+            if task is None:
+                continue
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            setattr(app.state, attr, None)
 
     @app.middleware("http")
     async def api_key_guard(request: Request, call_next):
@@ -207,6 +452,27 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     @app.get("/api/tasks")
     async def list_tasks(limit: int = Query(default=30, ge=1, le=200)) -> dict:
         return {"items": task_manager.list_tasks(limit=limit)}
+
+    @app.get("/api/tasks/auto-config")
+    async def get_auto_task_config() -> dict:
+        return {
+            "item": dict(app.state.auto_task_config or {}),
+            "last_run": dict(app.state.auto_task_last_run or {}),
+            "running": app.state.auto_task_runner is not None and not app.state.auto_task_runner.done(),
+        }
+
+    @app.put("/api/tasks/auto-config")
+    async def update_auto_task_config(body: AutoTaskConfigRequest) -> dict:
+        payload = body.model_dump()
+        url = str(payload.get("speed_test_url") or "").strip()
+        if payload.get("speed_test_enabled") and not (url.startswith("http://") or url.startswith("https://")):
+            raise HTTPException(status_code=400, detail="speed_test_url must start with http:// or https://")
+        app.state.auto_task_config = payload
+        return {
+            "item": dict(app.state.auto_task_config),
+            "last_run": dict(app.state.auto_task_last_run or {}),
+            "running": app.state.auto_task_runner is not None and not app.state.auto_task_runner.done(),
+        }
 
     @app.get("/api/tasks/{task_id}")
     async def get_task(task_id: str) -> dict:
@@ -242,6 +508,65 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def backend_routes() -> dict:
         return {"routes": singbox_manager.status()["routes"]}
 
+    @app.get("/api/http-proxy-endpoints")
+    async def list_http_proxy_endpoints() -> dict:
+        return {"items": storage.list_http_proxy_endpoints()}
+
+    @app.post("/api/http-proxy-endpoints")
+    async def create_http_proxy_endpoint(body: HttpProxyEndpointCreateRequest) -> dict:
+        try:
+            item = storage.create_http_proxy_endpoint(
+                name=body.name,
+                listen_host=body.listen_host,
+                listen_port=body.listen_port,
+                inbound_type=body.inbound_type,
+                enabled=body.enabled,
+                sticky_ttl_sec=body.sticky_ttl_sec,
+                session_missing_action=body.session_missing_action,
+                session_header_names=body.session_header_names,
+                session_query_param_names=body.session_query_param_names,
+                connect_session_header_names=body.connect_session_header_names,
+            )
+            if body.hop_pool_ids:
+                storage.replace_http_proxy_endpoint_hops(int(item["id"]), list(body.hop_pool_ids))
+                item = storage.get_http_proxy_endpoint(int(item["id"])) or item
+            if gateway_config_service.get_config().enabled:
+                await gateway_runtime.sync()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": item}
+
+    @app.get("/api/http-proxy-endpoints/{endpoint_id}")
+    async def get_http_proxy_endpoint(endpoint_id: int) -> dict:
+        item = storage.get_http_proxy_endpoint(endpoint_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="http proxy endpoint not found")
+        return {"item": item}
+
+    @app.put("/api/http-proxy-endpoints/{endpoint_id}")
+    async def update_http_proxy_endpoint(endpoint_id: int, body: HttpProxyEndpointUpdateRequest) -> dict:
+        payload = body.model_dump(exclude_none=True)
+        hop_pool_ids = payload.pop("hop_pool_ids", None)
+        try:
+            item = storage.update_http_proxy_endpoint(endpoint_id, **payload)
+            if hop_pool_ids is not None:
+                storage.replace_http_proxy_endpoint_hops(endpoint_id, list(hop_pool_ids))
+                item = storage.get_http_proxy_endpoint(endpoint_id) or item
+            if gateway_config_service.get_config().enabled:
+                await gateway_runtime.sync()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"item": item}
+
+    @app.delete("/api/http-proxy-endpoints/{endpoint_id}")
+    async def delete_http_proxy_endpoint(endpoint_id: int) -> dict:
+        deleted = storage.delete_http_proxy_endpoint(endpoint_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="http proxy endpoint not found")
+        if gateway_config_service.get_config().enabled:
+            await gateway_runtime.sync()
+        return {"deleted": True}
+
     @app.get("/api/gateway/http-config")
     async def get_http_gateway_config() -> dict:
         return {"item": asdict(gateway_config_service.get_config())}
@@ -250,7 +575,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def update_http_gateway_config(body: HttpGatewayConfigRequest) -> dict:
         item = gateway_config_service.update_config(**body.model_dump())
         app.state.forward_gateway.config = item
-        app.state.chain_service.sticky_router.sticky_ttl_sec = int(item.sticky_ttl_sec)
+        endpoint = storage.get_http_proxy_endpoint(int(item.endpoint_id or 0))
+        app.state.chain_service.sticky_router.sticky_ttl_sec = int(
+            endpoint.get("sticky_ttl_sec") if endpoint is not None else item.sticky_ttl_sec
+        )
         if item.enabled:
             try:
                 await gateway_runtime.start()
@@ -263,11 +591,24 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     @app.get("/api/gateway/http-status")
     async def get_http_gateway_status() -> dict:
         config = gateway_config_service.get_config()
+        endpoint = storage.get_http_proxy_endpoint(int(config.endpoint_id or 0))
+        endpoint_id = int(config.endpoint_id or 0)
+        entry_pool_id = 0
+        if endpoint is not None:
+            hops = list(endpoint.get("hops") or [])
+            if hops:
+                entry_pool_id = int(hops[0].get("pool_id") or 0)
         return {
             "config": asdict(config),
+            "endpoint": endpoint,
             "runtime": gateway_runtime.status(),
-            "leases": pool_service.list_pool_chain_leases(config.default_pool_id) if config.default_pool_id else [],
-            "instances": chain_instance_manager.list_instances(pool_id=config.default_pool_id or None),
+            "leases": chain_service.get_leases(pool_id=entry_pool_id or None, endpoint_id=endpoint_id or None)
+            if endpoint_id
+            else (pool_service.list_pool_chain_leases(config.default_pool_id) if config.default_pool_id else []),
+            "instances": chain_instance_manager.list_instances(
+                pool_id=entry_pool_id or None,
+                endpoint_id=endpoint_id or None,
+            ) if endpoint_id else chain_instance_manager.list_instances(pool_id=config.default_pool_id or None),
         }
 
     @app.post("/api/gateway/http-test")
@@ -275,19 +616,69 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         target = str(body.target_url or "").strip()
         if not target:
             raise HTTPException(status_code=400, detail="target_url is required")
+        if int(body.endpoint_id or 0) > 0:
+            current = gateway_config_service.get_config()
+            if int(current.endpoint_id or 0) != int(body.endpoint_id):
+                updated = gateway_config_service.update_config(endpoint_id=int(body.endpoint_id))
+                app.state.forward_gateway.config = updated
         headers = {}
         if body.session_id:
             headers["X-ProxyPool-Session"] = body.session_id
+        else:
+            configured_endpoint_id = int(body.endpoint_id or app.state.forward_gateway.config.endpoint_id or 0)
+            endpoint_for_policy = storage.get_http_proxy_endpoint(configured_endpoint_id) if configured_endpoint_id > 0 else None
+            missing_action = str(
+                (endpoint_for_policy or {}).get("session_missing_action")
+                or app.state.forward_gateway.config.session_missing_action
+                or "RANDOM"
+            ).upper()
+            if missing_action != "REJECT":
+                headers["X-ProxyPool-Session"] = f"gateway-test:{uuid.uuid4().hex}"
         try:
             route = app.state.forward_gateway.resolve_route_for_http(target, headers=headers)
         except Exception as exc:
             return {"ok": False, "detail": str(exc)}
+        endpoint = route.get("endpoint") or {}
+        endpoint_id = int(endpoint.get("id") or 0)
+        proxy_host = str(endpoint.get("listen_host") or app.state.forward_gateway.config.listen_host or "127.0.0.1")
+        proxy_port = int(endpoint.get("listen_port") or app.state.forward_gateway.config.listen_port or 0)
+        if proxy_port <= 0:
+            return {
+                "ok": False,
+                "detail": "gateway listen port is not configured",
+                "session_id": route["session_id"],
+                "endpoint_id": endpoint_id,
+                "instance_id": route["instance"]["instance_id"],
+                "target_host": route["target"].netloc,
+                "hop_node_keys": list(route["route"].get("hop_node_keys") or []),
+                "route_signature": str(route["route"].get("route_signature") or ""),
+            }
+        proxy_url = f"http://{proxy_host}:{proxy_port}"
+        request_result = await _request_via_forward_proxy(
+            target,
+            proxy_url=proxy_url,
+            proxy_headers=headers,
+        )
+        request_ok = bool(request_result.get("request_ok"))
+        status_code = int(request_result.get("status_code") or 0)
+        if not request_ok:
+            error_detail = str(request_result.get("error") or request_result.get("error_type") or "request failed")
+            with contextlib.suppress(Exception):
+                app.state.forward_gateway.report_route_failure(route, error_detail)
+        else:
+            with contextlib.suppress(Exception):
+                app.state.forward_gateway.report_route_success(route)
         return {
-            "ok": True,
-            "detail": "route resolved",
+            "ok": bool(request_ok and (status_code == 0 or status_code < 500)),
+            "detail": "request succeeded" if request_ok else str(request_result.get("error") or "request failed"),
             "session_id": route["session_id"],
+            "endpoint_id": endpoint_id,
+            "proxy_url": proxy_url,
             "instance_id": route["instance"]["instance_id"],
             "target_host": route["target"].netloc,
+            "hop_node_keys": list(route["route"].get("hop_node_keys") or []),
+            "route_signature": str(route["route"].get("route_signature") or ""),
+            "request": request_result,
         }
 
     @app.get("/api/backend/default-port-range")
@@ -440,6 +831,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         openai_filter: str | None = Query(default=None, pattern="^(unlocked|blocked|unchecked)$"),
         ip_purity_filter: str | None = Query(default=None, pattern="^(checked|unchecked|residential|non_residential|unknown)$"),
         fallback_front_filter: str | None = Query(default=None, pattern="^(has|none)$"),
+        speed_min_mbps: float | None = Query(default=None, ge=0),
         sort_by: str = Query(default="latency"),
         sort_order: str = Query(default="asc"),
     ) -> dict:
@@ -455,6 +847,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             openai_filter=openai_filter,
             ip_purity_filter=ip_purity_filter,
             fallback_front_filter=fallback_front_filter,
+            speed_min_mbps=speed_min_mbps,
             sort_by=sort_by,
             sort_order=sort_order,
         )
@@ -607,6 +1000,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 name=body.name,
                 filters=body.filters,
                 enabled=body.enabled,
+                format=body.format,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -620,6 +1014,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 name=body.name,
                 filters=body.filters,
                 enabled=body.enabled,
+                format=body.format,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -643,8 +1038,12 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="published subscription not found")
         if not item.get("enabled"):
             raise HTTPException(status_code=404, detail="published subscription disabled")
-        links = storage.get_published_subscription_links(subscription_id, limit=limit)
-        text = "\n".join(links)
+        output_format = str(item.get("format") or "raw").strip().lower()
+        if output_format == "clash":
+            text = _published_subscription_clash_yaml(storage.get_published_subscription_proxies(subscription_id, limit=limit))
+        else:
+            links = storage.get_published_subscription_links(subscription_id, limit=limit)
+            text = "\n".join(links)
         if encode_base64:
             text = base64.b64encode(text.encode("utf-8")).decode("utf-8")
         return PlainTextResponse(text)
@@ -722,68 +1121,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def start_refresh_enabled_subscriptions_task(
         timeout_sec: float = Query(default=12.0, ge=1.0, le=120.0),
     ) -> dict:
-        def runner(update, should_stop) -> dict:
-            subscriptions = storage.list_enabled_subscriptions()
-            total = len(subscriptions)
-            items: list[dict] = []
-            success = 0
-            failed = 0
-            update(total=total, completed=0, success=0, failed=0, message=f"queued {total} subscriptions")
-
-            for idx, sub in enumerate(subscriptions, start=1):
-                if should_stop():
-                    break
-                sub_id = int(sub.get("id") or 0)
-                sub_name = str(sub.get("name") or "")
-                update(
-                    total=total,
-                    completed=idx - 1,
-                    success=success,
-                    failed=failed,
-                    message=f"refreshing {sub_name or sub_id} ({idx}/{total})",
-                )
-                report = collector.collect_from_subscription(
-                    subscription_id=sub_id,
-                    subscription_name=sub_name,
-                    subscription_url=str(sub.get("url") or ""),
-                    timeout_sec=timeout_sec,
-                )
-                status, error = _subscription_status_from_report(report)
-                storage.mark_subscription_result(
-                    subscription_id=sub_id,
-                    status=status,
-                    error=error,
-                    parsed=report.total_parsed,
-                    inserted=report.total_inserted,
-                    updated=report.total_updated,
-                    invalid=report.total_invalid,
-                    deduped=report.total_deduped,
-                )
-                items.append(
-                    {
-                        "subscription_id": sub_id,
-                        "name": sub_name,
-                        "status": status,
-                        "error": error,
-                        "report": _collect_report_to_dict(report),
-                    }
-                )
-                if status == "success":
-                    success += 1
-                else:
-                    failed += 1
-                update(
-                    total=total,
-                    completed=idx,
-                    success=success,
-                    failed=failed,
-                    message=f"finished {sub_name or sub_id} ({idx}/{total})",
-                    result={"count": len(items), "items": items},
-                )
-
-            return {"count": len(items), "items": items}
-
-        task_id = task_manager.start_task("subscriptions_refresh", runner)
+        task_id = _start_subscription_refresh_task(timeout_sec=timeout_sec)
         task = task_manager.get_task(task_id)
         return {"task_id": task_id, "task": task}
 
@@ -791,6 +1129,14 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def delete_unavailable_proxies() -> dict:
         deleted = storage.delete_unavailable()
         return {"deleted": deleted}
+
+    @app.post("/api/proxies/delete-selected")
+    async def delete_selected_proxies(body: ProxyBulkDeleteRequest) -> dict:
+        keys = [str(key or "").strip() for key in body.normalized_keys if str(key or "").strip()]
+        if not keys:
+            raise HTTPException(status_code=400, detail="normalized_keys is empty")
+        deleted = storage.delete_proxies_by_keys(keys)
+        return {"deleted": deleted, "requested": len(set(keys))}
 
     @app.post("/api/geoip/enrich")
     async def enrich_geoip(body: GeoEnrichRequest) -> dict:
@@ -886,35 +1232,15 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.post("/api/tasks/tester/start")
     async def start_tester_task(body: RunTestRequest) -> dict:
-        def _runner(update, should_stop):
-            def _progress(payload: dict) -> None:
-                update(
-                    total=payload.get("total", 0),
-                    completed=payload.get("completed", 0),
-                    success=payload.get("available", 0),
-                    failed=payload.get("unavailable", 0),
-                    message=f"tester {payload.get('completed', 0)}/{payload.get('total', 0)}",
-                )
+        task_id = _start_tester_task(body)
+        return {"task_id": task_id}
 
-            report = asyncio.run(
-                tester.run_batch(
-                    limit=body.limit,
-                    concurrency=body.concurrency,
-                    only_unchecked=body.only_unchecked,
-                    only_available=body.only_available,
-                    only_unavailable=body.only_unavailable,
-                    min_last_checked_age_hours=body.min_last_checked_age_hours,
-                    protocols=body.protocols,
-                    fallback_front_proxy_keys=body.fallback_front_proxy_keys,
-                    fallback_front_max_attempts=body.fallback_front_max_attempts,
-                    replace_failed_with_available=body.replace_failed_with_available,
-                    progress_cb=_progress,
-                    stop_cb=should_stop,
-                )
-            )
-            return asdict(report)
-
-        task_id = task_manager.start_task("tester_run", _runner)
+    @app.post("/api/tasks/speed-test/start")
+    async def start_speed_test_task(body: SpeedTestRequest) -> dict:
+        try:
+            task_id = _start_speed_test_task(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"task_id": task_id}
 
     @app.post("/api/tasks/openai-check/start")
@@ -1195,137 +1521,49 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"item": item}
 
-    # ---- Resin backend management endpoints ----
-
-    @app.get("/api/resin/status")
-    async def resin_status() -> dict:
-        return resin_manager.status()
-
-    @app.post("/api/resin/start")
-    async def resin_start() -> dict:
-        try:
-            resin_manager.start()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return resin_manager.status()
-
-    @app.post("/api/resin/stop")
-    async def resin_stop() -> dict:
-        resin_manager.stop()
-        return resin_manager.status()
-
-    @app.post("/api/resin/restart")
-    async def resin_restart() -> dict:
-        try:
-            resin_manager.restart()
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return resin_manager.status()
-
-    @app.get("/api/resin/info")
-    async def resin_info() -> dict:
-        if not resin_manager.is_running():
-            raise HTTPException(status_code=503, detail="resin not running")
-        return resin_client.get_system_info()
-
-    @app.get("/api/resin/nodes")
-    async def resin_nodes(
-        limit: int = Query(default=200, ge=1, le=5000),
-        offset: int = Query(default=0, ge=0),
+    @app.get("/api/http-proxy-endpoints/{endpoint_id}/route-test")
+    async def http_proxy_endpoint_route_test(
+        endpoint_id: int,
+        session_id: str = "",
+        target_domain: str = "",
     ) -> dict:
-        if not resin_manager.is_running():
-            raise HTTPException(status_code=503, detail="resin not running")
-        return resin_client.list_nodes(limit=limit, offset=offset)
-
-    # ---- Resin reverse proxy ----
-    # The Resin UI is a Vite SPA with base="/ui/".  Its compiled JS
-    # checks ``window.location.pathname`` at startup and refuses to
-    # render unless the path begins with "/ui/".  We therefore
-    # expose the Resin UI at ``/ui/`` (not ``/resin/ui/``) and
-    # redirect ``/resin`` → ``/ui/`` for convenience.
-    #
-    # API calls from the SPA (``fetch("/api/v1/...")``) are routed
-    # to the Resin backend via a dedicated ``/api/v1/{path}`` route.
-    # The Proxy Pool's own API lives at ``/api/...`` (no ``v1``)
-    # so there is no conflict.
-
-    @app.get("/resin")
-    async def resin_root_redirect():
-        return RedirectResponse(url="/ui/")
-
-    @app.get("/resin/")
-    async def resin_slash_redirect():
-        return RedirectResponse(url="/ui/")
-
-    _RESIN_PROXY_SKIP_HEADERS = frozenset({"host", "transfer-encoding", "connection", "keep-alive"})
-
-    async def _resin_proxy_rewrite(prefix: str, path: str, request: Request) -> Response:
-        """Forward *request* to ``http://127.0.0.1:{port}/{prefix}/{path}``."""
-        full_path = f"{prefix}/{path}" if prefix else path
-        target = f"http://127.0.0.1:{cfg.resin_port}/{full_path}"
-        qs = str(request.url.query)
-        if qs:
-            target += f"?{qs}"
-        headers = {k: v for k, v in request.headers.items() if k.lower() not in _RESIN_PROXY_SKIP_HEADERS}
-        body = await request.body()
-        async with httpx.AsyncClient() as client:
-            resp = await client.request(
-                method=request.method,
-                url=target,
-                headers=headers,
-                content=body,
-                follow_redirects=True,
-            )
-        resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _RESIN_PROXY_SKIP_HEADERS}
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
-            headers=resp_headers,
-            media_type=resp.headers.get("content-type"),
+        endpoint = storage.get_http_proxy_endpoint(endpoint_id)
+        if endpoint is None:
+            raise HTTPException(status_code=404, detail="http proxy endpoint not found")
+        hops = list(endpoint.get("hops") or [])
+        if not hops:
+            raise HTTPException(status_code=400, detail="endpoint hops are empty")
+        entry_pool_id = int(hops[0].get("pool_id") or 0)
+        chain_service.initialize()
+        result = chain_service.route_request(
+            session_id=session_id,
+            pool_id=entry_pool_id,
+            endpoint_id=endpoint_id,
+            target_domain=target_domain,
+            live_instance_ids=chain_instance_manager.list_running_instance_ids(
+                pool_id=entry_pool_id,
+                endpoint_id=endpoint_id,
+            ),
         )
+        if result is None:
+            raise HTTPException(status_code=503, detail="No available nodes for routing")
+        return result
 
-    @app.api_route("/resin/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-    async def resin_api_proxy(path: str, request: Request) -> Response:
-        return await _resin_proxy_rewrite("api", path, request)
-
-    @app.api_route("/resin/healthz", methods=["GET", "HEAD"])
-    async def resin_healthz_proxy(request: Request) -> Response:
-        return await _resin_proxy_rewrite("", "healthz", request)
-
-    @app.api_route("/ui/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-    async def resin_ui_proxy(path: str, request: Request) -> Response:
-        """Proxy Resin Web UI.  Must live at ``/ui/...`` so that the
-        Vite SPA's pathname check passes."""
-        return await _proxy_to_resin(f"ui/{path}", request)
-
-    @app.api_route("/api/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-    async def resin_api_v1_proxy(path: str, request: Request) -> Response:
-        """Proxy Resin REST API (``/api/v1/...``) so that the Resin
-        SPA can fetch data when loaded at ``/ui/..."."""
-        return await _proxy_to_resin(f"api/v1/{path}", request)
-
-    async def _proxy_to_resin(path: str, request: Request) -> Response:
-        target = f"http://127.0.0.1:{cfg.resin_port}/{path}"
-        qs = str(request.url.query)
-        if qs:
-            target += f"?{qs}"
-        headers = {k: v for k, v in request.headers.items() if k.lower() not in _RESIN_PROXY_SKIP_HEADERS}
-        body = await request.body()
-        async with httpx.AsyncClient() as client:
-            resp = await client.request(
-                method=request.method,
-                url=target,
-                headers=headers,
-                content=body,
-                follow_redirects=True,
-            )
-        resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _RESIN_PROXY_SKIP_HEADERS}
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
-            headers=resp_headers,
-            media_type=resp.headers.get("content-type"),
-        )
+    @app.get("/api/http-proxy-endpoints/{endpoint_id}/status")
+    async def http_proxy_endpoint_status(endpoint_id: int) -> dict:
+        endpoint = storage.get_http_proxy_endpoint(endpoint_id)
+        if endpoint is None:
+            raise HTTPException(status_code=404, detail="http proxy endpoint not found")
+        hops = list(endpoint.get("hops") or [])
+        entry_pool_id = int(hops[0].get("pool_id") or 0) if hops else 0
+        return {
+            "item": endpoint,
+            "leases": chain_service.get_leases(pool_id=entry_pool_id or None, endpoint_id=endpoint_id),
+            "instances": chain_instance_manager.list_instances(
+                pool_id=entry_pool_id or None,
+                endpoint_id=endpoint_id,
+            ),
+        }
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -1370,11 +1608,12 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def chain_route(
         session_id: str = "",
         pool_id: int = 0,
+        endpoint_id: int = 0,
         target_domain: str = "",
     ) -> dict:
         """Route a request through the proxy chain."""
         chain_service.initialize()
-        result = chain_service.route_request(session_id, pool_id, target_domain)
+        result = chain_service.route_request(session_id, pool_id, endpoint_id, target_domain)
         if result is None:
             raise HTTPException(status_code=503, detail="No available nodes for routing")
         return result
@@ -1382,10 +1621,11 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     @app.get("/api/chain/leases")
     async def chain_leases(
         pool_id: int | None = None,
+        endpoint_id: int | None = None,
     ) -> dict:
         """Get sticky leases."""
         chain_service.initialize()
-        return {"leases": chain_service.get_leases(pool_id)}
+        return {"leases": chain_service.get_leases(pool_id, endpoint_id)}
 
     @app.post("/api/chain/leases/cleanup")
     async def chain_leases_cleanup() -> dict:
@@ -1492,6 +1732,51 @@ def _collect_report_to_dict(report) -> dict:
         "total_invalid": report.total_invalid,
         "by_source": [asdict(r) for r in report.by_source],
     }
+
+
+def _published_subscription_clash_yaml(proxies: list[dict]) -> str:
+    import yaml
+
+    proxy_items: list[dict] = []
+    names: list[str] = []
+    used: set[str] = set()
+    for idx, proxy in enumerate(proxies, start=1):
+        name = _unique_clash_proxy_name(proxy, idx=idx, used=used)
+        try:
+            item = _build_mihomo_proxy(proxy, name=name)
+        except Exception:
+            continue
+        proxy_items.append(item)
+        names.append(name)
+    selector_names = names or ["DIRECT"]
+    config = {
+        "proxies": proxy_items,
+        "proxy-groups": [
+            {
+                "name": "Proxy",
+                "type": "select",
+                "proxies": selector_names,
+            }
+        ],
+        "rules": ["MATCH,Proxy"],
+    }
+    return yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
+
+
+def _unique_clash_proxy_name(proxy: dict, idx: int, used: set[str]) -> str:
+    raw = str(proxy.get("name") or "").strip()
+    if not raw:
+        host = str(proxy.get("host") or "").strip() or "proxy"
+        port = str(proxy.get("port") or "").strip()
+        raw = f"{host}:{port}" if port else host
+    base = raw[:80] or f"proxy-{idx}"
+    name = base
+    suffix = 2
+    while name in used:
+        name = f"{base}-{suffix}"
+        suffix += 1
+    used.add(name)
+    return name
 
 
 def _subscription_status_from_report(report) -> tuple[str, str]:

@@ -52,33 +52,40 @@ class UnifiedHttpGateway:
             raise GatewayError(status_code=404, detail="pool not found")
         if not bool(pool.get("chain_enabled")):
             raise GatewayError(status_code=409, detail="pool chain is not enabled")
+        endpoint = self._get_endpoint_for_pool(pool_name=pool_name, pool_id=int(pool["id"]))
 
         session_id, _, extraction_failed = self.session_extractor.extract(
             headers=headers,
             query_params=query_params,
             target_host=target_host,
             target_path=target_path,
-            header_names=list(pool.get("session_header_names") or []),
-            query_names=list(pool.get("session_query_param_names") or []),
+            header_names=list((endpoint or {}).get("session_header_names") or list(pool.get("session_header_names") or [])),
+            query_names=list((endpoint or {}).get("session_query_param_names") or list(pool.get("session_query_param_names") or [])),
             rules=self.storage.list_pool_session_rules(int(pool["id"])),
         )
-        if extraction_failed and str(pool.get("session_missing_action") or "RANDOM").upper() == "REJECT":
+        if extraction_failed and str((endpoint or {}).get("session_missing_action") or pool.get("session_missing_action") or "RANDOM").upper() == "REJECT":
             raise GatewayError(status_code=400, detail="session_id is required")
 
         self.chain_service.initialize()
         route = self.chain_service.route_request(
             session_id=session_id,
             pool_id=int(pool["id"]),
+            endpoint_id=int((endpoint or {}).get("id") or 0),
             target_domain=str(target_host or ""),
         )
         if route is None:
             raise GatewayError(status_code=503, detail="no available chain route")
 
-        instance = self._ensure_route_instance(pool_id=int(pool["id"]), route=route)
+        instance = self._ensure_route_instance(
+            pool_id=int(pool["id"]),
+            endpoint_id=int((endpoint or {}).get("id") or 0),
+            route=route,
+        )
         if session_id:
             self._bind_lease_instance_id(
                 session_id=session_id,
                 pool_id=int(pool["id"]),
+                endpoint_id=int((endpoint or {}).get("id") or 0),
                 instance_id=str(instance["instance_id"]),
             )
 
@@ -116,7 +123,21 @@ class UnifiedHttpGateway:
                 return item
         return None
 
-    def _ensure_route_instance(self, pool_id: int, route: dict[str, Any]) -> dict[str, Any]:
+    def _get_endpoint_for_pool(self, pool_name: str, pool_id: int) -> dict[str, Any] | None:
+        safe_name = str(pool_name or "").strip()
+        for endpoint in self.storage.list_http_proxy_endpoints():
+            hops = list(endpoint.get("hops") or [])
+            if not hops or int(hops[0].get("pool_id") or 0) != int(pool_id):
+                continue
+            if str(endpoint.get("name") or "").strip() == safe_name:
+                return endpoint
+        for endpoint in self.storage.list_http_proxy_endpoints():
+            hops = list(endpoint.get("hops") or [])
+            if hops and int(hops[0].get("pool_id") or 0) == int(pool_id):
+                return endpoint
+        return None
+
+    def _ensure_route_instance(self, pool_id: int, endpoint_id: int, route: dict[str, Any]) -> dict[str, Any]:
         front_key = str(route.get("front_node", {}).get("key") or "").strip()
         exit_key = str(route.get("exit_node", {}).get("key") or "").strip()
         if not front_key or not exit_key:
@@ -127,15 +148,19 @@ class UnifiedHttpGateway:
                 front_node_key=front_key,
                 exit_node_key=exit_key,
                 inbound_type="http",
+                endpoint_id=int(endpoint_id),
+                hop_node_keys=list(route.get("hop_node_keys") or []),
+                route_signature=str(route.get("route_signature") or ""),
             )
         except RuntimeError as exc:
             raise GatewayError(status_code=503, detail=str(exc)) from exc
 
-    def _bind_lease_instance_id(self, session_id: str, pool_id: int, instance_id: str) -> None:
+    def _bind_lease_instance_id(self, session_id: str, pool_id: int, endpoint_id: int, instance_id: str) -> None:
         self.chain_service.bind_instance_to_session(
             session_id=session_id,
             pool_id=pool_id,
             instance_id=instance_id,
+            endpoint_id=endpoint_id,
         )
 
     def _build_target_url(

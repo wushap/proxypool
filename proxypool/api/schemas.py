@@ -63,10 +63,37 @@ class RunTestRequest(BaseModel):
     replace_failed_with_available: bool = False
 
 
+class ProxyBulkDeleteRequest(BaseModel):
+    normalized_keys: list[str] = Field(default_factory=list)
+
+
 class SingleProxyTestRequest(BaseModel):
     normalized_key: str
     fallback_front_proxy_keys: list[str] = Field(default_factory=list)
     fallback_front_max_attempts: int = 0
+
+
+class SpeedTestRequest(BaseModel):
+    url: str = "https://speed.cloudflare.com/__down?bytes=10000000"
+    limit: int = Field(default=0, ge=0, le=20000)
+    timeout_sec: float = Field(default=30.0, ge=3.0, le=300.0)
+    only_available: bool = True
+
+
+class AutoTaskConfigRequest(BaseModel):
+    enabled: bool = False
+    subscription_refresh_enabled: bool = True
+    subscription_refresh_minutes: int = Field(default=60, ge=1, le=7 * 24 * 60)
+    tester_enabled: bool = False
+    tester_minutes: int = Field(default=60, ge=1, le=7 * 24 * 60)
+    tester_limit: int = Field(default=0, ge=0, le=20000)
+    tester_concurrency: int = Field(default=50, ge=1, le=500)
+    speed_test_enabled: bool = False
+    speed_test_minutes: int = Field(default=120, ge=1, le=7 * 24 * 60)
+    speed_test_url: str = "https://speed.cloudflare.com/__down?bytes=10000000"
+    speed_test_limit: int = Field(default=0, ge=0, le=20000)
+    speed_test_timeout_sec: float = Field(default=30.0, ge=3.0, le=300.0)
+
 
 
 class SubscriptionCreateRequest(BaseModel):
@@ -89,12 +116,14 @@ class PublishedSubscriptionCreateRequest(BaseModel):
     name: str
     filters: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
+    format: str = "raw"
 
 
 class PublishedSubscriptionUpdateRequest(BaseModel):
     name: str | None = None
     filters: dict[str, str] | None = None
     enabled: bool | None = None
+    format: str | None = None
 
 
 class BackendPortRangeRequest(BaseModel):
@@ -121,14 +150,14 @@ class GenericMessage(BaseModel):
 
 class ProxyPoolCreateRequest(BaseModel):
     name: str
-    filters: dict[str, str] = Field(default_factory=dict)
+    filters: dict[str, str | list[str]] = Field(default_factory=dict)
     listen: str = "0.0.0.0"
     inbound_type: str = "http"
 
 
 class ProxyPoolUpdateRequest(BaseModel):
     name: str | None = None
-    filters: dict[str, str] | None = None
+    filters: dict[str, str | list[str]] | None = None
     listen: str | None = None
     inbound_type: str | None = None
 
@@ -146,6 +175,7 @@ class HttpGatewayConfigRequest(BaseModel):
     enabled: bool = False
     listen_host: str = "127.0.0.1"
     listen_port: int = Field(default=8899, ge=1, le=65535)
+    endpoint_id: int = Field(default=0, ge=0)
     default_pool_id: int = Field(default=0, ge=0)
     sticky_ttl_sec: int = Field(default=3600, ge=1, le=7 * 24 * 3600)
     session_missing_action: str = "RANDOM"
@@ -156,7 +186,36 @@ class HttpGatewayConfigRequest(BaseModel):
 
 class HttpGatewayTestRequest(BaseModel):
     target_url: str
+    endpoint_id: int = Field(default=0, ge=0)
     session_id: str = ""
+
+
+class HttpProxyEndpointCreateRequest(BaseModel):
+    name: str
+    listen_host: str = "127.0.0.1"
+    listen_port: int = Field(default=8899, ge=1, le=65535)
+    inbound_type: str = "http"
+    enabled: bool = True
+    sticky_ttl_sec: int = Field(default=3600, ge=1, le=7 * 24 * 3600)
+    session_missing_action: str = "RANDOM"
+    session_header_names: list[str] = Field(default_factory=list)
+    session_query_param_names: list[str] = Field(default_factory=list)
+    connect_session_header_names: list[str] = Field(default_factory=list)
+    hop_pool_ids: list[int] = Field(default_factory=list)
+
+
+class HttpProxyEndpointUpdateRequest(BaseModel):
+    name: str | None = None
+    listen_host: str | None = None
+    listen_port: int | None = Field(default=None, ge=1, le=65535)
+    inbound_type: str | None = None
+    enabled: bool | None = None
+    sticky_ttl_sec: int | None = Field(default=None, ge=1, le=7 * 24 * 3600)
+    session_missing_action: str | None = None
+    session_header_names: list[str] | None = None
+    session_query_param_names: list[str] | None = None
+    connect_session_header_names: list[str] | None = None
+    hop_pool_ids: list[int] | None = None
 
 
 class ChainInstanceCreateRequest(BaseModel):

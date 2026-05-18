@@ -220,6 +220,8 @@ async def test_forward_proxy_gateway_runtime_handles_http_and_connect(tmp_path: 
         connect_registry=ConnectSessionRegistry(),
     )
     runtime = ForwardProxyGatewayRuntime(gateway)
+    runtime.CONNECT_ROUTE_ATTEMPTS = 1
+    runtime._connect_preflight_url = lambda target: ""
 
     try:
         await runtime.start()
@@ -254,7 +256,136 @@ async def test_forward_proxy_gateway_runtime_handles_http_and_connect(tmp_path: 
         assert echoed == b"ping"
         assert captured["connect_payloads"] == [b"ping"]
         assert str(chain_service.calls[1][0]).startswith("connect:")
+
+        reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)
+        writer.write(
+            b"CONNECT api.example.com:443 HTTP/1.1\r\n"
+            b"Host: api.example.com:443\r\n\r\n"
+            b"early"
+        )
+        await writer.drain()
+        connect_response = await _read_until_headers(reader)
+        assert b"200 Connection Established" in connect_response
+        echoed = await reader.readexactly(5)
+        writer.close()
+        await writer.wait_closed()
+
+        assert echoed == b"early"
+        assert captured["connect_payloads"][-1] == b"early"
     finally:
         await runtime.stop()
         proxy_server.close()
         await proxy_server.wait_closed()
+
+
+@pytest.mark.anyio
+async def test_forward_proxy_gateway_connect_preflight_retries_failed_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = SQLiteProxyStorage(tmp_path / "gateway-runtime-retry.db")
+    good_port = _pick_free_port()
+    listen_port = _pick_free_port()
+    captured: dict[str, object] = {"failures": [], "ensured": []}
+
+    async def good_proxy_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            head = await _read_until_headers(reader)
+            request_line = head.split(b"\r\n", 1)[0]
+            if request_line.startswith(b"CONNECT "):
+                writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                await writer.drain()
+                payload = await reader.read(1024)
+                if payload:
+                    writer.write(payload)
+                    await writer.drain()
+                return
+            body = b"ok"
+            writer.write(
+                b"HTTP/1.1 200 OK\r\n"
+                + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode("latin-1")
+                + body
+            )
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    good_server = await asyncio.start_server(good_proxy_handler, "127.0.0.1", good_port)
+
+    class RetryChainService(FakeChainService):
+        def __init__(self):
+            super().__init__()
+            self.index = 0
+
+        def route_request(self, session_id="", pool_id=0, target_domain="", live_instance_ids=None):
+            self.calls.append((session_id, pool_id, target_domain, live_instance_ids))
+            key = "front-bad" if self.index == 0 else "front-good"
+            self.index += 1
+            return {
+                "front_node": {"key": key},
+                "exit_node": {"key": "exit-1"},
+                "hop_node_keys": [key, "exit-1"],
+                "endpoint_id": 0,
+                "route_signature": f"{key}>exit-1",
+                "lease_created": bool(session_id),
+                "bound_instance_id": "",
+                "instance_reused": False,
+            }
+
+    class RetryInstanceManager(FakeInstanceManager):
+        def ensure_instance(self, pool_id, front_node_key, exit_node_key, inbound_type="http", listen=None):
+            captured.setdefault("ensured", []).append(front_node_key)
+            if front_node_key == "front-bad":
+                return {"instance_id": "bad-inst", "listen": "127.0.0.1", "port": good_port, "status": "running"}
+            return {"instance_id": "good-inst", "listen": "127.0.0.1", "port": good_port, "status": "running"}
+
+        def mark_instance_failed(self, instance_id: str, error: str = "") -> None:
+            captured.setdefault("failures", []).append((instance_id, error))
+
+    chain_service = RetryChainService()
+    gateway = ForwardProxyGateway(
+        storage=storage,
+        pool_service=FakePoolService({"id": 7}),
+        chain_service=chain_service,
+        chain_instance_manager=RetryInstanceManager(),
+        config=HttpGatewayConfig(
+            enabled=True,
+            listen_host="127.0.0.1",
+            listen_port=listen_port,
+            default_pool_id=7,
+            session_missing_action="RANDOM",
+        ),
+        connect_registry=ConnectSessionRegistry(),
+    )
+    runtime = ForwardProxyGatewayRuntime(gateway)
+    runtime.CONNECT_ROUTE_ATTEMPTS = 2
+    runtime.CONNECT_PREFLIGHT_TIMEOUT_SEC = 1
+
+    async def fake_preflight(route: dict, target_url: str, headers: dict[str, str]) -> None:
+        del target_url, headers
+        if route["instance"]["instance_id"] == "bad-inst":
+            raise RuntimeError("preflight failed")
+
+    monkeypatch.setattr(runtime, "_preflight_instance_http_request", fake_preflight)
+
+    try:
+        await runtime.start()
+        reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)
+        writer.write(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+        await writer.drain()
+        response = await _read_until_headers(reader)
+        assert b"200 Connection Established" in response
+        writer.write(b"ping")
+        await writer.drain()
+        echoed = await reader.readexactly(4)
+        writer.close()
+        await writer.wait_closed()
+
+        assert echoed == b"ping"
+        assert captured["ensured"] == ["front-bad", "front-good"]
+        assert captured["failures"][0][0] == "bad-inst"
+    finally:
+        await runtime.stop()
+        good_server.close()
+        await good_server.wait_closed()

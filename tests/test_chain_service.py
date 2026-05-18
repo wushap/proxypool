@@ -341,6 +341,7 @@ class TestStorage:
         lease = storage.upsert_sticky_lease(
             session_id="user1",
             pool_id=1,
+            endpoint_id=0,
             instance_id="inst-1",
             exit_node_key="node1",
             egress_ip="1.2.3.4",
@@ -385,6 +386,7 @@ class TestStorage:
         lease = storage.upsert_sticky_lease(
             session_id="sess-1",
             pool_id=7,
+            endpoint_id=0,
             instance_id="inst-1",
             exit_node_key="exit-1",
             egress_ip="1.2.3.4",
@@ -400,9 +402,12 @@ class TestStorage:
         item = storage.upsert_chain_egress_instance(
             instance_id="chain-a",
             pool_id=1,
+            endpoint_id=0,
             backend_type="mihomo",
             front_node_key="front-1",
             exit_node_key="exit-1",
+            hop_node_keys=["front-1", "exit-1"],
+            route_signature="front-1>exit-1",
             listen="127.0.0.1",
             port=18080,
             inbound_type="http",
@@ -591,3 +596,101 @@ class TestProxyChainService:
         lease = storage.get_sticky_lease("sess-1", 9)
         assert lease is not None
         assert lease["session_id"] == "sess-1"
+
+    def test_route_request_supports_endpoint_multi_hop(self, storage):
+        hop1 = ProxyNode(protocol="http", host="1.1.1.1", port=8080, name="hop-1", raw_link="http://1.1.1.1:8080")
+        hop2 = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="hop-2", raw_link="socks://2.2.2.2:1080")
+        hop3 = ProxyNode(protocol="trojan", host="3.3.3.3", port=443, name="hop-3", raw_link="trojan://3.3.3.3:443")
+        storage.upsert_proxy(hop1)
+        storage.upsert_proxy(hop2)
+        storage.upsert_proxy(hop3)
+        storage.update_test_result(hop1.normalized_key(), available=True, latency_ms=10)
+        storage.update_test_result(hop2.normalized_key(), available=True, latency_ms=20)
+        storage.update_test_result(hop3.normalized_key(), available=True, latency_ms=30)
+
+        pool1 = storage.create_proxy_pool(name="pool-1", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="pool-2", filters={"protocol": "socks"})
+        pool3 = storage.create_proxy_pool(name="pool-3", filters={"protocol": "trojan"})
+        endpoint = storage.create_http_proxy_endpoint(name="ep-1", listen_port=18899)
+        storage.replace_http_proxy_endpoint_hops(int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"]), int(pool3["id"])])
+
+        service = ProxyChainService(storage)
+        result = service.route_request("sess-ep-1", int(pool1["id"]), int(endpoint["id"]), "api.example.com")
+
+        assert result is not None
+        assert result["endpoint_id"] == int(endpoint["id"])
+        assert result["hop_node_keys"] == [
+            hop1.normalized_key(),
+            hop2.normalized_key(),
+            hop3.normalized_key(),
+        ]
+        assert result["route_signature"] == f"pool-{pool1['id']}>pool-{pool2['id']}>pool-{pool3['id']}"
+
+    def test_endpoint_route_failure_clears_lease_and_avoids_failed_route(self, storage):
+        front_bad = ProxyNode(protocol="http", host="1.1.1.1", port=8080, name="front-bad", raw_link="http://1.1.1.1:8080")
+        front_good = ProxyNode(protocol="http", host="1.1.1.2", port=8080, name="front-good", raw_link="http://1.1.1.2:8080")
+        exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-only", raw_link="socks://2.2.2.2:1080")
+        for node in [front_bad, front_good, exit_node]:
+            storage.upsert_proxy(node)
+            storage.update_test_result(node.normalized_key(), available=True, latency_ms=10)
+
+        pool1 = storage.create_proxy_pool(name="pool-front", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="pool-exit", filters={"protocol": "socks"})
+        endpoint = storage.create_http_proxy_endpoint(name="ep-1", listen_port=18899)
+        storage.replace_http_proxy_endpoint_hops(int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])])
+
+        service = ProxyChainService(storage)
+        failed_hops = [front_bad.normalized_key(), exit_node.normalized_key()]
+        storage.upsert_sticky_lease(
+            session_id="sess-1",
+            pool_id=int(pool1["id"]),
+            endpoint_id=int(endpoint["id"]),
+            instance_id="inst-bad",
+            exit_node_key=exit_node.normalized_key(),
+            egress_ip="2.2.2.2",
+            expires_at="2099-01-01T00:00:00+00:00",
+            last_accessed="2026-01-01T00:00:00+00:00",
+        )
+
+        service.report_endpoint_route_failure(
+            endpoint_id=int(endpoint["id"]),
+            pool_id=int(pool1["id"]),
+            session_id="sess-1",
+            hop_node_keys=failed_hops,
+        )
+        result = service.route_request("", int(pool1["id"]), int(endpoint["id"]), "api.example.com")
+
+        assert storage.get_sticky_lease("sess-1", int(pool1["id"]), int(endpoint["id"])) is None
+        assert result is not None
+        assert result["hop_node_keys"] == [front_good.normalized_key(), exit_node.normalized_key()]
+
+    def test_endpoint_route_success_prefers_known_healthy_route(self, storage, monkeypatch):
+        front_bad = ProxyNode(protocol="http", host="1.1.1.1", port=8080, name="front-bad", raw_link="http://1.1.1.1:8080")
+        front_good = ProxyNode(protocol="http", host="1.1.1.2", port=8080, name="front-good", raw_link="http://1.1.1.2:8080")
+        exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-only", raw_link="socks://2.2.2.2:1080")
+        for node in [front_bad, front_good, exit_node]:
+            storage.upsert_proxy(node)
+            storage.update_test_result(node.normalized_key(), available=True, latency_ms=10)
+
+        pool1 = storage.create_proxy_pool(name="pool-front", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="pool-exit", filters={"protocol": "socks"})
+        endpoint = storage.create_http_proxy_endpoint(name="ep-1", listen_port=18899)
+        storage.replace_http_proxy_endpoint_hops(int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])])
+
+        service = ProxyChainService(storage)
+        service.report_endpoint_route_success(
+            endpoint_id=int(endpoint["id"]),
+            hop_node_keys=[front_good.normalized_key(), exit_node.normalized_key()],
+        )
+
+        def pick_bad_first(pool_id, exclude_keys, target_domain):
+            del target_domain
+            if int(pool_id) == int(pool1["id"]):
+                return storage.get_proxy_by_key(front_bad.normalized_key())
+            return storage.get_proxy_by_key(exit_node.normalized_key())
+
+        monkeypatch.setattr(service, "_pick_pool_candidate", pick_bad_first)
+        result = service.route_request("", int(pool1["id"]), int(endpoint["id"]), "api.example.com")
+
+        assert result is not None
+        assert result["hop_node_keys"] == [front_good.normalized_key(), exit_node.normalized_key()]
