@@ -42,7 +42,7 @@ chmod +x bin/sing-box bin/mihomo
 docker compose up -d --build
 ```
 
-打开：`http://127.0.0.1:8080/`
+打开：`http://127.0.0.1:18080/`
 
 容器默认挂载：
 
@@ -51,7 +51,7 @@ docker compose up -d --build
 - `./configs:/app/configs`：订阅源、路由等配置
 - `./bin:/app/bin:ro`：`sing-box`、`mihomo` 二进制
 
-Docker Compose 默认使用 `network_mode: host`。HTTP 代理端点是独立监听端口，后续新增端口不需要再改 `ports` 映射；需要从其他机器访问时，请在端点配置里把监听地址设为 `0.0.0.0`。
+Docker Compose 默认使用 `network_mode: host`。WebUI/API 默认监听 `18080`，HTTP 代理端点默认监听 `18899`。后续新增端口不需要再改 `ports` 映射；需要从其他机器访问时，请在端点配置里把监听地址设为 `0.0.0.0`。
 
 详细说明见 `guide/deploy/docker.md`。
 

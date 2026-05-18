@@ -9,6 +9,8 @@ services:
     restart: unless-stopped
     environment:
       PROXYPOOL_DB_PATH: /app/data/proxies.db
+      PROXYPOOL_WEBUI_HOST: ${PROXYPOOL_WEBUI_HOST:-0.0.0.0}
+      PROXYPOOL_WEBUI_PORT: ${PROXYPOOL_WEBUI_PORT:-18080}
       PROXYPOOL_OUTPUT_DIR: /app/output
       PROXYPOOL_SOURCES_FILE: /app/configs/sources.txt
       PROXYPOOL_SINGBOX_ROUTES_FILE: /app/configs/singbox-routes.json
@@ -19,7 +21,7 @@ services:
       PROXYPOOL_MIHOMO_RUNTIME_DIR: /app/data/runtime/mihomo
       PROXYPOOL_API_KEY: ${PROXYPOOL_API_KEY:-}
       PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST: ${PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST:-0.0.0.0}
-      PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT: ${PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT:-8899}
+      PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT: ${PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT:-18899}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - ./data:/app/data

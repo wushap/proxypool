@@ -17,6 +17,8 @@ FROM python:3.12-slim-bookworm AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
+    PROXYPOOL_WEBUI_HOST=0.0.0.0 \
+    PROXYPOOL_WEBUI_PORT=8080 \
     PROXYPOOL_DB_PATH=/app/data/proxies.db \
     PROXYPOOL_OUTPUT_DIR=/app/output \
     PROXYPOOL_SOURCES_FILE=/app/configs/sources.txt \
@@ -47,6 +49,6 @@ RUN mkdir -p /app/data/runtime/mihomo /app/output /app/configs /app/bin
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/api/health || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PROXYPOOL_WEBUI_PORT:-8080}/api/health" || exit 1
 
 CMD ["python", "-m", "proxypool.main"]

@@ -35,7 +35,7 @@ docker compose up -d --build
 The compose service uses `network_mode: host`, so the app binds directly on the host network stack. Open the Web UI:
 
 ```text
-http://127.0.0.1:8080/
+http://127.0.0.1:18080/
 ```
 
 On native Linux Docker, host networking means listeners are created directly on the host. On Docker Desktop or WSL-based Docker, host networking may be scoped to the Docker VM rather than the WSL/user host; in that environment, verify access from your actual deployment host before relying on external clients.
@@ -57,8 +57,10 @@ docker compose down
 Common runtime variables:
 
 - `PROXYPOOL_API_KEY` protects mutating API calls with `X-API-Key`.
+- `PROXYPOOL_WEBUI_HOST` defaults to `0.0.0.0` in Docker.
+- `PROXYPOOL_WEBUI_PORT` defaults to `18080` in Docker.
 - `PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST` defaults to `0.0.0.0` in Docker so proxy ports can be reached from outside the host when firewall rules allow it.
-- `PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT` defaults to `8899`.
+- `PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT` defaults to `18899`.
 - `PROXYPOOL_SOURCES_FILE` defaults to `/app/configs/sources.txt`.
 - `PROXYPOOL_DB_PATH` defaults to `/app/data/proxies.db`.
 - `PROXYPOOL_OUTPUT_DIR` defaults to `/app/output`.
@@ -68,12 +70,12 @@ Common runtime variables:
 Example:
 
 ```bash
-PROXYPOOL_API_KEY=change-me PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT=18899 docker compose up -d --build
+PROXYPOOL_API_KEY=change-me PROXYPOOL_WEBUI_PORT=18080 PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT=18899 docker compose up -d --build
 ```
 
 ## HTTP Proxy Endpoint Ports
 
-The Web UI/API listens on host port `8080`. HTTP proxy endpoints are separate listeners. Because compose uses host networking, newly created endpoint ports do not need explicit `ports` mappings.
+The Web UI/API listens on host port `18080` by default. HTTP proxy endpoints are separate listeners and use `18899` by default. Because compose uses host networking, newly created endpoint ports do not need explicit `ports` mappings.
 
 Use these rules:
 
