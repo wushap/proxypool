@@ -12,6 +12,13 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_LATENCY_TEST_URLS = [
+    "https://www.cloudflare.com/cdn-cgi/trace",
+    "https://www.gstatic.com/generate_204",
+    "https://cp.cloudflare.com/generate_204",
+]
+
+
 @dataclass(slots=True)
 class ProbeResult:
     normalized_key: str
@@ -183,13 +190,15 @@ class SingboxProber:
     def __init__(
         self,
         binary: str = "sing-box",
-        test_url: str = "https://www.cloudflare.com/cdn-cgi/trace",
+        test_url: str = DEFAULT_LATENCY_TEST_URLS[0],
+        test_urls: list[str] | None = None,
         timeout_sec: float = 8.0,
         startup_timeout_sec: float = 2.0,
         openai_check_timeout_sec: float = 6.0,
     ) -> None:
         self.binary = binary
-        self.test_url = test_url
+        self.test_urls = _normalize_test_urls(test_urls, test_url)
+        self.test_url = self.test_urls[0]
         self.timeout_sec = timeout_sec
         self.startup_timeout_sec = startup_timeout_sec
         self.openai_check_timeout_sec = openai_check_timeout_sec
@@ -302,26 +311,9 @@ class SingboxProber:
                 if curl is None:
                     return self._tcp_fallback(node, key, error_prefix="curl not found")
 
-                started = time.perf_counter()
-                cmd = [
-                    curl,
-                    "-sS",
-                    "-o",
-                    "/dev/null",
-                    "-w",
-                    "%{time_total}",
-                    "--max-time",
-                    str(int(self.timeout_sec)),
-                    "--proxy",
-                    f"socks5h://127.0.0.1:{local_port}",
-                    self.test_url,
-                ]
-                completed = subprocess.run(cmd, check=False, capture_output=True, text=True)
-                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                ok, latency_ms, error = self._curl_latency_probe(curl, local_port)
 
-                if completed.returncode == 0:
-                    text = (completed.stdout or "").strip()
-                    latency_ms = _parse_curl_time_ms(text) or elapsed_ms
+                if ok:
                     unlocked, unlock_status = self._check_openai_unlock(local_port)
                     return ProbeResult(
                         normalized_key=key,
@@ -331,7 +323,6 @@ class SingboxProber:
                         openai_status=unlock_status,
                     )
 
-                error = (completed.stderr or "").strip() or f"curl exit={completed.returncode}"
                 return ProbeResult(normalized_key=key, available=False, error=error[:1000])
             finally:
                 _stop_process(proc)
@@ -383,26 +374,9 @@ class SingboxProber:
                 if curl is None:
                     return ProbeResult(normalized_key=key, available=False, error="curl not found")
 
-                started = time.perf_counter()
-                cmd = [
-                    curl,
-                    "-sS",
-                    "-o",
-                    "/dev/null",
-                    "-w",
-                    "%{time_total}",
-                    "--max-time",
-                    str(int(self.timeout_sec)),
-                    "--proxy",
-                    f"socks5h://127.0.0.1:{local_port}",
-                    self.test_url,
-                ]
-                completed = subprocess.run(cmd, check=False, capture_output=True, text=True)
-                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                ok, latency_ms, error = self._curl_latency_probe(curl, local_port)
 
-                if completed.returncode == 0:
-                    text = (completed.stdout or "").strip()
-                    latency_ms = _parse_curl_time_ms(text) or elapsed_ms
+                if ok:
                     unlocked, unlock_status = self._check_openai_unlock(local_port)
                     return ProbeResult(
                         normalized_key=key,
@@ -412,7 +386,6 @@ class SingboxProber:
                         openai_status=unlock_status,
                     )
 
-                error = (completed.stderr or "").strip() or f"curl exit={completed.returncode}"
                 return ProbeResult(normalized_key=key, available=False, error=error[:1000])
             finally:
                 _stop_process(proc)
@@ -454,26 +427,9 @@ class SingboxProber:
                 if curl is None:
                     return await self._tcp_fallback_async(node, key, error_prefix="curl not found")
 
-                started = time.perf_counter()
-                cmd = [
-                    curl,
-                    "-sS",
-                    "-o",
-                    "/dev/null",
-                    "-w",
-                    "%{time_total}",
-                    "--max-time",
-                    str(int(self.timeout_sec)),
-                    "--proxy",
-                    f"socks5h://127.0.0.1:{local_port}",
-                    self.test_url,
-                ]
-                returncode, stdout_text, stderr_text = await _run_command_async(cmd, timeout_sec=self.timeout_sec + 1.0)
-                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                ok, latency_ms, error = await self._curl_latency_probe_async(curl, local_port)
 
-                if returncode == 0:
-                    text = (stdout_text or "").strip()
-                    latency_ms = _parse_curl_time_ms(text) or elapsed_ms
+                if ok:
                     unlocked, unlock_status = await self._check_openai_unlock_async(local_port)
                     return ProbeResult(
                         normalized_key=key,
@@ -483,7 +439,6 @@ class SingboxProber:
                         openai_status=unlock_status,
                     )
 
-                error = (stderr_text or "").strip() or f"curl exit={returncode}"
                 return ProbeResult(normalized_key=key, available=False, error=error[:1000])
             finally:
                 await _stop_process_async(proc)
@@ -537,25 +492,8 @@ class SingboxProber:
                 if curl is None:
                     return ProbeResult(normalized_key=key, available=False, error="curl not found")
 
-                started = time.perf_counter()
-                cmd = [
-                    curl,
-                    "-sS",
-                    "-o",
-                    "/dev/null",
-                    "-w",
-                    "%{time_total}",
-                    "--max-time",
-                    str(int(self.timeout_sec)),
-                    "--proxy",
-                    f"socks5h://127.0.0.1:{local_port}",
-                    self.test_url,
-                ]
-                returncode, stdout_text, stderr_text = await _run_command_async(cmd, timeout_sec=self.timeout_sec + 1.0)
-                elapsed_ms = int((time.perf_counter() - started) * 1000)
-                if returncode == 0:
-                    text = (stdout_text or "").strip()
-                    latency_ms = _parse_curl_time_ms(text) or elapsed_ms
+                ok, latency_ms, error = await self._curl_latency_probe_async(curl, local_port)
+                if ok:
                     unlocked, unlock_status = await self._check_openai_unlock_async(local_port)
                     return ProbeResult(
                         normalized_key=key,
@@ -564,7 +502,6 @@ class SingboxProber:
                         openai_unlocked=unlocked,
                         openai_status=unlock_status,
                     )
-                error = (stderr_text or "").strip() or f"curl exit={returncode}"
                 return ProbeResult(normalized_key=key, available=False, error=error[:1000])
             finally:
                 await _stop_process_async(proc)
@@ -680,6 +617,60 @@ class SingboxProber:
             except OSError:
                 await asyncio.sleep(0.05)
         return False
+
+    def _curl_latency_probe(self, curl: str, local_port: int) -> tuple[bool, int | None, str]:
+        errors: list[str] = []
+        for url in self.test_urls:
+            started = time.perf_counter()
+            cmd = [
+                curl,
+                "-L",
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{time_total}",
+                "--max-time",
+                str(max(1, int(self.timeout_sec))),
+                "--proxy",
+                f"socks5h://127.0.0.1:{local_port}",
+                url,
+            ]
+            completed = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if completed.returncode == 0:
+                text = (completed.stdout or "").strip()
+                return True, _parse_curl_time_ms(text) or elapsed_ms, ""
+            error = (completed.stderr or "").strip() or f"curl exit={completed.returncode}"
+            errors.append(f"{url}: {error[:180]}")
+        return False, None, "; ".join(errors)[-1000:] or "all latency test urls failed"
+
+    async def _curl_latency_probe_async(self, curl: str, local_port: int) -> tuple[bool, int | None, str]:
+        errors: list[str] = []
+        for url in self.test_urls:
+            started = time.perf_counter()
+            cmd = [
+                curl,
+                "-L",
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{time_total}",
+                "--max-time",
+                str(max(1, int(self.timeout_sec))),
+                "--proxy",
+                f"socks5h://127.0.0.1:{local_port}",
+                url,
+            ]
+            returncode, stdout_text, stderr_text = await _run_command_async(cmd, timeout_sec=self.timeout_sec + 1.0)
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if returncode == 0:
+                text = (stdout_text or "").strip()
+                return True, _parse_curl_time_ms(text) or elapsed_ms, ""
+            error = (stderr_text or "").strip() or f"curl exit={returncode}"
+            errors.append(f"{url}: {error[:180]}")
+        return False, None, "; ".join(errors)[-1000:] or "all latency test urls failed"
 
     def _tcp_fallback(self, node: dict[str, Any], key: str, error_prefix: str) -> ProbeResult:
         host = str(node.get("host") or "")
@@ -838,6 +829,17 @@ def _parse_curl_speed_metrics(text: str) -> tuple[int, int | None]:
     except ValueError:
         bytes_downloaded = 0
     return bytes_downloaded, _parse_curl_time_ms(parts[1])
+
+
+def _normalize_test_urls(test_urls: list[str] | None, test_url: str) -> list[str]:
+    values: list[str] = []
+    for item in [test_url, *(test_urls or []), *DEFAULT_LATENCY_TEST_URLS]:
+        text = str(item or "").strip()
+        if not text or not text.startswith(("http://", "https://")):
+            continue
+        if text not in values:
+            values.append(text)
+    return values or list(DEFAULT_LATENCY_TEST_URLS)
 
 
 def _stop_process(proc: subprocess.Popen[Any]) -> None:

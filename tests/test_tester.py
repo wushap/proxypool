@@ -7,7 +7,7 @@ from pathlib import Path
 from proxypool.models import ProxyNode
 from proxypool.storage.sqlite import SQLiteProxyStorage
 from proxypool.tester.service import TesterService
-from proxypool.tester.singbox import ProbeResult
+from proxypool.tester.singbox import DEFAULT_LATENCY_TEST_URLS, ProbeResult, SingboxProber
 
 
 class FakeProber:
@@ -114,6 +114,49 @@ class FallbackChainProber:
         if front_host.startswith("front-ok"):
             return ProbeResult(normalized_key=node_key, available=True, latency_ms=66)
         return ProbeResult(normalized_key=node_key, available=False, error="chain down")
+
+
+class TestSingboxProber(unittest.TestCase):
+    def test_latency_test_urls_include_defaults_after_custom_primary(self) -> None:
+        prober = SingboxProber(test_url="https://latency.example.com/ping")
+
+        self.assertEqual(prober.test_url, "https://latency.example.com/ping")
+        self.assertEqual(prober.test_urls[0], "https://latency.example.com/ping")
+        for url in DEFAULT_LATENCY_TEST_URLS:
+            self.assertIn(url, prober.test_urls)
+
+    def test_latency_probe_falls_back_to_next_url(self) -> None:
+        prober = SingboxProber(
+            test_urls=[
+                "https://one.example.com/ping",
+                "https://two.example.com/ping",
+            ]
+        )
+        calls: list[str] = []
+
+        def fake_run(cmd, check=False, capture_output=True, text=True):
+            del check, capture_output, text
+            calls.append(str(cmd[-1]))
+
+            class Completed:
+                returncode = 0 if calls[-1] == "https://two.example.com/ping" else 28
+                stdout = "0.123"
+                stderr = "timeout"
+
+            return Completed()
+
+        original_run = __import__("subprocess").run
+        try:
+            __import__("subprocess").run = fake_run
+            ok, latency_ms, error = prober._curl_latency_probe("curl", 18080)
+        finally:
+            __import__("subprocess").run = original_run
+
+        self.assertTrue(ok)
+        self.assertEqual(latency_ms, 123)
+        self.assertEqual(error, "")
+        self.assertEqual(calls[:2], ["https://www.cloudflare.com/cdn-cgi/trace", "https://one.example.com/ping"])
+        self.assertEqual(calls[2], "https://two.example.com/ping")
 
 
 class TestTesterService(unittest.TestCase):
