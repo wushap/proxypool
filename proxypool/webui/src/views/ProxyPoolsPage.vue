@@ -4,7 +4,7 @@
                 <div class="section-header">
                   <div>
                     <h2 class="section-title">多跳代理池</h2>
-                    <p class="form-hint">代理池、HTTP 网关、链服务和后端链路统一在本页配置；重复入口已收敛到对应工作区。</p>
+                    <p class="form-hint">代理池、HTTP 代理端点、链服务和后端链路统一在本页配置；端到端入口以 HTTP 代理端点为准。</p>
                   </div>
                   <div class="btn-group">
                     <button @click="onLoadProxyPools" :disabled="isActionRunning('loadProxyPools')" class="btn btn-secondary">
@@ -15,7 +15,7 @@
 
                 <div class="tabs workspace-tabs">
                   <button @click="proxyPoolTab = 'pools'" :class="{ active: proxyPoolTab === 'pools' }" class="tab-btn">代理池</button>
-                  <button @click="proxyPoolTab = 'gateway'" :class="{ active: proxyPoolTab === 'gateway' }" class="tab-btn">HTTP 网关</button>
+                  <button @click="proxyPoolTab = 'gateway'" :class="{ active: proxyPoolTab === 'gateway' }" class="tab-btn">HTTP 代理端点</button>
                   <button @click="proxyPoolTab = 'gateway-status'" :class="{ active: proxyPoolTab === 'gateway-status' }" class="tab-btn">网关状态</button>
                   <button @click="proxyPoolTab = 'chain'" :class="{ active: proxyPoolTab === 'chain' }" class="tab-btn">链服务</button>
                   <button @click="proxyPoolTab = 'backend'" :class="{ active: proxyPoolTab === 'backend' }" class="tab-btn">后端链路</button>
@@ -129,7 +129,7 @@
                 </div>
 
                 <h3 class="section-divider">池级链路配置</h3>
-                <p class="form-hint" style="margin-bottom: 12px;">为某个代理池配置会话粘性、统一网关路径和按 URL 前缀的会话头提取规则。当前选中代理池: <span class="mono">{{ selectedPoolNameForChain || '-' }}</span></p>
+                <p class="form-hint" style="margin-bottom: 12px;">为某个代理池配置会话粘性和按 URL 前缀的会话头提取规则。当前选中代理池: <span class="mono">{{ selectedPoolNameForChain || '-' }}</span></p>
 
                 <div class="card" style="margin-bottom: 12px;">
                   <div class="card-body">
@@ -166,11 +166,6 @@
                       <div class="form-group" style="flex: 1;">
                         <label class="form-label">HTTP 会话 Query</label>
                         <textarea v-model="poolChainForm.session_query_param_names_text" class="textarea mono" style="height: 88px;" placeholder="session"></textarea>
-                      </div>
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">统一网关路径前缀</label>
-                        <input v-model.trim="poolChainForm.gateway_path_prefix" type="text" placeholder="/proxy/pool-a" class="input mono" />
-                        <p class="form-hint" style="margin-top: 6px;">用于通过统一网关按路径访问该池。</p>
                       </div>
                     </div>
                   </div>
@@ -343,7 +338,7 @@
                         <th style="width: 140px;">监听</th>
                         <th>跳点顺序</th>
                         <th style="width: 70px;">状态</th>
-                        <th style="width: 220px;">操作</th>
+                        <th style="width: 180px;">操作</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -356,7 +351,7 @@
                         <td>
                           <div class="btn-group">
                             <button @click="editGatewayEndpoint(item)" class="btn btn-xs btn-ghost">编辑</button>
-                            <button @click="onSelectGatewayEndpoint(item)" class="btn btn-xs btn-secondary">设为默认</button>
+                            <button @click="onOpenGatewayEndpointStatus(item)" class="btn btn-xs btn-secondary">状态</button>
                             <button @click="onRunGatewayEndpointRouteTest(item)" :disabled="isActionRunning('routeTestEndpoint-' + item.id)" class="btn btn-xs btn-ghost">测路由</button>
                             <button @click="onDeleteGatewayEndpoint(item.id)" :disabled="isActionRunning('deleteGatewayEndpoint-' + item.id)" class="btn btn-xs btn-danger">删除</button>
                           </div>
@@ -366,39 +361,15 @@
                   </table>
                 </div>
 
-                <h3 class="section-divider">统一 HTTP 网关</h3>
-                <p class="form-hint" style="margin-bottom: 12px;">保留一个默认接入配置用于兼容旧入口；实际运行时会并行启动所有已启用端点。</p>
-
                 <div class="card" style="margin-bottom: 12px;">
                   <div class="card-body">
+                    <h3 class="settings-title">端点服务</h3>
                     <div class="settings-row">
                       <div class="form-group" style="flex: 1;">
-                        <label class="form-label">启用</label>
+                        <label class="form-label">端点服务</label>
                         <select v-model="gatewayConfigForm.enabled" class="select">
                           <option :value="false">关闭</option>
                           <option :value="true">开启</option>
-                        </select>
-                      </div>
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">监听地址</label>
-                        <input v-model.trim="gatewayConfigForm.listen_host" class="input mono" />
-                      </div>
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">监听端口</label>
-                        <input v-model.number="gatewayConfigForm.listen_port" type="number" min="1" class="input mono" />
-                      </div>
-                      <div class="form-group" style="flex: 1.4;">
-                        <label class="form-label">默认端点</label>
-                        <select v-model.number="gatewayConfigForm.endpoint_id" class="select">
-                          <option :value="0">未选择</option>
-                          <option v-for="item in gatewayEndpoints" :key="'gateway-endpoint-' + item.id" :value="Number(item.id)">{{ item.name }} (#{{ item.id }})</option>
-                        </select>
-                      </div>
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">缺失会话动作</label>
-                        <select v-model="gatewayConfigForm.session_missing_action" class="select">
-                          <option value="RANDOM">RANDOM</option>
-                          <option value="REJECT">REJECT</option>
                         </select>
                       </div>
                       <div class="form-group" style="flex: 1;">
@@ -412,21 +383,7 @@
                         <label class="form-label">检测间隔(秒)</label>
                         <input v-model.number="gatewayConfigForm.health_check_interval_sec" type="number" min="5" max="3600" class="input mono" />
                       </div>
-                      <button @click="onSaveGatewayConfig()" :disabled="isActionRunning('saveGatewayConfig')" class="btn btn-primary self-end">保存网关配置</button>
-                    </div>
-                    <div class="settings-row" style="margin-top: 8px;">
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">HTTP 会话头</label>
-                        <textarea v-model="gatewayConfigForm.http_session_header_names_text" class="textarea mono" style="height: 88px;" placeholder="X-ProxyPool-Session"></textarea>
-                      </div>
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">HTTP 会话 Query</label>
-                        <textarea v-model="gatewayConfigForm.http_session_query_names_text" class="textarea mono" style="height: 88px;" placeholder="session"></textarea>
-                      </div>
-                      <div class="form-group" style="flex: 1;">
-                        <label class="form-label">CONNECT 会话头</label>
-                        <textarea v-model="gatewayConfigForm.connect_session_header_names_text" class="textarea mono" style="height: 88px;" placeholder="X-ProxyPool-Session"></textarea>
-                      </div>
+                      <button @click="onSaveGatewayConfig()" :disabled="isActionRunning('saveGatewayConfig')" class="btn btn-primary self-end">保存运行配置</button>
                     </div>
                   </div>
                 </div>
@@ -434,38 +391,7 @@
                 <div class="settings-grid">
                   <div class="card">
                     <div class="card-body">
-                      <h3 class="settings-title">接入方式</h3>
-                      <p class="form-hint">默认 HTTP proxy = {{ gatewayConfigForm.listen_host }}:{{ gatewayConfigForm.listen_port }}</p>
-                      <p class="form-hint">默认 HTTPS proxy = {{ gatewayConfigForm.listen_host }}:{{ gatewayConfigForm.listen_port }}</p>
-                      <p v-for="item in gatewayEndpoints" :key="'access-' + item.id" class="form-hint">端点 {{ item.name }} = {{ item.listen_host }}:{{ item.listen_port }} / {{ formatEndpointHops(item) }}</p>
-                      <button @click="onLoadGatewayStatus()" :disabled="isActionRunning('loadGatewayStatus')" class="btn btn-secondary">刷新网关状态</button>
-                      <div v-if="gatewayStatus" style="margin-top: 12px;">
-                        <div class="status-bar">
-                          <div class="status-item">
-                            <span class="text-muted">运行状态</span>
-                            <span class="badge" :class="gatewayStatus.runtime?.running ? 'badge-success' : 'badge-neutral'">{{ gatewayStatus.runtime?.running ? 'RUNNING' : 'STOPPED' }}</span>
-                          </div>
-                          <div class="status-item">
-                            <span class="text-muted">租约数</span>
-                            <span class="mono text-xs">{{ (gatewayStatus.leases || []).length }}</span>
-                          </div>
-                          <div class="status-item">
-                            <span class="text-muted">实例数</span>
-                            <span class="mono text-xs">{{ (gatewayStatus.instances || []).length }}</span>
-                          </div>
-                          <div class="status-item">
-                            <span class="text-muted">端点监听</span>
-                            <span class="mono text-xs">{{ (gatewayStatus.runtime?.items || []).length }}</span>
-                          </div>
-                        </div>
-                        <pre class="mono text-xs" style="white-space: pre-wrap; margin-top: 12px;">{{ JSON.stringify(gatewayStatus.runtime, null, 2) }}</pre>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="card">
-                    <div class="card-body">
-                      <h3 class="settings-title">网关测试</h3>
+                      <h3 class="settings-title">端点测试</h3>
                       <div class="settings-row">
                         <div class="form-group" style="flex: 1;">
                           <label class="form-label">目标 URL</label>
@@ -474,7 +400,7 @@
                         <div class="form-group" style="flex: 1;">
                           <label class="form-label">端点</label>
                           <select v-model.number="gatewayTestForm.endpoint_id" class="select">
-                            <option :value="0">使用默认端点</option>
+                            <option :value="0" disabled>选择端点</option>
                             <option v-for="item in gatewayEndpoints" :key="'gateway-test-' + item.id" :value="Number(item.id)">{{ item.name }} (#{{ item.id }})</option>
                           </select>
                         </div>
@@ -482,7 +408,7 @@
                           <label class="form-label">会话 ID</label>
                           <input v-model.trim="gatewayTestForm.session_id" type="text" placeholder="留空则按配置处理" class="input mono" />
                         </div>
-                        <button @click="onRunGatewayTest()" :disabled="isActionRunning('runGatewayTest')" class="btn btn-secondary self-end">测试网关</button>
+                        <button @click="onRunGatewayTest()" :disabled="isActionRunning('runGatewayTest')" class="btn btn-secondary self-end">测试端点</button>
                       </div>
                       <div v-if="gatewayTestResult" style="margin-top: 12px;">
                         <pre class="mono text-xs" style="white-space: pre-wrap;">{{ JSON.stringify(gatewayTestResult, null, 2) }}</pre>

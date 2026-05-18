@@ -105,16 +105,7 @@ export const appOptions = {
         },
       },
       gatewayConfigForm: {
-        enabled: false,
-        listen_host: "127.0.0.1",
-        listen_port: 8899,
-        endpoint_id: 0,
-        default_pool_id: 0,
-        sticky_ttl_sec: 3600,
-        session_missing_action: "RANDOM",
-        http_session_header_names_text: "X-ProxyPool-Session",
-        http_session_query_names_text: "session",
-        connect_session_header_names_text: "X-ProxyPool-Session",
+        enabled: true,
         health_check_enabled: true,
         health_check_interval_sec: 30,
       },
@@ -148,7 +139,6 @@ export const appOptions = {
         session_missing_action: "RANDOM",
         session_header_names_text: "X-ProxyPool-Session",
         session_query_param_names_text: "session",
-        gateway_path_prefix: "",
       },
       poolSessionRuleForm: {
         url_prefix: "",
@@ -345,7 +335,7 @@ export const appOptions = {
     backendInstances() { return Array.isArray(this.backendStatus?.instances) ? this.backendStatus.instances : []; },
     paginatedProxies() { return this.paginateItems(this.proxies || [], "proxies"); },
     selectedGatewayStatusEndpoint() {
-      const id = Number(this.gatewayStatusEndpointId || this.gatewayStatus?.summary?.endpoint_id || this.gatewayConfigForm.endpoint_id || 0);
+      const id = Number(this.gatewayStatusEndpointId || this.gatewayStatus?.summary?.endpoint_id || 0);
       return (this.gatewayEndpoints || []).find(item => Number(item.id) === id) || this.gatewayStatus?.endpoint || null;
     },
     gatewayHealthMonitor() {
@@ -1052,6 +1042,9 @@ export const appOptions = {
     gatewayEndpointsApiBase() {
       return "/api/http-proxy-endpoints";
     },
+    gatewayEndpointServiceConfigApi() {
+      return `${this.gatewayEndpointsApiBase()}/service-config`;
+    },
     resetGatewayEndpointForm() {
       this.gatewayEndpointForm = {
         id: 0,
@@ -1107,12 +1100,13 @@ export const appOptions = {
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || "加载 HTTP 端点失败");
       this.gatewayEndpoints = data.items || [];
-      const preferredStatusId = Number(this.gatewayStatusEndpointId || this.gatewayConfigForm.endpoint_id || 0);
+      const preferredStatusId = Number(this.gatewayStatusEndpointId || 0);
       if (!preferredStatusId && this.gatewayEndpoints.length) this.gatewayStatusEndpointId = Number(this.gatewayEndpoints[0].id || 0);
       if (!this.gatewayEndpointForm.id && this.gatewayEndpoints.length) {
-        const preferred = this.gatewayEndpoints.find(item => Number(item.id) === Number(this.gatewayConfigForm.endpoint_id || 0));
-        if (preferred) this.editGatewayEndpoint(preferred);
-        else this.editGatewayEndpoint(this.gatewayEndpoints[0]);
+        this.editGatewayEndpoint(this.gatewayEndpoints[0]);
+      }
+      if (!Number(this.gatewayTestForm.endpoint_id || 0) && this.gatewayEndpoints.length) {
+        this.gatewayTestForm.endpoint_id = Number(this.gatewayEndpoints[0].id || 0);
       }
     },
     gatewayEndpointPayload() {
@@ -1154,21 +1148,20 @@ export const appOptions = {
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || "删除 HTTP 端点失败");
       await this.loadGatewayEndpoints();
-      if (Number(this.gatewayConfigForm.endpoint_id || 0) === Number(endpointId)) {
-        this.gatewayConfigForm.endpoint_id = 0;
-      }
       if (Number(this.gatewayStatusEndpointId || 0) === Number(endpointId)) {
         this.gatewayStatusEndpointId = this.gatewayEndpoints.length ? Number(this.gatewayEndpoints[0].id || 0) : 0;
+      }
+      if (Number(this.gatewayTestForm.endpoint_id || 0) === Number(endpointId)) {
+        this.gatewayTestForm.endpoint_id = this.gatewayEndpoints.length ? Number(this.gatewayEndpoints[0].id || 0) : 0;
       }
       this.resetGatewayEndpointForm();
       await this.loadGatewayStatus();
       this.setMessage("HTTP 端点已删除");
     },
-    async selectGatewayEndpoint(item) {
-      this.gatewayConfigForm.endpoint_id = Number(item?.id || 0);
+    openGatewayEndpointStatus(item) {
       this.gatewayStatusEndpointId = Number(item?.id || 0);
-      await this.saveGatewayConfig();
-      this.setMessage(`默认端点已切换: ${item?.name || item?.id}`);
+      this.proxyPoolTab = "gateway-status";
+      this.loadGatewayStatus();
     },
     async runGatewayEndpointRouteTest(item) {
       const endpointId = Number(item?.id || 0);
@@ -1194,7 +1187,6 @@ export const appOptions = {
         session_missing_action: "RANDOM",
         session_header_names_text: "X-ProxyPool-Session",
         session_query_param_names_text: "session",
-        gateway_path_prefix: "",
       };
       this.poolSessionRuleForm = { url_prefix: "", headers_text: "" };
       this.poolSessionRules = [];
@@ -1218,7 +1210,6 @@ export const appOptions = {
         session_missing_action: String(item?.session_missing_action || "RANDOM"),
         session_header_names_text: this.listTextToMultiline(item?.session_header_names),
         session_query_param_names_text: this.listTextToMultiline(item?.session_query_param_names),
-        gateway_path_prefix: String(item?.gateway_path_prefix || ""),
       };
       this.poolRouteTestResult = null;
       this.poolSessionRuleForm = { url_prefix: "", headers_text: "" };
@@ -1245,7 +1236,6 @@ export const appOptions = {
         session_missing_action: String(this.poolChainForm.session_missing_action || "RANDOM").trim() || "RANDOM",
         session_header_names: this.parseMultilineList(this.poolChainForm.session_header_names_text),
         session_query_param_names: this.parseMultilineList(this.poolChainForm.session_query_param_names_text),
-        gateway_path_prefix: String(this.poolChainForm.gateway_path_prefix || "").trim(),
       };
       const resp = await fetch(`/api/pools/${id}/chain`, {
         method: "PUT",
@@ -1259,21 +1249,12 @@ export const appOptions = {
       this.setMessage("池级链路配置已保存");
     },
     async loadGatewayConfig() {
-      const resp = await fetch(`${this.gatewayApiBase()}/http-config`);
+      const resp = await fetch(this.gatewayEndpointServiceConfigApi());
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "加载网关配置失败");
+      if (!resp.ok) throw new Error(data.detail || "加载 HTTP 端点运行配置失败");
       const item = data.item || {};
       this.gatewayConfigForm = {
         enabled: item.enabled === true,
-        listen_host: String(item.listen_host || "127.0.0.1"),
-        listen_port: Number(item.listen_port || 8899),
-        endpoint_id: Number(item.endpoint_id || 0),
-        default_pool_id: Number(item.default_pool_id || 0),
-        sticky_ttl_sec: Number(item.sticky_ttl_sec || 3600),
-        session_missing_action: String(item.session_missing_action || "RANDOM"),
-        http_session_header_names_text: this.listTextToMultiline(item.http_session_header_names),
-        http_session_query_names_text: this.listTextToMultiline(item.http_session_query_names),
-        connect_session_header_names_text: this.listTextToMultiline(item.connect_session_header_names),
         health_check_enabled: item.health_check_enabled !== false,
         health_check_interval_sec: Number(item.health_check_interval_sec || 30),
       };
@@ -1281,31 +1262,22 @@ export const appOptions = {
     async saveGatewayConfig() {
       const payload = {
         enabled: this.gatewayConfigForm.enabled === true,
-        listen_host: String(this.gatewayConfigForm.listen_host || "").trim() || "127.0.0.1",
-        listen_port: Math.max(1, Number(this.gatewayConfigForm.listen_port || 8899)),
-        endpoint_id: Math.max(0, Number(this.gatewayConfigForm.endpoint_id || 0)),
-        default_pool_id: Math.max(0, Number(this.gatewayConfigForm.default_pool_id || 0)),
-        sticky_ttl_sec: Math.max(1, Number(this.gatewayConfigForm.sticky_ttl_sec || 3600)),
-        session_missing_action: String(this.gatewayConfigForm.session_missing_action || "RANDOM").trim() || "RANDOM",
-        http_session_header_names: this.parseMultilineList(this.gatewayConfigForm.http_session_header_names_text),
-        http_session_query_names: this.parseMultilineList(this.gatewayConfigForm.http_session_query_names_text),
-        connect_session_header_names: this.parseMultilineList(this.gatewayConfigForm.connect_session_header_names_text),
         health_check_enabled: this.gatewayConfigForm.health_check_enabled === true,
         health_check_interval_sec: Math.max(5, Math.min(3600, Number(this.gatewayConfigForm.health_check_interval_sec || 30))),
       };
-      const resp = await fetch(`${this.gatewayApiBase()}/http-config`, {
+      const resp = await fetch(this.gatewayEndpointServiceConfigApi(), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "保存网关配置失败");
+      if (!resp.ok) throw new Error(data.detail || "保存 HTTP 端点运行配置失败");
       await this.loadGatewayConfig();
       await this.loadGatewayStatus();
-      this.setMessage("HTTP 网关配置已保存");
+      this.setMessage("HTTP 端点运行配置已保存");
     },
     async loadGatewayStatus() {
-      const endpointId = Number(this.gatewayStatusEndpointId || this.gatewayConfigForm.endpoint_id || 0);
+      const endpointId = Number(this.gatewayStatusEndpointId || 0);
       const suffix = endpointId > 0 ? `?endpoint_id=${encodeURIComponent(endpointId)}` : "";
       const resp = await fetch(`${this.gatewayApiBase()}/http-status${suffix}`);
       const data = await resp.json();
@@ -1321,6 +1293,7 @@ export const appOptions = {
       this.setMessage("网关健康检测已完成");
     },
     async runGatewayTest() {
+      if (!Number(this.gatewayTestForm.endpoint_id || 0)) throw new Error("请选择 HTTP 代理端点");
       const resp = await fetch(`${this.gatewayApiBase()}/http-test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1334,8 +1307,8 @@ export const appOptions = {
       if (!resp.ok) throw new Error(data.detail || "执行网关测试失败");
       this.gatewayTestResult = data;
       await this.loadGatewayStatus();
-      if (data.ok) this.setMessage("HTTP 网关测试成功");
-      else this.setMessage(data.detail || "HTTP 网关测试失败", true);
+      if (data.ok) this.setMessage("HTTP 端点测试成功");
+      else this.setMessage(data.detail || "HTTP 端点测试失败", true);
     },
     async savePoolSessionRule(poolId = this.selectedPoolIdForChain) {
       const id = Number(poolId || 0);
@@ -1471,7 +1444,7 @@ export const appOptions = {
     async onLoadGatewayEndpoints() { await this.runWithButtonState("loadGatewayEndpoints", () => this.loadGatewayEndpoints()); },
     async onSaveGatewayEndpoint() { await this.runWithButtonState("saveGatewayEndpoint", () => this.saveGatewayEndpoint()); },
     async onDeleteGatewayEndpoint(endpointId) { await this.runWithButtonState(`deleteGatewayEndpoint-${endpointId}`, () => this.deleteGatewayEndpoint(endpointId)); },
-    async onSelectGatewayEndpoint(item) { await this.runWithButtonState(`selectGatewayEndpoint-${item?.id || 0}`, () => this.selectGatewayEndpoint(item)); },
+    async onOpenGatewayEndpointStatus(item) { this.openGatewayEndpointStatus(item); },
     async onRunGatewayEndpointRouteTest(item) { await this.runWithButtonState(`routeTestEndpoint-${item?.id || 0}`, () => this.runGatewayEndpointRouteTest(item)); },
 
     // --- Chain Service ---

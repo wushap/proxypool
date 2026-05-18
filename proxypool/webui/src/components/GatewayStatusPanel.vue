@@ -7,7 +7,7 @@
       </div>
       <div class="btn-group">
         <select v-model.number="gatewayStatusEndpointId" @change="onGatewayStatusEndpointChanged" class="select input-sm" style="min-width: 220px;">
-          <option :value="0">默认端点</option>
+          <option :value="0" disabled>选择端点</option>
           <option v-for="item in gatewayEndpoints" :key="'gateway-status-ep-' + item.id" :value="Number(item.id)">{{ item.name }} (#{{ item.id }})</option>
         </select>
         <button @click="onRunGatewayHealthCheck()" :disabled="isActionRunning('runGatewayHealthCheck')" class="btn btn-secondary">立即检测</button>
@@ -248,7 +248,7 @@ export default {
       this.stopGatewayStatusAutoRefresh();
       if (this.proxyPoolTab !== "gateway-status") return;
       const monitor = this.gatewayHealthMonitor || {};
-      const intervalSec = Number(monitor.interval_sec || this.gatewayConfigForm?.health_check_interval_sec || 30);
+      const intervalSec = Number(monitor.interval_sec || 30);
       const delayMs = Math.max(5000, Math.min(300000, intervalSec * 1000));
       this.gatewayStatusRefreshTimer = setInterval(() => {
         if (this.proxyPoolTab !== "gateway-status" || this.isActionRunning("loadGatewayStatus")) return;

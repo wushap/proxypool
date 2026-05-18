@@ -199,18 +199,29 @@ def test_webui_chain_view_should_use_session_id_instead_of_account() -> None:
     assert "params.set('account'" not in content
 
 
-def test_webui_should_support_global_http_gateway_config() -> None:
+def test_webui_should_use_http_proxy_endpoints_for_gateway_config() -> None:
     content = _read_webui()
+    html = _read_html()
     assert "gatewayConfigForm.enabled" in content
-    assert "gatewayConfigForm.listen_host" in content
-    assert "gatewayConfigForm.listen_port" in content
-    assert "gatewayConfigForm.endpoint_id" in content
-    assert "gatewayConfigForm.default_pool_id" in content
-    assert "gatewayConfigForm.http_session_header_names_text" in content
-    assert "gatewayConfigForm.http_session_query_names_text" in content
-    assert "gatewayConfigForm.connect_session_header_names_text" in content
-    assert "gatewayApiBase()" in content
-    assert "http-config" in content
+    assert "gatewayConfigForm.health_check_enabled" in content
+    assert "gatewayConfigForm.health_check_interval_sec" in content
+    assert "端点服务" in content
+    assert "保存运行配置" in content
+    assert "HTTP 代理端点" in content
+    assert "统一 HTTP 网关" not in content
+    assert "HTTP 网关" not in html
+    assert "统一网关" not in html
+    assert "设为默认" not in content
+    assert "默认端点" not in content
+    assert "gatewayConfigForm.listen_host" not in content
+    assert "gatewayConfigForm.listen_port" not in content
+    assert "gatewayConfigForm.endpoint_id" not in content
+    assert "gatewayConfigForm.default_pool_id" not in content
+    assert "gatewayConfigForm.http_session_header_names_text" not in content
+    assert "gatewayConfigForm.http_session_query_names_text" not in content
+    assert "gatewayConfigForm.connect_session_header_names_text" not in content
+    assert "gatewayEndpointServiceConfigApi" in content
+    assert "/service-config" in content
 
 
 def test_webui_should_support_http_proxy_endpoint_management() -> None:
@@ -229,12 +240,11 @@ def test_webui_should_support_http_proxy_endpoint_management() -> None:
 def test_webui_unified_multi_hop_page_should_include_pool_chain_chain_service_and_backend_config() -> None:
     content = _read_webui()
     assert "proxyPoolTab" in content
-    assert "HTTP 网关" in content
+    assert "HTTP 代理端点" in content
     assert "后端链路" in content
     assert "进程记录" in content
     assert "池级链路配置" in content
     assert "selectedPoolNameForChain" in content
-    assert "poolChainForm.gateway_path_prefix" in content
     assert "会话规则" in content
     assert "poolSessionRuleForm.url_prefix" in content
     assert "测试池路由" in content
@@ -252,8 +262,7 @@ def test_webui_unified_multi_hop_page_should_include_pool_chain_chain_service_an
 
 def test_webui_should_show_standard_proxy_usage_and_gateway_test() -> None:
     content = _read_webui()
-    assert "HTTP proxy" in content
-    assert "HTTPS proxy" in content
+    assert "HTTP 代理端点" in content
     assert "gatewayStatus" in content
     assert "gatewayStatusEndpointId" in content
     assert "网关状态" in content

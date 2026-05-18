@@ -169,7 +169,7 @@ class ProxyPoolChainConfigRequest(BaseModel):
     session_missing_action: str = "RANDOM"
     session_header_names: list[str] = Field(default_factory=list)
     session_query_param_names: list[str] = Field(default_factory=list)
-    gateway_path_prefix: str = ""
+    gateway_path_prefix: str | None = None
 
 
 class HttpGatewayConfigRequest(BaseModel):
@@ -219,6 +219,12 @@ class HttpProxyEndpointUpdateRequest(BaseModel):
     session_query_param_names: list[str] | None = None
     connect_session_header_names: list[str] | None = None
     hop_pool_ids: list[int] | None = None
+
+
+class HttpProxyEndpointServiceConfigRequest(BaseModel):
+    enabled: bool = True
+    health_check_enabled: bool = True
+    health_check_interval_sec: int = Field(default=30, ge=5, le=3600)
 
 
 class ChainInstanceCreateRequest(BaseModel):

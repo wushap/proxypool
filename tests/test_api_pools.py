@@ -214,6 +214,35 @@ async def test_http_gateway_config_api_round_trip(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_http_proxy_endpoint_service_config_api_round_trip(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        put_resp = await client.put(
+            "/api/http-proxy-endpoints/service-config",
+            json={
+                "enabled": True,
+                "health_check_enabled": False,
+                "health_check_interval_sec": 45,
+            },
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.json()["item"] == {
+            "enabled": True,
+            "health_check_enabled": False,
+            "health_check_interval_sec": 45,
+        }
+
+        get_resp = await client.get("/api/http-proxy-endpoints/service-config")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["item"]["enabled"] is True
+        assert get_resp.json()["item"]["health_check_enabled"] is False
+        assert get_resp.json()["item"]["health_check_interval_sec"] == 45
+
+
+@pytest.mark.anyio
 async def test_http_proxy_endpoint_crud_and_route_test(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     app = create_app(settings)

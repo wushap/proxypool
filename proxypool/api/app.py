@@ -28,6 +28,7 @@ from proxypool.api.schemas import (
     ImportUrlsRequest,
     HttpGatewayConfigRequest,
     HttpProxyEndpointCreateRequest,
+    HttpProxyEndpointServiceConfigRequest,
     HttpProxyEndpointUpdateRequest,
     HttpGatewayTestRequest,
     ProxyBulkDeleteRequest,
@@ -870,6 +871,42 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def list_http_proxy_endpoints() -> dict:
         return {"items": storage.list_http_proxy_endpoints()}
 
+    @app.get("/api/http-proxy-endpoints/service-config")
+    async def get_http_proxy_endpoint_service_config() -> dict:
+        config = gateway_config_service.get_config()
+        return {
+            "item": {
+                "enabled": bool(config.enabled),
+                "health_check_enabled": bool(config.health_check_enabled),
+                "health_check_interval_sec": int(config.health_check_interval_sec),
+            }
+        }
+
+    @app.put("/api/http-proxy-endpoints/service-config")
+    async def update_http_proxy_endpoint_service_config(body: HttpProxyEndpointServiceConfigRequest) -> dict:
+        item = gateway_config_service.update_config(
+            enabled=body.enabled,
+            endpoint_id=0,
+            default_pool_id=0,
+            health_check_enabled=body.health_check_enabled,
+            health_check_interval_sec=body.health_check_interval_sec,
+        )
+        app.state.forward_gateway.config = item
+        if item.enabled:
+            try:
+                await gateway_runtime.start()
+            except Exception:
+                pass
+        else:
+            await gateway_runtime.stop()
+        return {
+            "item": {
+                "enabled": bool(item.enabled),
+                "health_check_enabled": bool(item.health_check_enabled),
+                "health_check_interval_sec": int(item.health_check_interval_sec),
+            }
+        }
+
     @app.post("/api/http-proxy-endpoints")
     async def create_http_proxy_endpoint(body: HttpProxyEndpointCreateRequest) -> dict:
         try:
@@ -1689,7 +1726,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     @app.put("/api/pools/{pool_id}/chain")
     async def update_pool_chain(pool_id: int, body: ProxyPoolChainConfigRequest) -> dict:
         try:
-            item = pool_service.update_pool_chain_config(pool_id, **body.model_dump())
+            item = pool_service.update_pool_chain_config(pool_id, **body.model_dump(exclude_none=True))
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"item": item}
