@@ -394,6 +394,14 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             setattr(application.state, attr, None)
 
     app = FastAPI(title="Proxy Pool", version="0.1.0", lifespan=lifespan)
+
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Internal server error: {type(exc).__name__}"},
+        )
+
     app.state.settings = cfg
     app.state.storage = storage
     app.state.collector = collector

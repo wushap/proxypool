@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from proxypool.collector.service import CollectorService
 from proxypool.tester.service import TesterService
+
+logger = logging.getLogger(__name__)
 
 
 class SchedulerService:
@@ -12,6 +15,18 @@ class SchedulerService:
         self.collector = collector
         self.tester = tester
         self._scheduler: Any | None = None
+
+    def _safe_collect(self, sources: list[str]) -> None:
+        try:
+            self.collector.collect_from_sources(sources)
+        except Exception:
+            logger.exception("Scheduled collection failed")
+
+    def _safe_test(self, test_limit: int, test_concurrency: int) -> None:
+        try:
+            asyncio.run(self.tester.run_batch(limit=test_limit, concurrency=test_concurrency))
+        except Exception:
+            logger.exception("Scheduled test run failed")
 
     def start(
         self,
@@ -29,7 +44,7 @@ class SchedulerService:
         scheduler = BackgroundScheduler(timezone="UTC")
 
         scheduler.add_job(
-            func=lambda: self.collector.collect_from_sources(sources),
+            func=lambda: self._safe_collect(sources),
             trigger="interval",
             minutes=max(1, collect_minutes),
             id="collector-job",
@@ -37,9 +52,7 @@ class SchedulerService:
         )
 
         scheduler.add_job(
-            func=lambda: asyncio.run(
-                self.tester.run_batch(limit=test_limit, concurrency=test_concurrency)
-            ),
+            func=lambda: self._safe_test(test_limit, test_concurrency),
             trigger="interval",
             minutes=max(1, test_minutes),
             id="tester-job",

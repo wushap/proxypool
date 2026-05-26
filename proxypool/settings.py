@@ -26,6 +26,16 @@ class AppSettings:
     mihomo_runtime_dir: Path = Path("data/runtime/mihomo")
 
 
+def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+    raw = os.getenv(name, "")
+    if not raw.strip():
+        return default
+    try:
+        return max(lo, min(hi, int(raw)))
+    except ValueError:
+        return default
+
+
 def load_settings() -> AppSettings:
     project_root = Path(__file__).resolve().parents[1]
     local_singbox = project_root / "bin" / "sing-box"
@@ -48,10 +58,10 @@ def load_settings() -> AppSettings:
     test_url = os.getenv("PROXYPOOL_TEST_URL", "https://www.cloudflare.com/cdn-cgi/trace")
     api_key = os.getenv("PROXYPOOL_API_KEY", "")
     http_gateway_default_host = os.getenv("PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST", "127.0.0.1").strip() or "127.0.0.1"
-    http_gateway_default_port = max(1, min(65535, int(os.getenv("PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT", "8899"))))
+    http_gateway_default_port = _env_int("PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT", 8899, 1, 65535)
     backend_engine = os.getenv("PROXYPOOL_BACKEND_ENGINE", "singbox").strip().lower() or "singbox"
-    backend_health_check_sec = max(5, int(os.getenv("PROXYPOOL_BACKEND_HEALTH_CHECK_SEC", "30")))
-    backend_auto_restart_max = max(0, int(os.getenv("PROXYPOOL_BACKEND_AUTO_RESTART_MAX", "3")))
+    backend_health_check_sec = _env_int("PROXYPOOL_BACKEND_HEALTH_CHECK_SEC", 30, 5, 3600)
+    backend_auto_restart_max = _env_int("PROXYPOOL_BACKEND_AUTO_RESTART_MAX", 3, 0, 100)
     mihomo_binary = os.getenv("PROXYPOOL_MIHOMO_BINARY", "").strip() or _default_mihomo_binary(project_root)
     mihomo_runtime_dir = Path(
         os.getenv("PROXYPOOL_MIHOMO_RUNTIME_DIR", str(project_root / "data" / "runtime" / "mihomo"))
