@@ -197,6 +197,7 @@
           <button class="btn btn-primary" @click="goToTasks">任务中心</button>
           <button class="btn btn-secondary" @click="goToSubscriptions">订阅管理</button>
           <button class="btn btn-secondary" @click="goToProxies">代理节点</button>
+          <button class="btn btn-secondary" @click="copyAvailableSubscription">复制可用代理</button>
           <a href="/api/subscription?only_available=true" target="_blank" class="btn btn-secondary">导出订阅</a>
         </div>
       </div>
@@ -336,6 +337,16 @@ export default {
     goToTasks() { this.appState.selectPage('tasks'); },
     goToSubscriptions() { this.appState.selectPage('subscriptions'); },
     goToProxies() { this.appState.selectPage('proxies'); },
+    async copyAvailableSubscription() {
+      try {
+        const resp = await fetch('/api/subscription?only_available=true');
+        const text = await resp.text();
+        if (!text.trim()) { this.appState.setMessage('没有可用的代理节点', true); return; }
+        await navigator.clipboard.writeText(text);
+        const lines = text.split('\n').filter(Boolean).length;
+        this.appState.setMessage(`已复制 ${lines} 个可用代理链接到剪贴板`);
+      } catch (err) { this.appState.setMessage('复制失败: ' + err, true); }
+    },
     taskStatusClass(status) {
       const s = String(status || '');
       if (s === 'running' || s === 'queued') return 'badge-warning';
