@@ -120,7 +120,22 @@
                         <td class="mono text-muted">{{ item.id }}</td>
                         <td><input :value="item.name || ''" @change="onRenamePublishedSubscription(item, $event.target.value)" type="text" class="inline-input" /></td>
                         <td><span class="badge" :class="item.format === 'clash' ? 'badge-success' : 'badge-neutral'">{{ formatPublishedSubscriptionOutput(item.format) }}</span></td>
-                        <td class="text-xs text-muted">{{ formatPublishedSubscriptionFilters(item.filters) }}</td>
+                        <td>
+                          <div class="pubsub-filters">
+                            <span v-if="item.filters?.available === 'true'" class="badge badge-sm badge-success">可直连</span>
+                            <span v-else-if="item.filters?.available === 'false'" class="badge badge-sm badge-danger">不可直连</span>
+                            <span v-if="item.filters?.geo_country" class="badge badge-sm badge-neutral">{{ item.filters.geo_country }}</span>
+                            <span v-if="item.filters?.geo_location" class="badge badge-sm badge-neutral">{{ item.filters.geo_location }}</span>
+                            <span v-if="item.filters?.openai_filter === 'unlocked'" class="badge badge-sm badge-success">GPT解锁</span>
+                            <span v-else-if="item.filters?.openai_filter === 'blocked'" class="badge badge-sm badge-danger">GPT封锁</span>
+                            <span v-if="item.filters?.ip_purity_filter === 'residential'" class="badge badge-sm badge-success">家宽</span>
+                            <span v-else-if="item.filters?.ip_purity_filter === 'non_residential'" class="badge badge-sm badge-danger">非家宽</span>
+                            <span v-if="item.filters?.fallback_front_filter === 'has'" class="badge badge-sm badge-neutral">有前置</span>
+                            <span v-else-if="item.filters?.fallback_front_filter === 'none'" class="badge badge-sm badge-neutral">无前置</span>
+                            <span v-if="item.filters?.source" class="badge badge-sm badge-neutral">来源:{{ item.filters.source }}</span>
+                            <span v-if="!hasAnyFilter(item.filters)" class="badge badge-sm badge-neutral">不限</span>
+                          </div>
+                        </td>
                         <td class="mono">{{ item.match_count || 0 }}</td>
                         <td>
                           <button @click="onTogglePublishedSubscription(item)" :disabled="isActionRunning('togglePubSub-' + item.id)" class="btn btn-xs" :class="item.enabled ? 'btn-success' : 'btn-ghost'">
@@ -184,6 +199,10 @@ export default {
     },
   },
   methods: {
+    hasAnyFilter(f) {
+      if (!f) return false;
+      return !!(f.available || f.geo_country || f.geo_location || f.openai_filter || f.ip_purity_filter || f.fallback_front_filter || f.source);
+    },
     async onPreviewPublishedSubscription(item) {
       this.previewItem = item;
       this.previewContent = '';

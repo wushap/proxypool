@@ -936,6 +936,14 @@ button, input, select, textarea { font: inherit; }
 .text-muted { color: var(--muted); }
 .font-semibold { font-weight: 600; }
 
+/* --- Published Subscription Filters --- */
+.pubsub-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-width: 280px;
+}
+
 /* --- Selection Bar --- */
 .selection-bar {
   display: flex;
