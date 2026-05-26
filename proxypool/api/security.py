@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hmac
+
 READ_ONLY_ALLOWLIST = {
     ("GET", "/"),
     ("GET", "/api/health"),
@@ -35,7 +37,7 @@ def is_request_authorized(method: str, path: str, request_api_key: str | None, e
     if not is_api_key_required(method, path):
         return True
 
-    return (request_api_key or "").strip() == expected
+    return hmac.compare_digest((request_api_key or "").strip(), expected)
 
 
 def _normalize_path(path: str) -> str:
