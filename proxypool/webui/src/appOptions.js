@@ -87,6 +87,7 @@ export const appOptions = {
       proxyColumnDragIndex: -1,
       subscriptions: [],
       subscriptionForm: { name: "", url: "" },
+      bulkImportUrls: "",
       publishedSubscriptions: [],
       publishedSubscriptionForm: {
         name: "",
@@ -807,6 +808,28 @@ export const appOptions = {
     async onCreateSubscription() { await this.runWithButtonState("createSubscription", () => this.createSubscription()); },
     async onRefreshAllSubscriptions() { await this.runWithButtonState("refreshAllSubscriptions", () => this.refreshAllSubscriptions()); },
     async onDeleteUnavailableSubscriptions() { await this.runWithButtonState("deleteUnavailableSubscriptions", () => this.deleteUnavailableSubscriptions()); },
+    async bulkImportSubscriptions() {
+      const text = String(this.bulkImportUrls || "").trim();
+      if (!text) { this.setMessage("请输入订阅链接", true); return; }
+      const urls = text.split(/[\r\n]+/).map(u => u.trim()).filter(Boolean);
+      if (!urls.length) { this.setMessage("未识别到有效链接", true); return; }
+      let created = 0, skipped = 0;
+      for (const url of urls) {
+        try {
+          const resp = await fetch("/api/subscriptions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: "", url }),
+          });
+          if (resp.ok) created++;
+          else skipped++;
+        } catch { skipped++; }
+      }
+      this.bulkImportUrls = "";
+      this.setMessage(`批量导入完成: 新增 ${created}, 跳过 ${skipped}`);
+      await this.loadSubscriptions();
+    },
+    async onBulkImportSubscriptions() { await this.runWithButtonState("bulkImportSubs", () => this.bulkImportSubscriptions()); },
 
     // --- Subscription Update Proxy ---
     async loadSubscriptionUpdateProxy() {

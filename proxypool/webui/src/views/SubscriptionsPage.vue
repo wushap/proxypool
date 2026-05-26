@@ -25,6 +25,15 @@
                   </button>
                 </div>
 
+                <!-- Bulk import -->
+                <details class="details" style="margin-bottom: 12px;">
+                  <summary>批量导入订阅（每行一个 URL）</summary>
+                  <textarea v-model.trim="bulkImportUrls" class="textarea input-mono" placeholder="https://example.com/sub1&#10;https://example.com/sub2&#10;..." style="margin-top: 8px; min-height: 80px;"></textarea>
+                  <button @click="onBulkImportSubscriptions" :disabled="isActionRunning('bulkImportSubs')" class="btn btn-primary" style="margin-top: 6px;">
+                    {{ buttonLabel('bulkImportSubs', '批量导入', '导入中...') }}
+                  </button>
+                </details>
+
                 <!-- Global update proxy -->
                 <div class="form-row-4" style="gap: 8px; margin-bottom: 12px;">
                   <input v-model.trim="subscriptionUpdateProxyRef" list="proxy-key-options" type="text" placeholder="全局更新代理序号(可选 如 #12)" class="input input-mono" style="grid-column: span 3;" />
