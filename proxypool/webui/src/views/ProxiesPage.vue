@@ -10,6 +10,26 @@
                   </div>
                 </div>
 
+                <!-- Status bar -->
+                <div class="status-bar" style="margin-bottom: 8px;">
+                  <div class="status-item">
+                    <span class="text-muted">显示</span>
+                    <strong>{{ proxies.length }}</strong>
+                  </div>
+                  <div class="status-item">
+                    <span class="text-muted">总节点</span>
+                    <strong>{{ allProxyCount }}</strong>
+                  </div>
+                  <div v-if="proxySortKey" class="status-item">
+                    <span class="text-muted">排序</span>
+                    <span class="badge badge-sm badge-neutral">{{ proxySortKey === 'latency' ? '延迟' : '带宽' }} {{ proxySortDir === 'asc' ? '↑' : '↓' }}</span>
+                  </div>
+                  <div v-if="selectedProxyKeys.length" class="status-item">
+                    <span class="text-muted">选中</span>
+                    <strong style="color: var(--accent);">{{ selectedProxyKeys.length }}</strong>
+                  </div>
+                </div>
+
                 <!-- Pagination & actions -->
                 <div class="pagination">
                   <div class="pagination-info">
