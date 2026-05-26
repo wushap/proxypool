@@ -806,10 +806,13 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         return await call_next(request)
 
     @app.get("/api/health")
-    async def health() -> dict[str, str]:
+    async def health() -> dict:
+        backend_ok = singbox_manager.is_running() if hasattr(singbox_manager, 'is_running') else False
         return {
             "status": "ok",
             "time": datetime.now(timezone.utc).isoformat(),
+            "backend_running": backend_ok,
+            "proxy_count": storage.get_stats().get("total", 0),
         }
 
     @app.get("/api/stats")
