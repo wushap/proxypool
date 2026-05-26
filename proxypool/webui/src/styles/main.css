@@ -936,6 +936,27 @@ button, input, select, textarea { font: inherit; }
 .text-muted { color: var(--muted); }
 .font-semibold { font-weight: 600; }
 
+/* --- Selection Bar --- */
+.selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-top: 8px;
+  background: var(--panel-muted);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+}
+
+.selection-bar-info {
+  font-size: 13px;
+  color: var(--ink);
+}
+
 /* --- Global Task Bar --- */
 .global-task-bar {
   background: var(--warning-bg);

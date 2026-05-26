@@ -2358,11 +2358,17 @@ export const appOptions = {
     },
     startTaskPolling() {
       if (this.taskPollingTimer) return;
-      this.taskPollingTimer = setInterval(() => { this.refreshTaskList(); }, 1200);
+      const poll = () => {
+        this.refreshTaskList();
+        const hasActive = (this.taskItems || []).some(t => ['queued', 'running'].includes(String(t.status || '')));
+        const interval = hasActive ? 1500 : 10000;
+        this.taskPollingTimer = setTimeout(poll, interval);
+      };
+      poll();
     },
     stopTaskPolling() {
       if (!this.taskPollingTimer) return;
-      clearInterval(this.taskPollingTimer);
+      clearTimeout(this.taskPollingTimer);
       this.taskPollingTimer = null;
     },
     async startProgressTask(url, payload, label) {
@@ -2533,6 +2539,33 @@ export const appOptions = {
     },
     async onCopySelectedProxyLinks() {
       await this.runWithButtonState("copySelectedProxyLinks", () => this.copySelectedProxyLinks());
+    },
+    async retestSelectedProxies() {
+      const keys = (this.selectedProxyKeys || []).map(key => String(key || "").trim()).filter(Boolean);
+      if (!keys.length) { this.setMessage("未选择节点", true); return; }
+      const total = keys.length;
+      let done = 0, up = 0;
+      const fallbackKeys = this.resolveFallbackFrontProxyKeys(this.testFallback.front_proxy_refs);
+      const maxAttempts = Math.max(0, Math.min(100, Math.trunc(Number(this.testFallback.max_attempts || 0))));
+      for (const key of keys) {
+        try {
+          const resp = await fetch("/api/tester/run-one", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ normalized_key: key, fallback_front_proxy_keys: fallbackKeys, fallback_front_max_attempts: maxAttempts }),
+          });
+          const data = await resp.json();
+          if (data.available) up++;
+        } catch {}
+        done++;
+        this.setMessage(`测试进度: ${done}/${total} (UP: ${up})`);
+      }
+      this.setMessage(`批量测试完成: ${done} 个节点, ${up} 个可用`);
+      await this.loadData();
+      await this.loadProxyCatalog();
+    },
+    async onRetestSelectedProxies() {
+      await this.runWithButtonState("retestSelected", () => this.retestSelectedProxies());
     },
     async deleteSelectedProxies() {
       try {

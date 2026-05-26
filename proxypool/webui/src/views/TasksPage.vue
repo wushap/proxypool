@@ -255,7 +255,7 @@
                         <span>进度 {{ task.completed || 0 }}/{{ task.total || '-' }}</span>
                         <span class="text-emerald-600">成功 {{ task.success || 0 }}</span>
                         <span class="text-rose-600">失败 {{ task.failed || 0 }}</span>
-                        <span class="task-message">结果 {{ taskMessageText(task) }}</span>
+                        <span class="task-message" :title="taskMessageText(task)">结果 {{ taskMessageText(task) }}</span>
                         <span>更新 {{ formatTime(task.updated_at) }}</span>
                       </div>
                     </div>

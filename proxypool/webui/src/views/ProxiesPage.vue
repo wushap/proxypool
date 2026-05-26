@@ -138,8 +138,8 @@
                           <template v-if="col.key === 'serial'"><span class="mono text-muted">#{{ getSerial(item.normalized_key) }}</span></template>
                           <template v-else-if="col.key === 'protocol'"><span class="font-semibold">{{ item.protocol }}</span></template>
                           <template v-else-if="col.key === 'address'"><span>{{ item.host }}:{{ item.port }}</span></template>
-                          <template v-else-if="col.key === 'latency'"><span>{{ item.latency_ms ? item.latency_ms + ' ms' : '-' }}</span></template>
-                          <template v-else-if="col.key === 'bandwidth'"><span class="mono text-xs">{{ formatBandwidthMbps(item) }}</span></template>
+                          <template v-else-if="col.key === 'latency'"><span :style="latencyStyle(item.latency_ms)">{{ item.latency_ms ? item.latency_ms + ' ms' : '-' }}</span></template>
+                          <template v-else-if="col.key === 'bandwidth'"><span class="mono text-xs" :style="bandwidthStyle(item.speed_mbps)">{{ formatBandwidthMbps(item) }}</span></template>
                           <template v-else-if="col.key === 'status'"><span class="badge" :class="item.available ? 'badge-success' : 'badge-danger'">{{ item.available ? 'UP' : 'DOWN' }}</span></template>
                           <template v-else-if="col.key === 'checked_at'"><span class="text-xs text-muted">{{ formatTime(item.last_checked_at) }}</span></template>
                           <template v-else-if="col.key === 'geo'"><span class="text-xs text-muted">{{ formatGeo(item) }}</span></template>
@@ -158,6 +158,23 @@
                     </tbody>
                   </table>
                 </div>
+
+                <!-- Selection summary bar -->
+                <div v-if="selectedProxyKeys.length > 0" class="selection-bar fade-in">
+                  <span class="selection-bar-info">已选中 <strong>{{ selectedProxyKeys.length }}</strong> 个节点</span>
+                  <div class="btn-group">
+                    <button @click="onCopySelectedProxyLinks" :disabled="isActionRunning('copySelectedProxyLinks')" class="btn btn-xs btn-secondary">
+                      {{ buttonLabel('copySelectedProxyLinks', '复制链接', '...') }}
+                    </button>
+                    <button @click="onRetestSelectedProxies" :disabled="isActionRunning('retestSelected')" class="btn btn-xs btn-secondary">
+                      {{ buttonLabel('retestSelected', '重新测试', '...') }}
+                    </button>
+                    <button @click="onDeleteSelectedProxies" :disabled="isActionRunning('deleteSelectedProxies')" class="btn btn-xs btn-danger">
+                      {{ buttonLabel('deleteSelectedProxies', '删除', '...') }}
+                    </button>
+                    <button @click="selectedProxyKeys = []" class="btn btn-xs btn-ghost">取消选择</button>
+                  </div>
+                </div>
               </div>
             </section>
 </template>
@@ -168,5 +185,19 @@ import { rootProxyMixin } from "../rootProxyMixin";
 export default {
   name: "ProxiesPage",
   mixins: [rootProxyMixin],
+  methods: {
+    latencyStyle(ms) {
+      if (!ms) return {};
+      if (ms < 100) return { color: '#16a34a', fontWeight: 600 };
+      if (ms < 500) return { color: '#ca8a04', fontWeight: 600 };
+      return { color: '#dc2626', fontWeight: 600 };
+    },
+    bandwidthStyle(mbps) {
+      if (!mbps || mbps <= 0) return {};
+      if (mbps >= 50) return { color: '#16a34a' };
+      if (mbps >= 10) return { color: '#ca8a04' };
+      return { color: '#dc2626' };
+    },
+  },
 };
 </script>
