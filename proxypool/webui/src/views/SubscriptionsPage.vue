@@ -16,6 +16,30 @@
                   </div>
                 </div>
 
+                <!-- Subscription stats -->
+                <div class="status-bar" style="margin-bottom: 12px;">
+                  <div class="status-item">
+                    <span class="text-muted">总数</span>
+                    <strong>{{ subscriptions.length }}</strong>
+                  </div>
+                  <div class="status-item">
+                    <span class="text-muted">已启用</span>
+                    <strong style="color: var(--success-text);">{{ subscriptions.filter(s => s.enabled).length }}</strong>
+                  </div>
+                  <div class="status-item">
+                    <span class="text-muted">已停用</span>
+                    <strong>{{ subscriptions.filter(s => !s.enabled).length }}</strong>
+                  </div>
+                  <div class="status-item">
+                    <span class="text-muted">最近成功</span>
+                    <strong style="color: var(--success-text);">{{ subscriptions.filter(s => s.last_status === 'success').length }}</strong>
+                  </div>
+                  <div class="status-item">
+                    <span class="text-muted">最近失败</span>
+                    <strong :style="{ color: subscriptions.filter(s => s.last_status === 'failed').length > 0 ? 'var(--danger-text)' : '' }">{{ subscriptions.filter(s => s.last_status === 'failed').length }}</strong>
+                  </div>
+                </div>
+
                 <!-- Add subscription form -->
                 <div class="form-row-3" style="gap: 8px; margin-bottom: 12px;">
                   <input v-model.trim="subscriptionForm.name" type="text" placeholder="订阅名称" class="input" />
