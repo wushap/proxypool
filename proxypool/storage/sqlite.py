@@ -639,8 +639,11 @@ class SQLiteProxyStorage:
         where_clause = f"WHERE {' AND '.join(where)}" if where else ""
         params.extend([limit, offset])
         norm_order = "DESC" if str(sort_order).lower() == "desc" else "ASC"
-        if str(sort_by).lower() == "latency":
+        sort_key = str(sort_by).lower()
+        if sort_key == "latency":
             order_clause = f"CASE WHEN latency_ms IS NULL THEN 1 ELSE 0 END ASC, latency_ms {norm_order}, updated_at DESC"
+        elif sort_key in ("speed", "bandwidth", "speed_mbps"):
+            order_clause = f"CASE WHEN speed_mbps IS NULL OR speed_mbps <= 0 THEN 1 ELSE 0 END ASC, speed_mbps {norm_order}, updated_at DESC"
         else:
             order_clause = "updated_at DESC"
 
