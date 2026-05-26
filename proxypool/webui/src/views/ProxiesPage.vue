@@ -148,8 +148,8 @@
                           <template v-else-if="col.key === 'status'"><span class="badge" :class="item.available ? 'badge-success' : 'badge-danger'">{{ item.available ? 'UP' : 'DOWN' }}</span></template>
                           <template v-else-if="col.key === 'checked_at'"><span class="text-xs text-muted">{{ formatTime(item.last_checked_at) }}</span></template>
                           <template v-else-if="col.key === 'geo'"><span class="text-xs text-muted">{{ formatGeo(item) }}</span></template>
-                          <template v-else-if="col.key === 'purity'"><span class="text-xs text-muted">{{ formatIpPurity(item) }}</span></template>
-                          <template v-else-if="col.key === 'unlock'"><span class="text-xs text-muted">{{ formatUnlock(item) }}</span></template>
+                          <template v-else-if="col.key === 'purity'"><span class="text-xs text-muted" :title="item.ip_purity_level || ''">{{ formatIpPurity(item) }}</span></template>
+                          <template v-else-if="col.key === 'unlock'"><span class="text-xs" :class="item.openai_unlocked === true ? 'text-emerald-600' : item.openai_unlocked === false ? 'text-rose-600' : 'text-muted'" :title="item.openai_status || ''">{{ formatUnlock(item) }}</span></template>
                           <template v-else-if="col.key === 'fallback_front'"><span class="text-xs text-muted">{{ formatFallbackFront(item) }}</span></template>
                           <template v-else-if="col.key === 'source'"><span class="text-xs text-muted truncate" style="max-width: 160px;">{{ shortSource(item.source) }}</span></template>
                           <template v-else-if="col.key === 'action'">
