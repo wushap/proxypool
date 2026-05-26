@@ -755,8 +755,10 @@ async def test_http_gateway_start_failure_does_not_break_control_plane(tmp_path:
         raise OSError("address already in use")
 
     monkeypatch.setattr(app.state.gateway_runtime, "start", broken_start)
-    startup = next(handler for handler in app.router.on_startup if getattr(handler, "__name__", "") == "on_startup")
-    await startup()
+
+    # Trigger startup via lifespan
+    async with app.router.lifespan_context(app):
+        pass
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

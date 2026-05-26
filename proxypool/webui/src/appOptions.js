@@ -1,6 +1,8 @@
 /**
  * Proxy Pool Console - Vue root options.
  */
+import { ElNotification, ElMessageBox } from "element-plus";
+
 // --- Defaults ---
 export const DEFAULT_PROXY_COLUMN_CONFIGS = {
   serial:         { label: "序号",       visible: true },
@@ -185,6 +187,7 @@ export const appOptions = {
       autoTaskStatus: null,
       proxyConfigDialogVisible: false,
       selectedProxyKeys: [],
+      darkMode: false,
     };
   },
 
@@ -304,6 +307,9 @@ export const appOptions = {
         .sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0], "zh-CN"))
         .map(([value, count]) => ({ value, count, label: `${value === "-" ? "未知来源" : value} (${count})` }));
     },
+    activeTasks() {
+      return (this.taskItems || []).filter(t => ['queued', 'running'].includes(String(t.status || '')));
+    },
     statCards() {
       return [
         { title: "Total", value: this.stats.total ?? 0, desc: "总节点" },
@@ -358,6 +364,21 @@ export const appOptions = {
   },
 
   methods: {
+    // --- Dark Mode ---
+    toggleDarkMode() {
+      this.darkMode = !this.darkMode;
+      document.documentElement.classList.toggle('dark', this.darkMode);
+      try { localStorage.setItem('pp-dark-mode', this.darkMode ? '1' : '0'); } catch {}
+    },
+    initDarkMode() {
+      let saved = null;
+      try { saved = localStorage.getItem('pp-dark-mode'); } catch {}
+      if (saved === '1' || (saved === null && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        this.darkMode = true;
+        document.documentElement.classList.add('dark');
+      }
+    },
+
     // --- Navigation ---
     selectPage(key) {
       this.activePage = key;
@@ -557,6 +578,21 @@ export const appOptions = {
     setMessage(text, isError = false) {
       this.message = text;
       this.messageError = isError;
+      if (isError) {
+        try { ElNotification({ title: '操作失败', message: text, type: 'error', duration: 5000 }); } catch {}
+      }
+    },
+    async apiFetch(url, options = {}) {
+      const resp = await fetch(url, options);
+      if (!resp.ok) {
+        let detail = '';
+        try {
+          const body = await resp.json();
+          detail = body.detail || body.message || JSON.stringify(body);
+        } catch { detail = resp.statusText; }
+        throw new Error(detail || `HTTP ${resp.status}`);
+      }
+      return resp;
     },
 
     // --- File Import ---
@@ -743,6 +779,9 @@ export const appOptions = {
     },
     async deleteUnavailableSubscriptions() {
       try {
+        await ElMessageBox.confirm('确定删除所有不可用的订阅源？', '确认删除', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' });
+      } catch { return; }
+      try {
         const resp = await fetch("/api/subscriptions/delete-unavailable", { method: "POST" });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "删除失败");
@@ -752,6 +791,9 @@ export const appOptions = {
     },
     async onDeleteSubscription(subscriptionId) {
       await this.runWithButtonState(`deleteSub-${subscriptionId}`, async () => {
+        try {
+          await ElMessageBox.confirm('确定删除此订阅？关联的节点不会被删除。', '确认删除', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' });
+        } catch { return; }
         try {
           const resp = await fetch(`/api/subscriptions/${subscriptionId}`, { method: "DELETE" });
           const data = await resp.json();
@@ -929,6 +971,9 @@ export const appOptions = {
     },
     async onDeletePublishedSubscription(subscriptionId) {
       await this.runWithButtonState(`deletePubSub-${subscriptionId}`, async () => {
+        try {
+          await ElMessageBox.confirm('确定删除此发布订阅？', '确认删除', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' });
+        } catch { return; }
         try {
           const resp = await fetch(`/api/published-subscriptions/${subscriptionId}`, { method: "DELETE" });
           const data = await resp.json();
@@ -2425,6 +2470,9 @@ export const appOptions = {
     async onDeleteUnavailable() { await this.runWithButtonState("deleteUnavailable", () => this.deleteUnavailable()); },
     async deleteUnavailable() {
       try {
+        await ElMessageBox.confirm('确定删除所有不可用的代理节点？此操作不可撤销。', '确认删除', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' });
+      } catch { return; }
+      try {
         const resp = await fetch("/api/proxies/delete-unavailable", { method: "POST" });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "删除失败");
@@ -2490,6 +2538,10 @@ export const appOptions = {
       try {
         const keys = (this.selectedProxyKeys || []).map(key => String(key || "").trim()).filter(Boolean);
         if (!keys.length) throw new Error("未选择节点");
+        await ElMessageBox.confirm(`确定删除选中的 ${keys.length} 个节点？此操作不可撤销。`, '确认删除', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' });
+      } catch { return; }
+      try {
+        const keys = (this.selectedProxyKeys || []).map(key => String(key || "").trim()).filter(Boolean);
         const resp = await fetch("/api/proxies/delete-selected", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2647,6 +2699,7 @@ export const appOptions = {
   },
 
   async mounted() {
+    this.initDarkMode();
     this.loadProxyColumns();
     this.loadRouteDefaults();
     this.loadTestFallback();

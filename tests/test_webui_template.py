@@ -183,8 +183,10 @@ def test_webui_task_delete_button_should_call_existing_handler() -> None:
 def test_webui_click_handlers_should_exist_in_app_methods() -> None:
     html = _read_html()
     js = (WEBUI_DIR / "src" / "appOptions.js").read_text(encoding="utf-8")
+    for vue_file in (WEBUI_DIR / "src" / "views").glob("*.vue"):
+        js += vue_file.read_text(encoding="utf-8")
     refs = set(re.findall(r'@click="\s*(on[A-Za-z0-9_]+)\b', html))
-    defs = set(re.findall(r"async\s+(on[A-Za-z0-9_]+)\s*\(", js))
+    defs = set(re.findall(r"(?:async\s+)?(on[A-Za-z0-9_]+)\s*\(", js))
     assert sorted(refs - defs) == []
 
 

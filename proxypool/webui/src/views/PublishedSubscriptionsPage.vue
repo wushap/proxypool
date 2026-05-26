@@ -129,6 +129,7 @@
                         </td>
                         <td>
                           <div class="btn-group">
+                            <button @click="onPreviewPublishedSubscription(item)" class="btn btn-xs btn-ghost">预览</button>
                             <button @click="applyPublishedSubscriptionFiltersToForm(item)" class="btn btn-xs btn-ghost">套用</button>
                             <button @click="onUpdatePublishedSubscriptionFilters(item)" :disabled="isActionRunning('updatePubSub-' + item.id)" class="btn btn-xs btn-secondary">保存</button>
                             <button @click="onCopyPublishedSubscriptionUrl(item)" :disabled="isActionRunning('copyPubSub-' + item.id)" class="btn btn-xs btn-ghost">复制</button>
@@ -140,6 +141,24 @@
                     </tbody>
                   </table>
                 </div>
+
+                <!-- Preview Dialog -->
+                <el-dialog v-model="previewDialogVisible" title="订阅预览" width="min(800px, 95vw)" append-to-body>
+                  <div v-if="previewLoading" class="empty-state">加载中...</div>
+                  <div v-else-if="previewError" class="empty-state" style="color: var(--danger-text);">{{ previewError }}</div>
+                  <div v-else>
+                    <div style="margin-bottom: 8px;">
+                      <span class="badge badge-neutral">{{ previewItem?.name }}</span>
+                      <span class="badge" :class="previewItem?.format === 'clash' ? 'badge-success' : 'badge-neutral'" style="margin-left: 4px;">{{ previewItem?.format }}</span>
+                      <span class="text-muted" style="font-size: 12px; margin-left: 8px;">{{ previewLineCount }} 行</span>
+                    </div>
+                    <textarea :value="previewContent" readonly class="textarea input-mono" style="min-height: 300px; max-height: 60vh; font-size: 12px;"></textarea>
+                  </div>
+                  <template #footer>
+                    <button class="btn btn-secondary" @click="copyPreviewContent">复制内容</button>
+                    <button class="btn btn-ghost" @click="previewDialogVisible = false">关闭</button>
+                  </template>
+                </el-dialog>
               </div>
             </section>
 </template>
@@ -150,5 +169,52 @@ import { rootProxyMixin } from "../rootProxyMixin";
 export default {
   name: "PublishedSubscriptionsPage",
   mixins: [rootProxyMixin],
+  data() {
+    return {
+      previewDialogVisible: false,
+      previewLoading: false,
+      previewError: '',
+      previewContent: '',
+      previewItem: null,
+    };
+  },
+  computed: {
+    previewLineCount() {
+      return this.previewContent ? this.previewContent.split('\n').filter(Boolean).length : 0;
+    },
+  },
+  methods: {
+    async onPreviewPublishedSubscription(item) {
+      this.previewItem = item;
+      this.previewContent = '';
+      this.previewError = '';
+      this.previewLoading = true;
+      this.previewDialogVisible = true;
+      try {
+        const url = this.publishedSubscriptionExportUrl(item);
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        this.previewContent = await resp.text();
+        if (!this.previewContent.trim()) {
+          this.previewError = '订阅内容为空（可能没有匹配的节点）';
+        }
+      } catch (err) {
+        this.previewError = '加载失败: ' + err;
+      } finally {
+        this.previewLoading = false;
+      }
+    },
+    async copyPreviewContent() {
+      if (!this.previewContent) return;
+      try {
+        await navigator.clipboard.writeText(this.previewContent);
+        if (this.appState && this.appState.setMessage) {
+          this.appState.setMessage('预览内容已复制到剪贴板');
+        }
+      } catch {
+        this.appState.setMessage('复制失败', true);
+      }
+    },
+  },
 };
 </script>

@@ -875,6 +875,35 @@ class SQLiteProxyStorage:
             ).fetchone()
             avg_latency_ms = int(avg_latency_row[0]) if avg_latency_row and avg_latency_row[0] else None
 
+            # Country distribution
+            country_rows = conn.execute(
+                "SELECT country, COUNT(*) AS cnt FROM proxies WHERE country != '' GROUP BY country ORDER BY cnt DESC"
+            ).fetchall()
+            by_country = {str(r["country"]): int(r["cnt"]) for r in country_rows}
+
+            # OpenAI unlock stats
+            openai_unlocked = int(conn.execute(
+                "SELECT COUNT(*) FROM proxies WHERE openai_unlocked = 1"
+            ).fetchone()[0])
+            openai_blocked = int(conn.execute(
+                "SELECT COUNT(*) FROM proxies WHERE openai_unlocked = 0 AND openai_status IS NOT NULL AND openai_status != ''"
+            ).fetchone()[0])
+
+            # IP purity stats
+            purity_rows = conn.execute(
+                "SELECT ip_purity_level, COUNT(*) AS cnt FROM proxies WHERE ip_purity_level != '' GROUP BY ip_purity_level ORDER BY cnt DESC"
+            ).fetchall()
+            by_purity = {str(r["ip_purity_level"]): int(r["cnt"]) for r in purity_rows}
+
+            # Average bandwidth
+            avg_bw_row = conn.execute(
+                "SELECT AVG(speed_mbps) FROM proxies WHERE available = 1 AND speed_mbps IS NOT NULL AND speed_mbps > 0"
+            ).fetchone()
+            avg_speed_mbps = round(float(avg_bw_row[0]), 1) if avg_bw_row and avg_bw_row[0] else None
+
+            # Subscription count
+            sub_count = int(conn.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0])
+
         return {
             "total": total,
             "available": available,
@@ -882,6 +911,12 @@ class SQLiteProxyStorage:
             "availability_rate": round((available / total) * 100, 2) if total else 0.0,
             "avg_latency_ms": avg_latency_ms,
             "by_protocol": self.count_by_protocol(),
+            "by_country": by_country,
+            "openai_unlocked": openai_unlocked,
+            "openai_blocked": openai_blocked,
+            "by_purity": by_purity,
+            "avg_speed_mbps": avg_speed_mbps,
+            "subscription_count": sub_count,
         }
 
     def get_proxy_by_key(self, normalized_key: str) -> dict[str, Any] | None:

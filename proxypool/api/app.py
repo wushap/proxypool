@@ -371,7 +371,29 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             },
         }
 
-    app = FastAPI(title="Proxy Pool", version="0.1.0")
+    @contextlib.asynccontextmanager
+    async def lifespan(application: FastAPI):
+        # Startup
+        application.state.backend_health_task = asyncio.create_task(_backend_health_loop())
+        application.state.auto_task_runner = asyncio.create_task(_auto_task_loop())
+        application.state.gateway_health_task = asyncio.create_task(_gateway_health_loop())
+        if gateway_config_service.get_config().enabled:
+            try:
+                await gateway_runtime.start()
+            except Exception:
+                pass
+        yield
+        # Shutdown
+        for attr in ("backend_health_task", "auto_task_runner", "gateway_health_task"):
+            task = getattr(application.state, attr, None)
+            if task is None:
+                continue
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            setattr(application.state, attr, None)
+
+    app = FastAPI(title="Proxy Pool", version="0.1.0", lifespan=lifespan)
     app.state.settings = cfg
     app.state.storage = storage
     app.state.collector = collector
@@ -767,28 +789,6 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                     )
             except Exception:
                 continue
-
-    @app.on_event("startup")
-    async def on_startup() -> None:
-        app.state.backend_health_task = asyncio.create_task(_backend_health_loop())
-        app.state.auto_task_runner = asyncio.create_task(_auto_task_loop())
-        app.state.gateway_health_task = asyncio.create_task(_gateway_health_loop())
-        if gateway_config_service.get_config().enabled:
-            try:
-                await gateway_runtime.start()
-            except Exception:
-                pass
-
-    @app.on_event("shutdown")
-    async def on_shutdown() -> None:
-        for attr in ("backend_health_task", "auto_task_runner", "gateway_health_task"):
-            task = getattr(app.state, attr, None)
-            if task is None:
-                continue
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-            setattr(app.state, attr, None)
 
     @app.middleware("http")
     async def api_key_guard(request: Request, call_next):
