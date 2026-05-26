@@ -97,7 +97,21 @@
                       <tr v-for="item in paginatedProxyPools" :key="item.id">
                         <td class="mono text-muted">{{ item.id }}</td>
                         <td><input :value="item.name || ''" @change="onRenameProxyPool(item, $event.target.value)" type="text" class="inline-input" /></td>
-                        <td class="text-xs text-muted truncate" style="max-width: 300px;" :title="formatPoolFilters(item.filters)">{{ formatPoolFilters(item.filters) }}</td>
+                        <td>
+                          <div class="pubsub-filters">
+                            <span v-if="item.filters?.route_mode_filter === 'direct'" class="badge badge-sm badge-success">直连</span>
+                            <span v-else-if="item.filters?.route_mode_filter === 'chain'" class="badge badge-sm badge-warning">链式</span>
+                            <span v-else-if="item.filters?.route_mode_filter === 'unreachable'" class="badge badge-sm badge-danger">不可达</span>
+                            <span v-if="item.filters?.protocol" class="badge badge-sm badge-neutral">{{ item.filters.protocol }}</span>
+                            <span v-if="item.filters?.geo_country" class="badge badge-sm badge-neutral">{{ item.filters.geo_country }}</span>
+                            <span v-if="item.filters?.openai_filter === 'unlocked'" class="badge badge-sm badge-success">GPT解锁</span>
+                            <span v-else-if="item.filters?.openai_filter === 'blocked'" class="badge badge-sm badge-danger">GPT封锁</span>
+                            <span v-if="item.filters?.ip_purity_filter === 'residential'" class="badge badge-sm badge-success">家宽</span>
+                            <span v-else-if="item.filters?.ip_purity_filter === 'non_residential'" class="badge badge-sm badge-danger">非家宽</span>
+                            <span v-if="item.filters?.source" class="badge badge-sm badge-neutral">{{ item.filters.source }}</span>
+                            <span v-if="!item.filters?.route_mode_filter && !item.filters?.protocol && !item.filters?.geo_country && !item.filters?.openai_filter && !item.filters?.ip_purity_filter && !item.filters?.source" class="badge badge-sm badge-neutral">不限</span>
+                          </div>
+                        </td>
                         <td class="mono">{{ item.match_count || 0 }}</td>
                         <td><span class="text-sm" :class="item.status === 'running' ? 'text-emerald-600' : 'text-muted'">{{ item.status || 'stopped' }}</span></td>
                         <td>
