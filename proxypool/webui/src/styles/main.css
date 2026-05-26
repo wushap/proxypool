@@ -936,6 +936,23 @@ button, input, select, textarea { font: inherit; }
 .text-muted { color: var(--muted); }
 .font-semibold { font-weight: 600; }
 
+/* --- Sortable Table Headers --- */
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition);
+}
+
+.sortable-th:hover {
+  background: var(--line-soft);
+}
+
+.sort-indicator {
+  font-size: 11px;
+  margin-left: 2px;
+  color: var(--accent);
+}
+
 /* --- Published Subscription Filters --- */
 .pubsub-filters {
   display: flex;

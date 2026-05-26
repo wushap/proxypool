@@ -128,7 +128,12 @@
                         <th style="width: 36px;">
                           <input type="checkbox" :checked="areAllPaginatedProxiesSelected()" :disabled="!paginatedProxies.length" @change="toggleAllPaginatedProxies($event.target.checked)" />
                         </th>
-                        <th v-for="col in visibleProxyColumns" :key="'th-' + col.key">{{ col.label }}</th>
+                        <th v-for="col in visibleProxyColumns" :key="'th-' + col.key"
+                          :class="{ 'sortable-th': isSortableColumn(col.key) }"
+                          @click="isSortableColumn(col.key) && toggleProxySort(col.key)">
+                          {{ col.label }}
+                          <span v-if="isSortableColumn(col.key) && proxySortKey === col.key" class="sort-indicator">{{ proxySortDir === 'asc' ? '↑' : '↓' }}</span>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -185,7 +190,46 @@ import { rootProxyMixin } from "../rootProxyMixin";
 export default {
   name: "ProxiesPage",
   mixins: [rootProxyMixin],
+  data() {
+    return {
+      proxySortKey: '',
+      proxySortDir: 'asc',
+    };
+  },
+  computed: {
+    sortedProxies() {
+      const list = this.appState.proxies || [];
+      if (!this.proxySortKey) return list;
+      const key = this.proxySortKey;
+      const dir = this.proxySortDir === 'asc' ? 1 : -1;
+      return [...list].sort((a, b) => {
+        let va, vb;
+        if (key === 'latency') { va = a.latency_ms ?? Infinity; vb = b.latency_ms ?? Infinity; }
+        else if (key === 'bandwidth') { va = a.speed_mbps ?? -1; vb = b.speed_mbps ?? -1; }
+        else { return 0; }
+        return (va - vb) * dir;
+      });
+    },
+    paginatedProxies() {
+      const state = this.appState.pagination?.proxies || { page: 1, perPage: 50 };
+      const perPage = Number(state.perPage) || 50;
+      const page = Math.max(1, Number(state.page) || 1);
+      const start = (page - 1) * perPage;
+      return this.sortedProxies.slice(start, start + perPage);
+    },
+  },
   methods: {
+    isSortableColumn(key) {
+      return key === 'latency' || key === 'bandwidth';
+    },
+    toggleProxySort(key) {
+      if (this.proxySortKey === key) {
+        this.proxySortDir = this.proxySortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        this.proxySortKey = key;
+        this.proxySortDir = 'asc';
+      }
+    },
     latencyStyle(ms) {
       if (!ms) return {};
       if (ms < 100) return { color: '#16a34a', fontWeight: 600 };
