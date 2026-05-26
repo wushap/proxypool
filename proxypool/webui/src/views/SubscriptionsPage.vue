@@ -118,7 +118,7 @@
                             <span class="stat-pill">去重 {{ item.last_deduped || 0 }}</span>
                           </div>
                         </td>
-                        <td class="text-xs text-muted">{{ formatTime(item.last_fetched_at) }}</td>
+                        <td class="text-xs" :style="freshnessStyle(item.last_fetched_at)" :title="formatTime(item.last_fetched_at)">{{ freshnessText(item.last_fetched_at) }}</td>
                         <td>
                           <div class="btn-group">
                             <button @click="onRefreshSubscription(item.id)" :disabled="isActionRunning('refreshSub-' + item.id)" class="btn btn-xs btn-secondary">刷新</button>
@@ -139,5 +139,24 @@ import { rootProxyMixin } from "../rootProxyMixin";
 export default {
   name: "SubscriptionsPage",
   mixins: [rootProxyMixin],
+  methods: {
+    freshnessStyle(ts) {
+      if (!ts) return { color: 'var(--muted)' };
+      const age = Date.now() - new Date(ts).getTime();
+      const hour = 3600000;
+      if (age < hour) return { color: 'var(--success-text)', fontWeight: 600 };
+      if (age < 24 * hour) return { color: 'var(--ink)' };
+      return { color: 'var(--danger-text)' };
+    },
+    freshnessText(ts) {
+      if (!ts) return '从未刷新';
+      const age = Date.now() - new Date(ts).getTime();
+      const min = 60000, hour = 3600000, day = 86400000;
+      if (age < min) return '刚刚';
+      if (age < hour) return Math.floor(age / min) + ' 分钟前';
+      if (age < day) return Math.floor(age / hour) + ' 小时前';
+      return Math.floor(age / day) + ' 天前';
+    },
+  },
 };
 </script>
