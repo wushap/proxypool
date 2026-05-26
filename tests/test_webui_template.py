@@ -345,3 +345,76 @@ def test_webui_should_not_render_resin_controls() -> None:
     assert "resinStatus" not in content
     assert "Resin" not in content
     assert "/api/resin/" not in content
+
+
+def test_webui_should_have_dashboard_page() -> None:
+    content = _read_webui()
+    assert 'index="dashboard"' in content
+    assert "DashboardPage" in content
+    assert "仪表盘" in content
+    assert "stat-card-value" in content
+    assert "protocolEntries" in content
+    assert "countryEntries" in content
+    assert "purityEntries" in content
+
+
+def test_webui_should_support_dark_mode() -> None:
+    content = _read_webui()
+    assert "toggleDarkMode" in content
+    assert "initDarkMode" in content
+    assert "darkMode" in content
+    assert "pp-dark-mode" in content
+    assert "html.dark" in content
+    assert "prefers-color-scheme" in content
+
+
+def test_webui_should_support_proxy_column_sorting() -> None:
+    content = _read_webui()
+    assert "proxySortKey" in content
+    assert "proxySortDir" in content
+    assert "toggleProxySort" in content
+    assert "isSortableColumn" in content
+    assert "sortedProxies" in content
+    assert "sortable-th" in content
+    assert "sort-indicator" in content
+
+
+def test_webui_should_have_enhanced_stats_api() -> None:
+    from proxypool.storage.sqlite import SQLiteProxyStorage
+    import inspect
+    src = inspect.getsource(SQLiteProxyStorage.get_stats)
+    assert "by_country" in src
+    assert "openai_unlocked" in src
+    assert "by_purity" in src
+    assert "avg_speed_mbps" in src
+    assert "subscription_count" in src
+
+
+def test_webui_should_have_global_task_bar() -> None:
+    content = _read_webui()
+    assert "global-task-bar" in content
+    assert "activeTasks" in content
+    assert "global-task-dot" in content
+
+
+def test_webui_should_have_subscription_preview() -> None:
+    content = _read_webui()
+    assert "onPreviewPublishedSubscription" in content
+    assert "previewDialogVisible" in content
+    assert "previewContent" in content
+    assert "previewLineCount" in content
+
+
+def test_webui_should_have_bulk_subscription_import() -> None:
+    content = _read_webui()
+    assert "bulkImportUrls" in content
+    assert "onBulkImportSubscriptions" in content
+    assert "批量导入" in content
+
+
+def test_api_security_should_use_timing_safe_comparison() -> None:
+    from proxypool.api.security import is_request_authorized
+    import inspect
+    src = inspect.getsource(is_request_authorized)
+    assert "hmac.compare_digest" in src
+    assert "== expected" not in src
