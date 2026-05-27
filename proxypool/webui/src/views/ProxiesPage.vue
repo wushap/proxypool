@@ -1,6 +1,8 @@
 <template>
             <section v-show="activePage === 'proxies'" class="card fade-in">
               <div class="card-body">
+                <!-- Breadcrumb -->
+                <Breadcrumb :items="breadcrumbItems" />
                 <div class="section-header">
                   <h2 class="section-title">代理节点</h2>
                   <div class="btn-group">
@@ -206,9 +208,13 @@
 
 <script>
 import { rootProxyMixin } from "../rootProxyMixin";
+import Breadcrumb from '../components/layout/Breadcrumb.vue';
 
 export default {
   name: "ProxiesPage",
+  components: {
+    Breadcrumb,
+  },
   mixins: [rootProxyMixin],
   data() {
     return {
@@ -217,6 +223,12 @@ export default {
     };
   },
   computed: {
+    breadcrumbItems() {
+      return [
+        { label: '首页', path: '/', onClick: () => this.selectPage('dashboard') },
+        { label: '代理节点' },
+      ];
+    },
     sortedProxies() {
       const list = this.appState.proxies || [];
       if (!this.proxySortKey) return list;

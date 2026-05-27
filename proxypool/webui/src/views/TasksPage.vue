@@ -1,5 +1,8 @@
 <template>
             <section v-show="activePage === 'tasks'" class="task-dashboard fade-in">
+              <!-- Breadcrumb -->
+              <Breadcrumb :items="breadcrumbItems" />
+
               <!-- Quick actions -->
               <div class="card task-quick-card">
                 <div class="card-body">
@@ -230,7 +233,7 @@
                       {{ buttonLabel('refreshTasks', '刷新', '刷新中...') }}
                     </button>
                   </div>
-                  <div v-if="!taskItems.length" class="empty-state">暂无任务</div>
+                  <EmptyState v-if="!taskItems.length" title="暂无任务" description="点击上方按钮开始执行任务" size="small" />
                   <div v-else class="task-list">
                     <div v-for="task in taskItems" :key="task.task_id" class="task-item">
                       <div class="task-row">
@@ -247,9 +250,7 @@
                           </button>
                         </div>
                       </div>
-                      <div class="task-progress">
-                        <div class="task-progress-bar" :style="{ width: (task.progress || 0) + '%' }"></div>
-                      </div>
+                      <TaskProgress :current="task.completed || 0" :total="task.total || 0" :status="task.status" :show-label="true" />
                       <div class="task-meta">
                         <span>任务 {{ shortTaskId(task.task_id) }}</span>
                         <span>进度 {{ task.completed || 0 }}/{{ task.total || '-' }}</span>
@@ -267,9 +268,25 @@
 
 <script>
 import { rootProxyMixin } from "../rootProxyMixin";
+import Breadcrumb from '../components/layout/Breadcrumb.vue';
+import TaskProgress from '../components/common/TaskProgress.vue';
+import EmptyState from '../components/common/EmptyState.vue';
 
 export default {
   name: "TasksPage",
+  components: {
+    Breadcrumb,
+    TaskProgress,
+    EmptyState,
+  },
   mixins: [rootProxyMixin],
+  computed: {
+    breadcrumbItems() {
+      return [
+        { label: '首页', path: '/', onClick: () => this.selectPage('dashboard') },
+        { label: '任务中心' },
+      ];
+    },
+  },
 };
 </script>

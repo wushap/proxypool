@@ -1,6 +1,8 @@
 <template>
             <section v-show="activePage === 'subscriptions'" class="card fade-in">
               <div class="card-body">
+                <!-- Breadcrumb -->
+                <Breadcrumb :items="breadcrumbItems" />
                 <div class="section-header">
                   <h2 class="section-title">订阅管理</h2>
                   <div class="btn-group">
@@ -83,8 +85,11 @@
                   </div>
                 </div>
 
+                <!-- Empty State -->
+                <EmptyState v-if="!subscriptions.length" title="暂无订阅" description="点击上方添加订阅按钮创建第一个订阅源" size="normal" />
+
                 <!-- Table -->
-                <div class="table-wrap">
+                <div v-else class="table-wrap">
                   <table class="data-table">
                     <thead>
                       <tr>
@@ -135,10 +140,24 @@
 
 <script>
 import { rootProxyMixin } from "../rootProxyMixin";
+import Breadcrumb from '../components/layout/Breadcrumb.vue';
+import EmptyState from '../components/common/EmptyState.vue';
 
 export default {
   name: "SubscriptionsPage",
+  components: {
+    Breadcrumb,
+    EmptyState,
+  },
   mixins: [rootProxyMixin],
+  computed: {
+    breadcrumbItems() {
+      return [
+        { label: '首页', path: '/', onClick: () => this.selectPage('dashboard') },
+        { label: '订阅管理' },
+      ];
+    },
+  },
   methods: {
     freshnessStyle(ts) {
       if (!ts) return { color: 'var(--muted)' };
