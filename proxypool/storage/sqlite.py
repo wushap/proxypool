@@ -48,6 +48,8 @@ class SQLiteProxyStorage:
             speed_mbps REAL,
             speed_tested_at TEXT,
             fail_count INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            total_checks INTEGER NOT NULL DEFAULT 0,
             last_error TEXT NOT NULL DEFAULT '',
             resolved_ip TEXT NOT NULL DEFAULT '',
             country TEXT NOT NULL DEFAULT '',
@@ -310,6 +312,10 @@ class SQLiteProxyStorage:
             conn.execute("ALTER TABLE proxies ADD COLUMN speed_mbps REAL")
         if "speed_tested_at" not in columns:
             conn.execute("ALTER TABLE proxies ADD COLUMN speed_tested_at TEXT")
+        if "success_count" not in columns:
+            conn.execute("ALTER TABLE proxies ADD COLUMN success_count INTEGER NOT NULL DEFAULT 0")
+        if "total_checks" not in columns:
+            conn.execute("ALTER TABLE proxies ADD COLUMN total_checks INTEGER NOT NULL DEFAULT 0")
 
         sub_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(subscriptions)").fetchall()
@@ -842,13 +848,46 @@ class SQLiteProxyStorage:
                 cursor = conn.execute(
                     """
                     UPDATE proxies
-                    SET available = 0, status = 'unavailable', updated_at = ?
+                    SET available = 0, updated_at = ?
                     WHERE available = 1 AND fail_count >= ?
                     """,
                     (now, threshold),
                 )
                 conn.commit()
                 return cursor.rowcount
+
+    def update_check_result(self, normalized_key: str, success: bool) -> None:
+        """更新代理的检查结果统计
+
+        Args:
+            normalized_key: 代理的唯一标识
+            success: 本次检查是否成功
+        """
+        now = _utc_now()
+        with self._write_lock:
+            with self._connect() as conn:
+                if success:
+                    conn.execute(
+                        """
+                        UPDATE proxies
+                        SET success_count = success_count + 1,
+                            total_checks = total_checks + 1,
+                            updated_at = ?
+                        WHERE normalized_key = ?
+                        """,
+                        (now, normalized_key),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE proxies
+                        SET total_checks = total_checks + 1,
+                            updated_at = ?
+                        WHERE normalized_key = ?
+                        """,
+                        (now, normalized_key),
+                    )
+                conn.commit()
 
     def get_proxies_by_keys(self, normalized_keys: list[str]) -> list[dict[str, Any]]:
         keys = [str(key).strip() for key in normalized_keys if str(key).strip()]

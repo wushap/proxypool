@@ -683,6 +683,7 @@ export const appOptions = {
       const state = this.getPageState(section);
       state.perPage = this._sanitizePerPage(state.perPage);
       state.page = 1;
+      this.persistPaginationState();
     },
     pageIndicator(section) {
       const state = this.getPageState(section);
@@ -767,7 +768,23 @@ export const appOptions = {
     },
     clearProxyFilters() {
       this.proxyFilters = { ...DEFAULT_PROXY_FILTERS };
+      this.persistFilterState();
       this.setMessage("筛选条件已清空");
+    },
+    loadFilterState() {
+      try {
+        const raw = localStorage.getItem("proxypool.filters.v1");
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (data && typeof data === "object") {
+          this.proxyFilters = { ...DEFAULT_PROXY_FILTERS, ...data };
+        }
+      } catch {}
+    },
+    persistFilterState() {
+      try {
+        localStorage.setItem("proxypool.filters.v1", JSON.stringify(this.proxyFilters));
+      } catch {}
     },
     onGeoCountryChanged() {
       const country = String(this.proxyFilters.geo_country || "").trim();
@@ -915,6 +932,7 @@ export const appOptions = {
         const proxyData = await proxyResp.json();
         this.proxies = proxyData.items || [];
         this.resetPage("proxies");
+        this.persistFilterState();
       } catch (err) {
         const friendlyMsg = this.getFriendlyErrorMessage(err, '代理数据');
         this.setMessage(friendlyMsg, true);
@@ -3134,6 +3152,8 @@ export const appOptions = {
     this.loadTestFallback();
     this.loadTestRunFilter();
     this.loadTaskConcurrency();
+    this.loadPaginationState();
+    this.loadFilterState();
     await this.loadAutoTaskConfig();
     await this.loadBackendPortRange();
     await this.loadBackendDefaultListen();

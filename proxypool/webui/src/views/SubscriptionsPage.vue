@@ -3,6 +3,9 @@
               <div class="card-body">
                 <!-- Breadcrumb -->
                 <Breadcrumb :items="breadcrumbItems" />
+
+                <!-- Loading State -->
+                <LoadingState v-if="isLoading" text="加载订阅数据中..." size="small" />
                 <div class="section-header">
                   <h2 class="section-title">订阅管理</h2>
                   <div class="btn-group">
@@ -142,14 +145,21 @@
 import { rootProxyMixin } from "../rootProxyMixin";
 import Breadcrumb from '../components/layout/Breadcrumb.vue';
 import EmptyState from '../components/common/EmptyState.vue';
+import LoadingState from '../components/common/LoadingState.vue';
 
 export default {
   name: "SubscriptionsPage",
   components: {
     Breadcrumb,
     EmptyState,
+    LoadingState,
   },
   mixins: [rootProxyMixin],
+  data() {
+    return {
+      isLoading: false,
+    };
+  },
   computed: {
     breadcrumbItems() {
       return [
