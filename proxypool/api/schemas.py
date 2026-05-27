@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from proxypool.security.url_validator import is_safe_url, SSRFProtectionError
 
 
 class ImportFilesRequest(BaseModel):
@@ -20,10 +22,32 @@ class ImportUrlsRequest(BaseModel):
     urls: list[str] = Field(default_factory=list)
     timeout_sec: float = 12.0
 
+    @field_validator("urls")
+    @classmethod
+    def validate_urls(cls, v: list[str]) -> list[str]:
+        """Validate URLs to prevent SSRF attacks."""
+        for url in v:
+            is_safe, error = is_safe_url(url)
+            if not is_safe:
+                raise ValueError(f"URL validation failed: {error}")
+        return v
+
 
 class ImportSourcesRequest(BaseModel):
     sources: list[str] = Field(default_factory=list)
     timeout_sec: float = 12.0
+
+    @field_validator("sources")
+    @classmethod
+    def validate_sources(cls, v: list[str]) -> list[str]:
+        """Validate source URLs to prevent SSRF attacks."""
+        for source in v:
+            # Sources can be URLs or file paths
+            if source.startswith(("http://", "https://")):
+                is_safe, error = is_safe_url(source)
+                if not is_safe:
+                    raise ValueError(f"Source URL validation failed: {error}")
+        return v
 
 
 class SingboxRouteItem(BaseModel):
@@ -80,6 +104,17 @@ class SpeedTestRequest(BaseModel):
     only_available: bool = True
     only_direct: bool | None = None
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        """Validate speed test URL to prevent SSRF attacks."""
+        if not v:
+            return v
+        is_safe, error = is_safe_url(v)
+        if not is_safe:
+            raise ValueError(f"URL validation failed: {error}")
+        return v
+
 
 class AutoTaskConfigRequest(BaseModel):
     enabled: bool = False
@@ -95,6 +130,17 @@ class AutoTaskConfigRequest(BaseModel):
     speed_test_limit: int = Field(default=0, ge=0, le=20000)
     speed_test_timeout_sec: float = Field(default=30.0, ge=3.0, le=300.0)
 
+    @field_validator("speed_test_url")
+    @classmethod
+    def validate_speed_test_url(cls, v: str) -> str:
+        """Validate speed test URL to prevent SSRF attacks."""
+        if not v:
+            return v
+        is_safe, error = is_safe_url(v)
+        if not is_safe:
+            raise ValueError(f"URL validation failed: {error}")
+        return v
+
 
 
 class SubscriptionCreateRequest(BaseModel):
@@ -102,11 +148,33 @@ class SubscriptionCreateRequest(BaseModel):
     url: str
     enabled: bool = True
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        """Validate subscription URL to prevent SSRF attacks."""
+        if not v:
+            return v
+        is_safe, error = is_safe_url(v)
+        if not is_safe:
+            raise ValueError(f"URL validation failed: {error}")
+        return v
+
 
 class SubscriptionUpdateRequest(BaseModel):
     name: str | None = None
     url: str | None = None
     enabled: bool | None = None
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str | None) -> str | None:
+        """Validate subscription URL to prevent SSRF attacks."""
+        if v is None:
+            return v
+        is_safe, error = is_safe_url(v)
+        if not is_safe:
+            raise ValueError(f"URL validation failed: {error}")
+        return v
 
 
 class SubscriptionUpdateProxyRequest(BaseModel):
@@ -191,6 +259,17 @@ class HttpGatewayTestRequest(BaseModel):
     target_url: str
     endpoint_id: int = Field(default=0, ge=0)
     session_id: str = ""
+
+    @field_validator("target_url")
+    @classmethod
+    def validate_target_url(cls, v: str) -> str:
+        """Validate gateway test URL to prevent SSRF attacks."""
+        if not v:
+            return v
+        is_safe, error = is_safe_url(v)
+        if not is_safe:
+            raise ValueError(f"URL validation failed: {error}")
+        return v
 
 
 class HttpProxyEndpointCreateRequest(BaseModel):
