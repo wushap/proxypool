@@ -74,6 +74,8 @@ def setup_logging(
     level: int = logging.INFO,
     json_output: bool = False,
     log_file: str | None = None,
+    log_max_bytes: int = 50 * 1024 * 1024,  # 50MB
+    log_backup_count: int = 5,
 ) -> None:
     """
     Setup structured logging configuration.
@@ -82,6 +84,8 @@ def setup_logging(
         level: Logging level (default: INFO)
         json_output: If True, use JSON formatter; otherwise use human-readable
         log_file: Optional log file path
+        log_max_bytes: Maximum size per log file before rotation (default 50MB)
+        log_backup_count: Number of rotated log files to keep (default 5)
     """
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
@@ -101,9 +105,15 @@ def setup_logging(
 
     root_logger.addHandler(console_handler)
 
-    # File handler (if specified)
+    # File handler with rotation (if specified)
     if log_file:
-        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        from logging.handlers import RotatingFileHandler
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=log_max_bytes,
+            backupCount=log_backup_count,
+            encoding="utf-8",
+        )
         file_handler.setLevel(level)
         file_handler.setFormatter(JSONFormatter())
         root_logger.addHandler(file_handler)

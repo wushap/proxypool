@@ -10,6 +10,9 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
+from proxypool.api.schemas import ImportFilesRequest, ImportUrlsRequest, ImportSourcesRequest
+from proxypool.security.api_helpers import validate_file_path_or_raise
+
 router = APIRouter(prefix="/api", tags=["proxies"])
 
 
@@ -78,19 +81,25 @@ async def subscription(
 
 @router.post("/collector/import-files")
 async def import_files(
-    body: dict,
+    body: ImportFilesRequest,
     request: Request,
 ) -> dict:
     """从文件导入代理"""
     collector = request.app.state.collector
-    if not body.get("paths"):
+    if not body.paths:
         raise HTTPException(status_code=400, detail="paths is empty")
-    paths = [Path(path).expanduser().resolve() for path in body["paths"]]
-    missing = [str(path) for path in paths if not path.exists()]
-    if missing:
-        raise HTTPException(status_code=400, detail=f"missing files: {missing}")
 
-    report = collector.collect_from_files(paths)
+    # Validate all paths before processing (R03 fix)
+    validated_paths = []
+    for path_str in body.paths:
+        validated_path = validate_file_path_or_raise(path_str)
+        if not validated_path.exists():
+            raise HTTPException(status_code=400, detail=f"file not found: {validated_path}")
+        if not validated_path.is_file():
+            raise HTTPException(status_code=400, detail=f"not a file: {validated_path}")
+        validated_paths.append(validated_path)
+
+    report = collector.collect_from_files(validated_paths)
     return _collect_report_to_dict(report)
 
 
@@ -110,28 +119,40 @@ async def import_texts(
 
 @router.post("/collector/import-urls")
 async def import_urls(
-    body: dict,
+    body: ImportUrlsRequest,
     request: Request,
 ) -> dict:
     """从URL导入代理"""
     collector = request.app.state.collector
-    if not body.get("urls"):
+    if not body.urls:
         raise HTTPException(status_code=400, detail="urls is empty")
 
-    report = collector.collect_from_urls(urls=body["urls"], timeout_sec=body.get("timeout_sec"))
+    report = collector.collect_from_urls(urls=body.urls, timeout_sec=body.timeout_sec)
     return _collect_report_to_dict(report)
 
 
 @router.post("/collector/import-sources")
 async def import_sources(
-    body: dict,
+    body: ImportSourcesRequest,
     request: Request,
 ) -> dict:
     """从订阅源导入代理"""
     collector = request.app.state.collector
-    if not body.get("sources"):
+    if not body.sources:
         raise HTTPException(status_code=400, detail="sources is empty")
-    report = collector.collect_from_sources(sources=body["sources"], timeout_sec=body.get("timeout_sec"))
+
+    # R06 fix: Validate file path sources before passing to collector
+    # URL sources are already validated by ImportSourcesRequest schema
+    validated_sources = []
+    for source in body.sources:
+        if source.startswith(("http://", "https://", "data:", "file://")):
+            validated_sources.append(source)
+        else:
+            # File path - validate for path traversal
+            validated_path = validate_file_path_or_raise(source)
+            validated_sources.append(str(validated_path))
+
+    report = collector.collect_from_sources(sources=validated_sources, timeout_sec=body.timeout_sec)
     return _collect_report_to_dict(report)
 
 

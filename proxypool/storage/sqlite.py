@@ -680,6 +680,13 @@ class SQLiteProxyStorage:
             order_clause = f"CASE WHEN latency_ms IS NULL THEN 1 ELSE 0 END ASC, latency_ms {norm_order}, updated_at DESC"
         elif sort_key in ("speed", "bandwidth", "speed_mbps"):
             order_clause = f"CASE WHEN speed_mbps IS NULL OR speed_mbps <= 0 THEN 1 ELSE 0 END ASC, speed_mbps {norm_order}, updated_at DESC"
+        elif sort_key in ("fail_count", "failures"):
+            order_clause = f"fail_count {norm_order}, updated_at DESC"
+        elif sort_key in ("last_checked", "checked"):
+            order_clause = f"CASE WHEN last_checked_at IS NULL THEN 1 ELSE 0 END ASC, last_checked_at {norm_order}, updated_at DESC"
+        elif sort_key in ("success_rate", "success"):
+            # 按可用性排序（作为成功率的代理指标）
+            order_clause = f"available DESC, fail_count ASC, updated_at DESC"
         else:
             order_clause = "updated_at DESC"
 
@@ -822,6 +829,26 @@ class SQLiteProxyStorage:
                         (now, now, normalized_key),
                     )
                 conn.commit()
+
+    def mark_unavailable_by_fail_count(self, threshold: int = 5) -> int:
+        """将 fail_count >= threshold 的可用代理标记为不可用
+
+        Returns:
+            被标记为不可用的代理数量
+        """
+        now = _utc_now()
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE proxies
+                    SET available = 0, status = 'unavailable', updated_at = ?
+                    WHERE available = 1 AND fail_count >= ?
+                    """,
+                    (now, threshold),
+                )
+                conn.commit()
+                return cursor.rowcount
 
     def get_proxies_by_keys(self, normalized_keys: list[str]) -> list[dict[str, Any]]:
         keys = [str(key).strip() for key in normalized_keys if str(key).strip()]

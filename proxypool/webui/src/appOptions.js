@@ -2,6 +2,17 @@
  * Proxy Pool Console - Vue root options.
  */
 import { ElNotification, ElMessageBox } from "element-plus";
+import {
+  proxyApi,
+  subscriptionApi,
+  taskApi,
+  poolApi,
+  gatewayApi,
+  backendApi,
+  chainApi,
+  publishedSubscriptionApi,
+  testerApi,
+} from "./core/api.js";
 
 // --- Defaults ---
 export const DEFAULT_PROXY_COLUMN_CONFIGS = {
@@ -397,6 +408,183 @@ export const appOptions = {
       else if (key === "published-subscriptions") { this.loadPublishedSubscriptions(); }
     },
 
+    // --- Form Validation ---
+    validateSubscriptionForm(data) {
+      const errors = [];
+      const url = String(data.url || "").trim();
+      const name = String(data.name || "").trim();
+
+      if (!url) {
+        errors.push("订阅链接不能为空");
+      } else if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        errors.push("订阅链接必须以 http:// 或 https:// 开头");
+      }
+
+      if (name && name.length > 100) {
+        errors.push("订阅名称不能超过 100 个字符");
+      }
+
+      return errors;
+    },
+
+    validateProxyPoolForm(data) {
+      const errors = [];
+      const name = String(data.name || "").trim();
+
+      if (!name) {
+        errors.push("请输入代理池名称");
+      } else if (name.length > 50) {
+        errors.push("代理池名称不能超过 50 个字符");
+      } else if (name.length < 2) {
+        errors.push("代理池名称至少需要 2 个字符");
+      }
+
+      const listen = String(data.listen || "").trim();
+      if (listen && !this.validateListenAddress(listen)) {
+        errors.push("监听地址格式无效（示例：0.0.0.0 或 127.0.0.1:8080）");
+      }
+
+      return errors;
+    },
+
+    validateListenAddress(address) {
+      // 支持 IP:PORT 或 IP 格式
+      const ipWithPort = /^(\d{1,3}\.){3}\d{1,3}:\d{1,5}$/;
+      const ipOnly = /^(\d{1,3}\.){3}\d{1,3}$/;
+      const localhost = /^localhost(:\d{1,5})?$/;
+      return ipWithPort.test(address) || ipOnly.test(address) || localhost.test(address);
+    },
+
+    validateGatewayEndpointForm(data) {
+      const errors = [];
+      const name = String(data.name || "").trim();
+
+      if (!name) {
+        errors.push("请输入端点名称");
+      } else if (name.length > 50) {
+        errors.push("端点名称不能超过 50 个字符");
+      }
+
+      if (!data.hop_pool_ids || !data.hop_pool_ids.length) {
+        errors.push("请至少选择一个代理池跳点");
+      }
+
+      const port = Number(data.listen_port || 0);
+      if (port < 1 || port > 65535) {
+        errors.push("监听端口必须在 1-65535 范围内");
+      }
+
+      const ttl = Number(data.sticky_ttl_sec || 0);
+      if (ttl < 1 || ttl > 604800) {
+        errors.push("粘性 TTL 必须在 1-604800 秒范围内（最大 7 天）");
+      }
+
+      return errors;
+    },
+
+    validateFormErrors(errors) {
+      if (errors.length > 0) {
+        this.setMessage(errors[0], true);
+        return false;
+      }
+      return true;
+    },
+
+    // --- Error Message Handling ---
+    getFriendlyErrorMessage(error, context = '') {
+      const errorMsg = String(error?.message || error || '').toLowerCase();
+      const httpStatus = error?.status || 0;
+
+      // 网络错误
+      if (errorMsg.includes('network') || errorMsg.includes('fetch')) {
+        return '网络连接失败，请检查网络后重试';
+      }
+      if (errorMsg.includes('timeout')) {
+        return '请求超时，请检查网络或稍后重试';
+      }
+      if (errorMsg.includes('econnrefused') || errorMsg.includes('connection refused')) {
+        return '服务未启动或无法连接，请检查后端服务状态';
+      }
+
+      // HTTP 状态码错误
+      if (httpStatus === 401 || httpStatus === 403) {
+        return '权限不足，请检查访问权限';
+      }
+      if (httpStatus === 404) {
+        return context ? `${context}不存在或已被删除` : '请求的资源不存在';
+      }
+      if (httpStatus === 409) {
+        return context ? `${context}已存在，请勿重复创建` : '资源冲突，请检查输入';
+      }
+      if (httpStatus === 422) {
+        return '输入数据格式错误，请检查表单内容';
+      }
+      if (httpStatus === 500) {
+        return '服务器内部错误，请稍后重试或联系管理员';
+      }
+      if (httpStatus === 503) {
+        return '服务暂时不可用，请稍后重试';
+      }
+
+      // 业务错误关键词映射
+      const errorMappings = {
+        'already exists': '已存在，请勿重复创建',
+        'not found': '不存在或已被删除',
+        'invalid': '格式无效，请检查输入',
+        'required': '为必填项，请补充完整',
+        'empty': '不能为空',
+        'failed': '操作失败，请重试',
+        'denied': '被拒绝，权限不足',
+        'limit exceeded': '已达上限，无法继续',
+        'timeout': '操作超时，请重试',
+      };
+
+      for (const [keyword, message] of Object.entries(errorMappings)) {
+        if (errorMsg.includes(keyword)) {
+          return context ? `${context}${message}` : message;
+        }
+      }
+
+      // 返回原始错误消息（截断过长内容）
+      const originalMsg = error?.message || String(error);
+      return originalMsg.length > 100 ? originalMsg.substring(0, 97) + '...' : originalMsg;
+    },
+
+    formatSuccessMessage(action, details = '') {
+      const baseMessages = {
+        'create': '创建成功',
+        'update': '更新成功',
+        'delete': '删除成功',
+        'save': '保存成功',
+        'load': '加载成功',
+        'refresh': '刷新成功',
+        'start': '启动成功',
+        'stop': '停止成功',
+        'restart': '重启成功',
+        'sync': '同步成功',
+        'import': '导入成功',
+        'export': '导出成功',
+        'test': '测试成功',
+      };
+
+      const base = baseMessages[action] || '操作成功';
+      return details ? `${base}：${details}` : base;
+    },
+
+    getActionContext(actionType) {
+      const contexts = {
+        'subscription': '订阅',
+        'proxy': '代理',
+        'pool': '代理池',
+        'endpoint': '端点',
+        'task': '任务',
+        'backend': '后端',
+        'chain': '链服务',
+        'route': '路由',
+      };
+      return contexts[actionType] || '';
+    },
+
     // --- Button State Management ---
     isActionRunning(key) { return !!this.buttonState[String(key || "")]; },
     buttonLabel(key, idleText, runningText = "执行中...") {
@@ -427,6 +615,30 @@ export const appOptions = {
       state.page = Math.max(1, Math.trunc(Number(state.page || 1)));
       state.perPage = this._sanitizePerPage(state.perPage);
       return state;
+    },
+    loadPaginationState() {
+      try {
+        const raw = localStorage.getItem("proxypool.pagination.v1");
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (data && typeof data === "object") {
+          for (const [section, state] of Object.entries(data)) {
+            if (this.pagination[section] && typeof state === "object") {
+              this.pagination[section].page = state.page || 1;
+              this.pagination[section].perPage = state.perPage || 10;
+            }
+          }
+        }
+      } catch {}
+    },
+    persistPaginationState() {
+      try {
+        const data = {};
+        for (const [section, state] of Object.entries(this.pagination || {})) {
+          data[section] = { page: state.page, perPage: state.perPage };
+        }
+        localStorage.setItem("proxypool.pagination.v1", JSON.stringify(data));
+      } catch {}
     },
     getSectionItems(section) {
       if (section === "subscriptions") return this.subscriptions || [];
@@ -580,7 +792,25 @@ export const appOptions = {
       this.message = text;
       this.messageError = isError;
       if (isError) {
-        try { ElNotification({ title: '操作失败', message: text, type: 'error', duration: 5000 }); } catch {}
+        try {
+          ElNotification({
+            title: '操作失败',
+            message: text,
+            type: 'error',
+            duration: 6000,
+            position: 'top-right',
+          });
+        } catch {}
+      } else if (text) {
+        try {
+          ElNotification({
+            title: '操作成功',
+            message: text,
+            type: 'success',
+            duration: 3000,
+            position: 'top-right',
+          });
+        } catch {}
       }
     },
     async apiFetch(url, options = {}) {
@@ -622,11 +852,26 @@ export const appOptions = {
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "导入失败");
-        this.setMessage(`文件导入完成: parsed=${data.total_parsed}, inserted=${data.total_inserted}, updated=${data.total_updated}, deduped=${data.total_deduped}, invalid=${data.total_invalid}`);
+
+        const total = data.total_parsed || 0;
+        const inserted = data.total_inserted || 0;
+        const updated = data.total_updated || 0;
+        const invalid = data.total_invalid || 0;
+        const deduped = data.total_deduped || 0;
+
+        let summary = `共解析 ${total} 个代理`;
+        if (inserted > 0) summary += `，新增 ${inserted} 个`;
+        if (updated > 0) summary += `，更新 ${updated} 个`;
+        if (deduped > 0) summary += `，去重 ${deduped} 个`;
+        if (invalid > 0) summary += `，无效 ${invalid} 个`;
+        summary += '。';
+
+        this.setMessage(summary);
         await this.loadData();
         await this.loadProxyCatalog();
       } catch (err) {
-        this.setMessage("文件导入失败: " + err, true);
+        const friendlyMsg = this.getFriendlyErrorMessage(err, '文件导入');
+        this.setMessage(friendlyMsg, true);
       }
     },
 
@@ -671,7 +916,8 @@ export const appOptions = {
         this.proxies = proxyData.items || [];
         this.resetPage("proxies");
       } catch (err) {
-        this.setMessage("加载数据失败: " + err, true);
+        const friendlyMsg = this.getFriendlyErrorMessage(err, '代理数据');
+        this.setMessage(friendlyMsg, true);
       }
     },
     async loadProxyCatalog() {
@@ -697,30 +943,33 @@ export const appOptions = {
     // --- Subscriptions ---
     async loadSubscriptions() {
       try {
-        const resp = await fetch("/api/subscriptions?limit=1000");
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || "加载订阅失败");
+        const data = await subscriptionApi.getList({ limit: 1000 });
         this.subscriptions = data.items || [];
         this.resetPage("subscriptions");
-      } catch (err) { this.setMessage("加载订阅失败: " + err, true); }
+      } catch (err) {
+        const friendlyMsg = this.getFriendlyErrorMessage(err, '订阅');
+        this.setMessage(friendlyMsg, true);
+      }
     },
     async createSubscription() {
       const name = String(this.subscriptionForm.name || "").trim();
       const url = String(this.subscriptionForm.url || "").trim();
-      if (!url) { this.setMessage("订阅链接不能为空", true); return; }
+
+      const errors = this.validateSubscriptionForm({ name, url });
+      if (!this.validateFormErrors(errors)) return;
+
       try {
-        const resp = await fetch("/api/subscriptions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name || "subscription", url, enabled: true }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || "保存失败");
+        await subscriptionApi.create({ name: name || "subscription", url, enabled: true });
         this.subscriptionForm.name = "";
         this.subscriptionForm.url = "";
-        this.setMessage("订阅已保存");
+        this.setMessage("订阅已保存，可在订阅管理页面刷新获取节点");
         await this.loadSubscriptions();
-      } catch (err) { this.setMessage("保存订阅失败: " + err, true); }
+      } catch (err) {
+        const errorMsg = err.message.includes("already exists")
+          ? "该订阅链接已存在，请勿重复添加"
+          : this.getFriendlyErrorMessage(err, '订阅');
+        this.setMessage(errorMsg, true);
+      }
     },
     async onToggleSubscription(item) {
       await this.runWithButtonState(`toggleSub-${item.id}`, async () => {
@@ -1012,9 +1261,7 @@ export const appOptions = {
     // --- Proxy Pools ---
     async loadProxyPools() {
       try {
-        const resp = await fetch("/api/pools?limit=1000");
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || "加载代理池失败");
+        const data = await poolApi.getList({ limit: 1000 });
         this.proxyPools = data.items || [];
         if (!this.selectedPoolIdForChain && this.proxyPools.length) {
           this.selectPoolForChain(this.proxyPools[0]);
@@ -1026,7 +1273,10 @@ export const appOptions = {
           this.resetSelectedPoolForChainState();
         }
         this.resetPage("proxyPools");
-      } catch (err) { this.setMessage("加载代理池失败: " + err, true); }
+      } catch (err) {
+        const friendlyMsg = this.getFriendlyErrorMessage(err, '代理池');
+        this.setMessage(friendlyMsg, true);
+      }
     },
     normalizePoolFilters(filters) {
       const out = {};
@@ -1164,17 +1414,20 @@ export const appOptions = {
       this.loadGatewayStatus();
     },
     async loadGatewayEndpoints() {
-      const resp = await fetch(this.gatewayEndpointsApiBase());
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "加载 HTTP 端点失败");
-      this.gatewayEndpoints = data.items || [];
-      const preferredStatusId = Number(this.gatewayStatusEndpointId || 0);
-      if (!preferredStatusId && this.gatewayEndpoints.length) this.gatewayStatusEndpointId = Number(this.gatewayEndpoints[0].id || 0);
-      if (!this.gatewayEndpointForm.id && this.gatewayEndpoints.length) {
-        this.editGatewayEndpoint(this.gatewayEndpoints[0]);
-      }
-      if (!Number(this.gatewayTestForm.endpoint_id || 0) && this.gatewayEndpoints.length) {
-        this.gatewayTestForm.endpoint_id = Number(this.gatewayEndpoints[0].id || 0);
+      try {
+        const data = await gatewayApi.getEndpoints();
+        this.gatewayEndpoints = data.items || [];
+        const preferredStatusId = Number(this.gatewayStatusEndpointId || 0);
+        if (!preferredStatusId && this.gatewayEndpoints.length) this.gatewayStatusEndpointId = Number(this.gatewayEndpoints[0].id || 0);
+        if (!this.gatewayEndpointForm.id && this.gatewayEndpoints.length) {
+          this.editGatewayEndpoint(this.gatewayEndpoints[0]);
+        }
+        if (!Number(this.gatewayTestForm.endpoint_id || 0) && this.gatewayEndpoints.length) {
+          this.gatewayTestForm.endpoint_id = Number(this.gatewayEndpoints[0].id || 0);
+        }
+      } catch (err) {
+        const friendlyMsg = this.getFriendlyErrorMessage(err, 'HTTP 端点');
+        this.setMessage(friendlyMsg, true);
       }
     },
     gatewayEndpointPayload() {
@@ -1193,38 +1446,65 @@ export const appOptions = {
     },
     async saveGatewayEndpoint() {
       const payload = this.gatewayEndpointPayload();
-      if (!payload.name) throw new Error("请输入端点名称");
-      if (!payload.hop_pool_ids.length) throw new Error("请至少选择一个代理池跳点");
-      const endpointId = Number(this.gatewayEndpointForm.id || 0);
-      const url = endpointId ? `${this.gatewayEndpointsApiBase()}/${endpointId}` : this.gatewayEndpointsApiBase();
-      const method = endpointId ? "PUT" : "POST";
-      const resp = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+
+      const errors = this.validateGatewayEndpointForm({
+        name: payload.name,
+        hop_pool_ids: payload.hop_pool_ids,
+        listen_port: payload.listen_port,
+        sticky_ttl_sec: payload.sticky_ttl_sec,
       });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "保存 HTTP 端点失败");
-      await this.loadGatewayEndpoints();
-      this.editGatewayEndpoint(data.item || {});
-      this.gatewayStatusEndpointId = Number(data.item?.id || this.gatewayStatusEndpointId || 0);
-      await this.loadGatewayStatus();
-      this.setMessage(`HTTP 端点已保存: ${data.item?.name || payload.name}`);
+      if (!this.validateFormErrors(errors)) return;
+
+      try {
+        const endpointId = Number(this.gatewayEndpointForm.id || 0);
+        const url = endpointId ? `${this.gatewayEndpointsApiBase()}/${endpointId}` : this.gatewayEndpointsApiBase();
+        const method = endpointId ? "PUT" : "POST";
+        const resp = await fetch(url, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "保存 HTTP 端点失败");
+        await this.loadGatewayEndpoints();
+        this.editGatewayEndpoint(data.item || {});
+        this.gatewayStatusEndpointId = Number(data.item?.id || this.gatewayStatusEndpointId || 0);
+        await this.loadGatewayStatus();
+        this.setMessage(`HTTP 端点已保存: ${data.item?.name || payload.name}，端口 ${payload.listen_port}`);
+      } catch (err) {
+        const errorMsg = err.message.includes("address already in use")
+          ? `端口 ${payload.listen_port} 已被占用，请更换端口`
+          : "保存 HTTP 端点失败: " + err;
+        this.setMessage(errorMsg, true);
+      }
     },
     async deleteGatewayEndpoint(endpointId) {
-      const resp = await fetch(`${this.gatewayEndpointsApiBase()}/${Number(endpointId)}`, { method: "DELETE" });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "删除 HTTP 端点失败");
-      await this.loadGatewayEndpoints();
-      if (Number(this.gatewayStatusEndpointId || 0) === Number(endpointId)) {
-        this.gatewayStatusEndpointId = this.gatewayEndpoints.length ? Number(this.gatewayEndpoints[0].id || 0) : 0;
+      try {
+        await ElMessageBox.confirm('确定删除此 HTTP 端点？删除后相关的网关配置将失效。', '确认删除', {
+          type: 'warning',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+        });
+      } catch { return; }
+
+      try {
+        const resp = await fetch(`${this.gatewayEndpointsApiBase()}/${Number(endpointId)}`, { method: "DELETE" });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "删除 HTTP 端点失败");
+        await this.loadGatewayEndpoints();
+        if (Number(this.gatewayStatusEndpointId || 0) === Number(endpointId)) {
+          this.gatewayStatusEndpointId = this.gatewayEndpoints.length ? Number(this.gatewayEndpoints[0].id || 0) : 0;
+        }
+        if (Number(this.gatewayTestForm.endpoint_id || 0) === Number(endpointId)) {
+          this.gatewayTestForm.endpoint_id = this.gatewayEndpoints.length ? Number(this.gatewayEndpoints[0].id || 0) : 0;
+        }
+        this.resetGatewayEndpointForm();
+        await this.loadGatewayStatus();
+        this.setMessage("HTTP 端点已删除");
+      } catch (err) {
+        const friendlyMsg = this.getFriendlyErrorMessage(err, 'HTTP 端点');
+        this.setMessage(friendlyMsg, true);
       }
-      if (Number(this.gatewayTestForm.endpoint_id || 0) === Number(endpointId)) {
-        this.gatewayTestForm.endpoint_id = this.gatewayEndpoints.length ? Number(this.gatewayEndpoints[0].id || 0) : 0;
-      }
-      this.resetGatewayEndpointForm();
-      await this.loadGatewayStatus();
-      this.setMessage("HTTP 端点已删除");
     },
     openGatewayEndpointStatus(item) {
       this.gatewayStatusEndpointId = Number(item?.id || 0);
@@ -1361,22 +1641,46 @@ export const appOptions = {
       this.setMessage("网关健康检测已完成");
     },
     async runGatewayTest() {
-      if (!Number(this.gatewayTestForm.endpoint_id || 0)) throw new Error("请选择 HTTP 代理端点");
-      const resp = await fetch(`${this.gatewayApiBase()}/http-test`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          target_url: String(this.gatewayTestForm.target_url || "").trim(),
-          endpoint_id: Math.max(0, Number(this.gatewayTestForm.endpoint_id || 0)),
-          session_id: String(this.gatewayTestForm.session_id || "").trim(),
-        }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "执行网关测试失败");
-      this.gatewayTestResult = data;
-      await this.loadGatewayStatus();
-      if (data.ok) this.setMessage("HTTP 端点测试成功");
-      else this.setMessage(data.detail || "HTTP 端点测试失败", true);
+      const targetUrl = String(this.gatewayTestForm.target_url || "").trim();
+      const endpointId = Number(this.gatewayTestForm.endpoint_id || 0);
+
+      if (!endpointId) {
+        this.setMessage("请选择 HTTP 代理端点", true);
+        return;
+      }
+
+      if (!targetUrl) {
+        this.setMessage("请输入目标 URL", true);
+        return;
+      }
+
+      if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+        this.setMessage("目标 URL 必须以 http:// 或 https:// 开头", true);
+        return;
+      }
+
+      try {
+        const resp = await fetch(`${this.gatewayApiBase()}/http-test`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            target_url: targetUrl,
+            endpoint_id: endpointId,
+            session_id: String(this.gatewayTestForm.session_id || "").trim(),
+          }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "执行网关测试失败");
+        this.gatewayTestResult = data;
+        await this.loadGatewayStatus();
+        if (data.ok) this.setMessage("HTTP 端点测试成功，可以正常使用代理");
+        else this.setMessage(data.detail || "HTTP 端点测试失败，请检查端点配置", true);
+      } catch (err) {
+        const errorMsg = err.message.includes("ECONNREFUSED")
+          ? "无法连接到目标服务器，请检查网络或目标 URL"
+          : "执行网关测试失败: " + err;
+        this.setMessage(errorMsg, true);
+      }
     },
     async savePoolSessionRule(poolId = this.selectedPoolIdForChain) {
       const id = Number(poolId || 0);
@@ -1397,14 +1701,31 @@ export const appOptions = {
     },
     async deletePoolSessionRule(urlPrefix, poolId = this.selectedPoolIdForChain) {
       const id = Number(poolId || 0);
-      if (!id) throw new Error("请先选择代理池");
-      const resp = await fetch(`${this.poolSessionRulesApiBase(id)}/${encodeURIComponent(String(urlPrefix || "").trim())}`, {
-        method: "DELETE",
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "删除会话规则失败");
-      await this.loadPoolSessionRules(id);
-      this.setMessage("会话规则已删除");
+      if (!id) {
+        this.setMessage("请先选择代理池", true);
+        return;
+      }
+
+      try {
+        await ElMessageBox.confirm(`确定删除 URL 前缀为 "${urlPrefix}" 的会话规则？`, '确认删除', {
+          type: 'warning',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+        });
+      } catch { return; }
+
+      try {
+        const resp = await fetch(`${this.poolSessionRulesApiBase(id)}/${encodeURIComponent(String(urlPrefix || "").trim())}`, {
+          method: "DELETE",
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "删除会话规则失败");
+        await this.loadPoolSessionRules(id);
+        this.setMessage("会话规则已删除");
+      } catch (err) {
+        const friendlyMsg = this.getFriendlyErrorMessage(err, '会话规则');
+        this.setMessage(friendlyMsg, true);
+      }
     },
     usePoolSessionRule(item) {
       this.poolSessionRuleForm = {
@@ -1426,14 +1747,18 @@ export const appOptions = {
     },
     async createProxyPool() {
       const name = String(this.proxyPoolForm.name || "").trim();
-      if (!name) { this.setMessage("请输入池名称", true); return; }
+      const listen = String(this.proxyPoolForm.listen || "").trim();
+
+      const errors = this.validateProxyPoolForm({ name, listen });
+      if (!this.validateFormErrors(errors)) return;
+
       try {
         const resp = await fetch("/api/pools", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name,
-            listen: this.proxyPoolForm.listen || "0.0.0.0",
+            listen: listen || "0.0.0.0",
             inbound_type: this.proxyPoolForm.inbound_type || "http",
             filters: this.normalizePoolFilters(this.proxyPoolForm.filters),
           }),
@@ -1441,9 +1766,14 @@ export const appOptions = {
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "创建失败");
         this.proxyPoolForm.name = "";
-        this.setMessage("代理池已创建");
+        this.setMessage("代理池已创建，可点击同步按钮加载节点");
         await this.loadProxyPools();
-      } catch (err) { this.setMessage("创建代理池失败: " + err, true); }
+      } catch (err) {
+        const errorMsg = err.message.includes("already exists")
+          ? "该代理池名称已存在，请使用其他名称"
+          : "创建代理池失败: " + err;
+        this.setMessage(errorMsg, true);
+      }
     },
     async syncPool(poolId) {
       try {
@@ -1487,12 +1817,23 @@ export const appOptions = {
     async onDeleteProxyPool(poolId) {
       await this.runWithButtonState(`deletePool-${poolId}`, async () => {
         try {
+          await ElMessageBox.confirm('确定删除此代理池？删除后相关的网关端点配置可能失效。', '确认删除', {
+            type: 'warning',
+            confirmButtonText: '删除',
+            cancelButtonText: '取消',
+          });
+        } catch { return; }
+
+        try {
           const resp = await fetch(`/api/pools/${poolId}`, { method: "DELETE" });
           const data = await resp.json();
           if (!resp.ok) throw new Error(data.detail || "删除失败");
           this.setMessage("代理池已删除");
           await this.loadProxyPools();
-        } catch (err) { this.setMessage("删除代理池失败: " + err, true); }
+        } catch (err) {
+          const friendlyMsg = this.getFriendlyErrorMessage(err, '代理池');
+          this.setMessage(friendlyMsg, true);
+        }
       });
     },
     async onCreateProxyPool() { await this.runWithButtonState("createProxyPool", () => this.createProxyPool()); },
@@ -1679,8 +2020,17 @@ export const appOptions = {
       } catch (err) { this.setMessage("停止实例失败: " + err, true); }
     },
     async backendInstanceDelete(instanceId) {
+      const id = String(instanceId || "default").trim() || "default";
+
       try {
-        const id = String(instanceId || "default").trim() || "default";
+        await ElMessageBox.confirm(`确定删除 sing-box 实例 "${id}"？此操作不可撤销。`, '确认删除', {
+          type: 'warning',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+        });
+      } catch { return; }
+
+      try {
         const resp = await fetch(`/api/backend/instances/${encodeURIComponent(id)}`, { method: "DELETE" });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "删除实例失败");
@@ -1689,7 +2039,10 @@ export const appOptions = {
         if (this.backendConfigInstanceId === id) this.backendConfigInstanceId = "default";
         this.setMessage(data.deleted ? `sing-box 实例已删除: ${id}` : `sing-box 实例不存在: ${id}`);
         await this.loadBackendEvents();
-      } catch (err) { this.setMessage("删除实例失败: " + err, true); }
+      } catch (err) {
+        const friendlyMsg = this.getFriendlyErrorMessage(err, 'sing-box 实例');
+        this.setMessage(friendlyMsg, true);
+      }
     },
     async onBackendInstanceCreate(instanceId = "") {
       const id = this.backendActionInstanceId(instanceId);
@@ -2310,13 +2663,25 @@ export const appOptions = {
     async onDeleteTask(task) {
       const taskId = String(task?.task_id || "");
       if (!taskId) return;
+
+      try {
+        await ElMessageBox.confirm(`确定删除任务记录 ${this.shortTaskId(taskId)}？`, '确认删除', {
+          type: 'info',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+        });
+      } catch { return; }
+
       try {
         const resp = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "删除任务失败");
         this.setMessage(data.deleted ? `任务已删除: ${this.shortTaskId(taskId)}` : `任务未删除(仅可删除已完成任务): ${this.shortTaskId(taskId)}`, !data.deleted);
         await this.refreshTaskList({ force: true });
-      } catch (err) { this.setMessage("删除任务失败: " + err, true); }
+      } catch (err) {
+        const friendlyMsg = this.getFriendlyErrorMessage(err, '任务');
+        this.setMessage(friendlyMsg, true);
+      }
     },
     async onStopTask(task) { await this.runWithButtonState(`stopTask-${task.task_id}`, () => this.stopTask(task)); },
     async onDeleteTaskBtn(task) { await this.runWithButtonState(`deleteTask-${task.task_id}`, () => this.onDeleteTask(task)); },
@@ -2431,7 +2796,11 @@ export const appOptions = {
           fallback_front_max_attempts: maxAttempts,
           replace_failed_with_available: testFilter.replace_failed_with_available === true,
         }, "测速任务");
-      } catch (err) { this.setMessage("测速失败: " + err, true); }
+        this.setMessage("测速任务已启动，可在任务列表查看进度");
+      } catch (err) {
+        const friendlyMsg = this.getFriendlyErrorMessage(err, '测速任务');
+        this.setMessage(friendlyMsg, true);
+      }
     },
     async onRunSpeedTest() { await this.runWithButtonState("runSpeedTest", () => this.runSpeedTest()); },
     async runSpeedTest() {
@@ -2446,7 +2815,11 @@ export const appOptions = {
         if (!/^https?:\/\//.test(payload.url)) throw new Error("测速文件地址必须以 http:// 或 https:// 开头");
         this.speedTestForm = payload;
         await this.startProgressTask("/api/tasks/speed-test/start", payload, "网速测试任务");
-      } catch (err) { this.setMessage("网速测试失败: " + err, true); }
+        this.setMessage("网速测试任务已启动，可在任务列表查看进度");
+      } catch (err) {
+        const friendlyMsg = this.getFriendlyErrorMessage(err, '网速测试');
+        this.setMessage(friendlyMsg, true);
+      }
     },
     async onTestSingleProxy(item) {
       await this.runWithButtonState(`testProxy-${item.normalized_key}`, async () => {

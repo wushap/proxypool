@@ -24,7 +24,7 @@
                   </div>
                   <div v-if="proxySortKey" class="status-item">
                     <span class="text-muted">排序</span>
-                    <span class="badge badge-sm badge-neutral">{{ proxySortKey === 'latency' ? '延迟' : '带宽' }} {{ proxySortDir === 'asc' ? '↑' : '↓' }}</span>
+                    <span class="badge badge-sm badge-neutral">{{ sortLabel(proxySortKey) }} {{ proxySortDir === 'asc' ? '↑' : '↓' }}</span>
                   </div>
                   <div v-if="selectedProxyKeys.length" class="status-item">
                     <span class="text-muted">选中</span>
@@ -238,6 +238,16 @@ export default {
         let va, vb;
         if (key === 'latency') { va = a.latency_ms ?? Infinity; vb = b.latency_ms ?? Infinity; }
         else if (key === 'bandwidth') { va = a.speed_mbps ?? -1; vb = b.speed_mbps ?? -1; }
+        else if (key === 'fail_count') { va = a.fail_count ?? 0; vb = b.fail_count ?? 0; }
+        else if (key === 'last_checked') {
+          va = a.last_checked_at ? new Date(a.last_checked_at).getTime() : 0;
+          vb = b.last_checked_at ? new Date(b.last_checked_at).getTime() : 0;
+        }
+        else if (key === 'success_rate') {
+          // 按可用性排序（作为成功率的代理指标）
+          va = (a.available ? 1 : 0) * 1000 + (100 - (a.fail_count ?? 0));
+          vb = (b.available ? 1 : 0) * 1000 + (100 - (b.fail_count ?? 0));
+        }
         else { return 0; }
         return (va - vb) * dir;
       });
@@ -252,7 +262,17 @@ export default {
   },
   methods: {
     isSortableColumn(key) {
-      return key === 'latency' || key === 'bandwidth';
+      return ['latency', 'bandwidth', 'fail_count', 'last_checked', 'success_rate'].includes(key);
+    },
+    sortLabel(key) {
+      const labels = {
+        latency: '延迟',
+        bandwidth: '带宽',
+        fail_count: '失败次数',
+        last_checked: '最后检查',
+        success_rate: '成功率'
+      };
+      return labels[key] || key;
     },
     toggleProxySort(key) {
       if (this.proxySortKey === key) {

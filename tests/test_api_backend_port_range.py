@@ -105,14 +105,14 @@ async def test_backend_instance_start_and_stop_endpoints(tmp_path: Path, monkeyp
     app = create_app(_make_settings(tmp_path))
     calls: list[tuple[str, str]] = []
 
-    def fake_start_instance(instance_id: str = "default") -> None:
+    async def fake_start_instance_async(instance_id: str = "default") -> None:
         calls.append(("start", instance_id))
 
-    def fake_stop_instance(instance_id: str = "default") -> None:
+    async def fake_stop_instance_async(instance_id: str = "default") -> None:
         calls.append(("stop", instance_id))
 
-    monkeypatch.setattr(app.state.singbox_manager, "start_instance", fake_start_instance)
-    monkeypatch.setattr(app.state.singbox_manager, "stop_instance", fake_stop_instance)
+    monkeypatch.setattr(app.state.singbox_manager, "start_instance_async", fake_start_instance_async)
+    monkeypatch.setattr(app.state.singbox_manager, "stop_instance_async", fake_stop_instance_async)
     monkeypatch.setattr(app.state.singbox_manager, "status", lambda: {"ok": True})
     transport = httpx.ASGITransport(app=app)
 

@@ -176,31 +176,46 @@ api.addResponseInterceptor(async (data, response) => {
 export const proxyApi = {
   getList: (params) => api.get('/proxies', params),
   getStats: () => api.get('/stats'),
+  getSubscription: (params) => api.get('/subscription', params),
   deleteUnavailable: () => api.post('/proxies/delete-unavailable'),
   deleteSelected: (keys) => api.post('/proxies/delete-selected', { normalized_keys: keys }),
+  importTexts: (items) => api.post('/collector/import-texts', { items }),
 }
 
 export const subscriptionApi = {
-  getList: () => api.get('/subscriptions'),
+  getList: (params) => api.get('/subscriptions', params),
   create: (data) => api.post('/subscriptions', data),
   update: (id, data) => api.put(`/subscriptions/${id}`, data),
   delete: (id) => api.delete(`/subscriptions/${id}`),
   refresh: (id, timeout) => api.post(`/subscriptions/${id}/refresh`, { timeout_sec: timeout }),
+  refreshAll: (timeout) => api.post('/subscriptions/refresh-all', { timeout_sec: timeout }),
+  deleteUnavailable: () => api.post('/subscriptions/delete-unavailable'),
+  getUpdateProxy: () => api.get('/subscription-update-proxy'),
+  setUpdateProxy: (data) => api.put('/subscription-update-proxy', data),
 }
 
 export const taskApi = {
-  getList: () => api.get('/tasks'),
+  getList: (params) => api.get('/tasks', params),
+  get: (id) => api.get(`/tasks/${id}`),
   start: (type, payload) => api.post(`/tasks/${type}/start`, payload),
   stop: (id) => api.post(`/tasks/${id}/stop`),
   delete: (id) => api.delete(`/tasks/${id}`),
+  getAutoConfig: () => api.get('/tasks/auto-config'),
+  updateAutoConfig: (data) => api.put('/tasks/auto-config', data),
 }
 
 export const poolApi = {
-  getList: () => api.get('/pools'),
+  getList: (params) => api.get('/pools', params),
   create: (data) => api.post('/pools', data),
   update: (id, data) => api.put(`/pools/${id}`, data),
   delete: (id) => api.delete(`/pools/${id}`),
   sync: (id) => api.post(`/pools/${id}/sync`),
+  getChainConfig: (id) => api.get(`/pools/${id}/chain`),
+  updateChainConfig: (id, data) => api.put(`/pools/${id}/chain`, data),
+  getSessionRules: (id) => api.get(`/pools/${id}/chain/session-rules`),
+  upsertSessionRule: (id, prefix, data) => api.put(`/pools/${id}/chain/session-rules/${encodeURIComponent(prefix)}`, data),
+  deleteSessionRule: (id, prefix) => api.delete(`/pools/${id}/chain/session-rules/${encodeURIComponent(prefix)}`),
+  testRoute: (id, params) => api.get(`/pools/${id}/chain/route-test`, params),
 }
 
 export const gatewayApi = {
@@ -210,6 +225,10 @@ export const gatewayApi = {
   deleteEndpoint: (id) => api.delete(`/http-proxy-endpoints/${id}`),
   getStatus: (endpointId) => api.get('/gateway/http-status', { endpoint_id: endpointId }),
   runHealthCheck: () => api.post('/gateway/http-health-check'),
+  test: (data) => api.post('/gateway/http-test', data),
+  testEndpointRoute: (endpointId, params) => api.get(`/http-proxy-endpoints/${endpointId}/route-test`, params),
+  getServiceConfig: () => api.get('/http-proxy-endpoints/service-config'),
+  updateServiceConfig: (data) => api.put('/http-proxy-endpoints/service-config', data),
 }
 
 export const backendApi = {
@@ -217,4 +236,36 @@ export const backendApi = {
   start: () => api.post('/backend/start'),
   stop: () => api.post('/backend/stop'),
   restart: () => api.post('/backend/restart'),
+  getEvents: (params) => api.get('/backend/process-events', params),
+  getDefaultPortRange: () => api.get('/backend/default-port-range'),
+  updateDefaultPortRange: (data) => api.put('/backend/default-port-range', data),
+  getDefaultListen: () => api.get('/backend/default-listen'),
+  updateDefaultListen: (data) => api.put('/backend/default-listen', data),
+  createInstance: (data) => api.post('/backend/instances', data),
+  startInstance: (id) => api.post(`/backend/instances/${encodeURIComponent(id)}/start`),
+  stopInstance: (id) => api.post(`/backend/instances/${encodeURIComponent(id)}/stop`),
+  deleteInstance: (id) => api.delete(`/backend/instances/${encodeURIComponent(id)}`),
+  getInstanceRoutes: (id) => api.get(`/backend/instances/${encodeURIComponent(id)}/routes`),
+}
+
+export const chainApi = {
+  getStatus: () => api.get('/chain/status'),
+  getHealth: () => api.get('/chain/health'),
+  getLeases: () => api.get('/chain/leases'),
+  start: () => api.post('/chain/start'),
+  stop: () => api.post('/chain/stop'),
+  updatePool: (type, params) => api.post(`/chain/pools/${type}`, null, { params }),
+  cleanupLeases: () => api.post('/chain/leases/cleanup'),
+}
+
+export const publishedSubscriptionApi = {
+  getList: (params) => api.get('/published-subscriptions', params),
+  create: (data) => api.post('/published-subscriptions', data),
+  update: (id, data) => api.put(`/published-subscriptions/${id}`, data),
+  delete: (id) => api.delete(`/published-subscriptions/${id}`),
+  getExportUrl: (id) => `/api/published-subscriptions/${id}/subscription`,
+}
+
+export const testerApi = {
+  runSingle: (data) => api.post('/tester/run-one', data),
 }

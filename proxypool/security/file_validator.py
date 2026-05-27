@@ -68,22 +68,23 @@ def validate_file_path(
                 f"Path contains traversal character '{pattern}': {path_str}"
             )
 
-    # 3. Validate path is within allowed directories
-    is_allowed = False
-    for allowed_dir in allowed_directories:
-        try:
-            allowed_resolved = allowed_dir.resolve()
-            if abs_path.is_relative_to(allowed_resolved):
-                is_allowed = True
-                break
-        except (OSError, ValueError):
-            continue
+    # 3. Validate path is within allowed directories (skip if empty list = no restriction)
+    if allowed_directories:
+        is_allowed = False
+        for allowed_dir in allowed_directories:
+            try:
+                allowed_resolved = allowed_dir.resolve()
+                if abs_path.is_relative_to(allowed_resolved):
+                    is_allowed = True
+                    break
+            except (OSError, ValueError):
+                continue
 
-    if not is_allowed:
-        raise PathTraversalError(
-            f"Path '{abs_path}' is not within allowed directories: "
-            f"{[str(d) for d in allowed_directories]}"
-        )
+        if not is_allowed:
+            raise PathTraversalError(
+                f"Path '{abs_path}' is not within allowed directories: "
+                f"{[str(d) for d in allowed_directories]}"
+            )
 
     # 4. Check for symbolic links
     if not allow_symlinks and abs_path.exists():

@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from proxypool.collector.fetcher import FetchError, fetch_text, fetch_text_via_proxy_node
 from proxypool.collector.parser import parse_source_content
+from proxypool.security.file_validator import validate_file_path, PathTraversalError
 from proxypool.storage.sqlite import SQLiteProxyStorage
 
 
@@ -31,9 +32,15 @@ class CollectReport:
 
 
 class CollectorService:
-    def __init__(self, storage: SQLiteProxyStorage, singbox_binary: str = "sing-box") -> None:
+    def __init__(
+        self,
+        storage: SQLiteProxyStorage,
+        singbox_binary: str = "sing-box",
+        max_proxy_count: int = 50000,
+    ) -> None:
         self.storage = storage
         self.singbox_binary = singbox_binary
+        self.max_proxy_count = max_proxy_count
 
     def collect_from_text_items(self, items: list[tuple[str, str]], timeout_sec: float = 12.0) -> CollectReport:
         report = CollectReport(total_sources=0)
@@ -143,9 +150,24 @@ class CollectorService:
             if source.startswith(("http://", "https://", "data:", "file://")):
                 sub = self.collect_from_urls([source], timeout_sec=timeout_sec)
             else:
-                path = Path(source).expanduser().resolve()
-                if path.exists():
-                    sub = self.collect_from_files([path], timeout_sec=timeout_sec)
+                # R06 fix: Validate file path for traversal before reading
+                try:
+                    validated_path = validate_file_path(source, allowed_directories=[])
+                except (PathTraversalError, Exception):
+                    invalid = CollectReport(total_sources=1)
+                    invalid.by_source.append(SourceCollectReport(source=source, invalid=1))
+                    invalid.total_invalid = 1
+                    sub = invalid
+                    report.total_parsed += sub.total_parsed
+                    report.total_inserted += sub.total_inserted
+                    report.total_updated += sub.total_updated
+                    report.total_deduped += sub.total_deduped
+                    report.total_invalid += sub.total_invalid
+                    report.by_source.extend(sub.by_source)
+                    continue
+
+                if validated_path.exists():
+                    sub = self.collect_from_files([validated_path], timeout_sec=timeout_sec)
                 else:
                     invalid = CollectReport(total_sources=1)
                     invalid.by_source.append(SourceCollectReport(source=source, invalid=1))
@@ -241,15 +263,23 @@ class CollectorService:
         source_report.invalid = len(invalid)
         seen_keys: set[str] = set()
 
+        current_count = self.storage.get_stats().get("total", 0)
+
         for node in nodes:
             key = node.normalized_key()
             if key in seen_keys:
                 source_report.deduped += 1
                 continue
             seen_keys.add(key)
+
+            if current_count >= self.max_proxy_count:
+                source_report.invalid += 1
+                continue
+
             status = self.storage.upsert_proxy(node, source=source)
             if status == "inserted":
                 source_report.inserted += 1
+                current_count += 1
             else:
                 source_report.updated += 1
 
