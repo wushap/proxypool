@@ -103,16 +103,17 @@ class StickyRouter:
     def _get_lease(self, session_id: str, pool_id: int, now: datetime) -> Lease | None:
         """Get existing lease if valid."""
         key = (session_id, pool_id)
-        lease = self._leases.get(key)
-        
-        if lease is None:
-            return None
-        
-        # Check expiry
-        if now >= lease.expires_at:
-            self._remove_lease(session_id, pool_id)
-            return None
-        
+        with self._lock:
+            lease = self._leases.get(key)
+
+            if lease is None:
+                return None
+
+            # Check expiry
+            if now >= lease.expires_at:
+                self._remove_lease(session_id, pool_id)
+                return None
+
         return lease
     
     def _try_reuse_lease(
@@ -149,7 +150,8 @@ class StickyRouter:
 
         # Update lease access time
         lease.last_accessed = now
-        self._ip_load[lease.egress_ip] = self._ip_load.get(lease.egress_ip, 0)
+        with self._lock:
+            self._ip_load[lease.egress_ip] = self._ip_load.get(lease.egress_ip, 0)
         if lease.instance_id and lease.instance_id in set(live_instance_ids or set()):
             return RouteResult(
                 front_node=front,
@@ -226,10 +228,10 @@ class StickyRouter:
         """Create a new sticky lease."""
         # Remove old lease if exists
         self._remove_lease(session_id, pool_id)
-        
+
         egress_ip = exit_node.egress_ip or ""
         expires_at = now + timedelta(seconds=self.sticky_ttl_sec)
-        
+
         lease = Lease(
             session_id=session_id,
             pool_id=pool_id,
@@ -239,32 +241,36 @@ class StickyRouter:
             expires_at=expires_at,
             last_accessed=now,
         )
-        
+
         key = (session_id, pool_id)
-        self._leases[key] = lease
-        
-        # Update IP load stats
-        self._ip_load[egress_ip] = self._ip_load.get(egress_ip, 0) + 1
+        with self._lock:
+            self._leases[key] = lease
+
+            # Update IP load stats
+            self._ip_load[egress_ip] = self._ip_load.get(egress_ip, 0) + 1
     
     def _remove_lease(self, session_id: str, pool_id: int) -> None:
         """Remove a lease and update IP load stats."""
         key = (session_id, pool_id)
-        lease = self._leases.pop(key, None)
-        
-        if lease and lease.egress_ip:
-            count = self._ip_load.get(lease.egress_ip, 0)
-            if count > 1:
-                self._ip_load[lease.egress_ip] = count - 1
-            else:
-                self._ip_load.pop(lease.egress_ip, None)
+        with self._lock:
+            lease = self._leases.pop(key, None)
+
+            if lease and lease.egress_ip:
+                count = self._ip_load.get(lease.egress_ip, 0)
+                if count > 1:
+                    self._ip_load[lease.egress_ip] = count - 1
+                else:
+                    self._ip_load.pop(lease.egress_ip, None)
 
     def bind_instance(self, session_id: str, pool_id: int, instance_id: str) -> None:
-        lease = self._leases.get((session_id, pool_id))
-        if lease is not None:
-            lease.instance_id = str(instance_id or "")
+        with self._lock:
+            lease = self._leases.get((session_id, pool_id))
+            if lease is not None:
+                lease.instance_id = str(instance_id or "")
 
     def delete_lease(self, session_id: str, pool_id: int) -> bool:
-        exists = (session_id, pool_id) in self._leases
+        with self._lock:
+            exists = (session_id, pool_id) in self._leases
         self._remove_lease(session_id, pool_id)
         return exists
     

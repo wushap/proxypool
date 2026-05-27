@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ class MihomoEgressBackend:
         self.runtime_dir = Path(runtime_dir)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self._processes: dict[str, subprocess.Popen[Any]] = {}
+        self._lock = threading.RLock()
 
     def build_config(self, spec: ChainInstanceSpec) -> dict[str, Any]:
         return build_mihomo_chain_config(spec)
@@ -37,17 +39,23 @@ class MihomoEgressBackend:
         env = dict(os.environ)
         env["HOME"] = str(self.runtime_dir)
         env["XDG_CONFIG_HOME"] = str(self.runtime_dir)
-        process = subprocess.Popen(
-            [self.binary, "-f", str(config_file)],
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            env=env,
-        )
-        self._processes[spec.instance_id] = process
+        try:
+            process = subprocess.Popen(
+                [self.binary, "-f", str(config_file)],
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
+        except Exception:
+            log_handle.close()
+            raise
+        with self._lock:
+            self._processes[spec.instance_id] = process
         return StartedInstance(pid=int(process.pid), config_file=config_file, log_file=log_file)
 
     def stop(self, instance_id: str) -> None:
-        process = self._processes.pop(str(instance_id or ""), None)
+        with self._lock:
+            process = self._processes.pop(str(instance_id or ""), None)
         if process is None:
             return
         if process.poll() is None:
