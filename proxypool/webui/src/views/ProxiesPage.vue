@@ -24,7 +24,7 @@
                   </div>
                   <div v-if="proxySortKey" class="status-item">
                     <span class="text-muted">排序</span>
-                    <span class="badge badge-sm badge-neutral">{{ proxySortKey === 'latency' ? '延迟' : '带宽' }} {{ proxySortDir === 'asc' ? '↑' : '↓' }}</span>
+                    <span class="badge badge-sm badge-neutral">{{ sortLabel(proxySortKey) }} {{ proxySortDir === 'asc' ? '↑' : '↓' }}</span>
                   </div>
                   <div v-if="selectedProxyKeys.length" class="status-item">
                     <span class="text-muted">选中</span>
@@ -167,6 +167,8 @@
                           <template v-else-if="col.key === 'address'"><span>{{ item.host }}:{{ item.port }}</span></template>
                           <template v-else-if="col.key === 'latency'"><span :style="latencyStyle(item.latency_ms)">{{ item.latency_ms ? item.latency_ms + ' ms' : '-' }}</span></template>
                           <template v-else-if="col.key === 'bandwidth'"><span class="mono text-xs" :style="bandwidthStyle(item.speed_mbps)">{{ formatBandwidthMbps(item) }}</span></template>
+                          <template v-else-if="col.key === 'success_rate'"><span class="mono text-xs" :style="successRateStyle(item.success_rate)">{{ formatSuccessRate(item) }}</span></template>
+                          <template v-else-if="col.key === 'fail_count'"><span class="mono text-xs" :style="failCountStyle(item.fail_count)">{{ item.fail_count ?? 0 }}</span></template>
                           <template v-else-if="col.key === 'status'"><span class="badge" :class="item.available ? 'badge-success' : 'badge-danger'">{{ item.available ? 'UP' : 'DOWN' }}</span></template>
                           <template v-else-if="col.key === 'checked_at'"><span class="text-xs text-muted">{{ formatTime(item.last_checked_at) }}</span></template>
                           <template v-else-if="col.key === 'geo'"><span class="text-xs text-muted">{{ formatGeo(item) }}</span></template>
@@ -238,6 +240,16 @@ export default {
         let va, vb;
         if (key === 'latency') { va = a.latency_ms ?? Infinity; vb = b.latency_ms ?? Infinity; }
         else if (key === 'bandwidth') { va = a.speed_mbps ?? -1; vb = b.speed_mbps ?? -1; }
+        else if (key === 'fail_count') { va = a.fail_count ?? 0; vb = b.fail_count ?? 0; }
+        else if (key === 'last_checked') {
+          va = a.last_checked_at ? new Date(a.last_checked_at).getTime() : 0;
+          vb = b.last_checked_at ? new Date(b.last_checked_at).getTime() : 0;
+        }
+        else if (key === 'success_rate') {
+          // 按可用性排序（作为成功率的代理指标）
+          va = (a.available ? 1 : 0) * 1000 + (100 - (a.fail_count ?? 0));
+          vb = (b.available ? 1 : 0) * 1000 + (100 - (b.fail_count ?? 0));
+        }
         else { return 0; }
         return (va - vb) * dir;
       });
@@ -252,7 +264,17 @@ export default {
   },
   methods: {
     isSortableColumn(key) {
-      return key === 'latency' || key === 'bandwidth';
+      return ['latency', 'bandwidth', 'fail_count', 'last_checked', 'success_rate'].includes(key);
+    },
+    sortLabel(key) {
+      const labels = {
+        latency: '延迟',
+        bandwidth: '带宽',
+        fail_count: '失败次数',
+        last_checked: '最后检查',
+        success_rate: '成功率'
+      };
+      return labels[key] || key;
     },
     toggleProxySort(key) {
       if (this.proxySortKey === key) {
@@ -272,6 +294,23 @@ export default {
       if (!mbps || mbps <= 0) return {};
       if (mbps >= 50) return { color: '#16a34a' };
       if (mbps >= 10) return { color: '#ca8a04' };
+      return { color: '#dc2626' };
+    },
+    formatSuccessRate(item) {
+      const rate = item.success_rate;
+      if (rate === null || rate === undefined) return '-';
+      return rate.toFixed(1) + '%';
+    },
+    successRateStyle(rate) {
+      if (rate === null || rate === undefined) return {};
+      if (rate >= 80) return { color: '#16a34a', fontWeight: 600 };
+      if (rate >= 50) return { color: '#ca8a04', fontWeight: 600 };
+      return { color: '#dc2626', fontWeight: 600 };
+    },
+    failCountStyle(count) {
+      const num = count ?? 0;
+      if (num === 0) return { color: '#16a34a' };
+      if (num < 3) return { color: '#ca8a04' };
       return { color: '#dc2626' };
     },
   },

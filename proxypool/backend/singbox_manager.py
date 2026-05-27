@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import socket
@@ -741,6 +742,40 @@ class SingBoxBackendManager:
             "restart_attempted": True,
             "restart_attempt": attempt,
         }
+
+    # ---- Async wrappers to avoid blocking the event loop ----
+
+    async def start_async(self) -> None:
+        """Async wrapper for start()."""
+        await asyncio.to_thread(self.start)
+
+    async def start_instance_async(self, instance_id: str = "default", routes: list[SingBoxRoute] | None = None) -> None:
+        """Async wrapper for start_instance()."""
+        await asyncio.to_thread(self.start_instance, instance_id, routes)
+
+    async def stop_async(self) -> None:
+        """Async wrapper for stop()."""
+        await asyncio.to_thread(self.stop)
+
+    async def stop_instance_async(self, instance_id: str = "default") -> None:
+        """Async wrapper for stop_instance()."""
+        await asyncio.to_thread(self.stop_instance, instance_id)
+
+    async def restart_async(self) -> None:
+        """Async wrapper for restart()."""
+        await asyncio.to_thread(self.restart)
+
+    async def health_check_async(self, timeout_sec: float = 1.5, auto_restart: bool = False) -> dict[str, Any]:
+        """Async wrapper for health_check()."""
+        return await asyncio.to_thread(self.health_check, timeout_sec, auto_restart)
+
+    async def measure_route_latency_async(self, route: SingBoxRoute, timeout_sec: float = 10.0, route_index: int = -1) -> dict[str, Any]:
+        """Async wrapper for measure_route_latency()."""
+        return await asyncio.to_thread(self.measure_route_latency, route, timeout_sec, route_index)
+
+    async def measure_all_routes_latency_async(self, timeout_sec: float = 10.0) -> list[dict[str, Any]]:
+        """Async wrapper for measure_all_routes_latency()."""
+        return await asyncio.to_thread(self.measure_all_routes_latency, timeout_sec)
 
 
 def _validate_routes(routes: list[SingBoxRoute]) -> None:

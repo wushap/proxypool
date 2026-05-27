@@ -17,12 +17,38 @@ class FetchError(RuntimeError):
     pass
 
 
-def fetch_text(url: str, timeout_sec: float = 12.0) -> str:
+def fetch_text(url: str, timeout_sec: float = 12.0, max_content_length: int = 10 * 1024 * 1024) -> str:
+    """Fetch text content from URL with size limit.
+
+    Args:
+        url: URL to fetch
+        timeout_sec: Request timeout in seconds
+        max_content_length: Maximum content size in bytes (default 10MB)
+    """
     req = Request(url, headers={"User-Agent": "proxypool/0.1"})
     try:
         with _open_url_no_proxy(req, timeout=timeout_sec) as resp:  # nosec B310
+            content_length_header = resp.headers.get("Content-Length")
+            if content_length_header:
+                try:
+                    content_length = int(content_length_header)
+                    if content_length > max_content_length:
+                        raise FetchError(
+                            f"Content too large: {content_length} bytes exceeds limit of {max_content_length} bytes"
+                        )
+                except ValueError:
+                    pass  # Invalid Content-Length header, proceed with read
+
             raw = resp.read()
+
+            if len(raw) > max_content_length:
+                raise FetchError(
+                    f"Content too large: {len(raw)} bytes exceeds limit of {max_content_length} bytes"
+                )
+
             content_type = str(resp.headers.get("Content-Type", ""))
+    except FetchError:
+        raise
     except Exception as exc:  # pragma: no cover - exercised by integration calls
         raise FetchError(str(exc)) from exc
 
@@ -38,6 +64,7 @@ def fetch_text_via_proxy_node(
     proxy_node: dict[str, Any],
     timeout_sec: float = 12.0,
     singbox_binary: str = "sing-box",
+    max_content_length: int = 10 * 1024 * 1024,
 ) -> str:
     outbound = build_singbox_outbound(proxy_node, tag="fetch-out")
     if outbound is None:
@@ -85,6 +112,8 @@ def fetch_text_via_proxy_node(
                 "-L",
                 "--max-time",
                 str(max(2, int(timeout_sec))),
+                "--max-filesize",
+                str(max_content_length),
                 "--proxy",
                 f"socks5h://127.0.0.1:{local_port}",
                 str(url),

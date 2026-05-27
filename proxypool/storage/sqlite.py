@@ -48,6 +48,8 @@ class SQLiteProxyStorage:
             speed_mbps REAL,
             speed_tested_at TEXT,
             fail_count INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            total_checks INTEGER NOT NULL DEFAULT 0,
             last_error TEXT NOT NULL DEFAULT '',
             resolved_ip TEXT NOT NULL DEFAULT '',
             country TEXT NOT NULL DEFAULT '',
@@ -270,6 +272,24 @@ class SQLiteProxyStorage:
             current_backoff_sec REAL NOT NULL DEFAULT 30.0,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS failed_routes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint_id INTEGER NOT NULL,
+            route_signature TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(endpoint_id, route_signature)
+        );
+        CREATE INDEX IF NOT EXISTS idx_failed_routes_expiry ON failed_routes(expires_at);
+        CREATE TABLE IF NOT EXISTS failed_route_nodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint_id INTEGER NOT NULL,
+            node_key TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(endpoint_id, node_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_failed_route_nodes_expiry ON failed_route_nodes(expires_at);
         """
         with self._connect() as conn:
             conn.executescript(sql)
@@ -310,6 +330,10 @@ class SQLiteProxyStorage:
             conn.execute("ALTER TABLE proxies ADD COLUMN speed_mbps REAL")
         if "speed_tested_at" not in columns:
             conn.execute("ALTER TABLE proxies ADD COLUMN speed_tested_at TEXT")
+        if "success_count" not in columns:
+            conn.execute("ALTER TABLE proxies ADD COLUMN success_count INTEGER NOT NULL DEFAULT 0")
+        if "total_checks" not in columns:
+            conn.execute("ALTER TABLE proxies ADD COLUMN total_checks INTEGER NOT NULL DEFAULT 0")
 
         sub_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(subscriptions)").fetchall()
@@ -680,6 +704,13 @@ class SQLiteProxyStorage:
             order_clause = f"CASE WHEN latency_ms IS NULL THEN 1 ELSE 0 END ASC, latency_ms {norm_order}, updated_at DESC"
         elif sort_key in ("speed", "bandwidth", "speed_mbps"):
             order_clause = f"CASE WHEN speed_mbps IS NULL OR speed_mbps <= 0 THEN 1 ELSE 0 END ASC, speed_mbps {norm_order}, updated_at DESC"
+        elif sort_key in ("fail_count", "failures"):
+            order_clause = f"fail_count {norm_order}, updated_at DESC"
+        elif sort_key in ("last_checked", "checked"):
+            order_clause = f"CASE WHEN last_checked_at IS NULL THEN 1 ELSE 0 END ASC, last_checked_at {norm_order}, updated_at DESC"
+        elif sort_key in ("success_rate", "success"):
+            # 按可用性排序（作为成功率的代理指标）
+            order_clause = f"available DESC, fail_count ASC, updated_at DESC"
         else:
             order_clause = "updated_at DESC"
 
@@ -820,6 +851,59 @@ class SQLiteProxyStorage:
                         WHERE normalized_key = ?
                         """,
                         (now, now, normalized_key),
+                    )
+                conn.commit()
+
+    def mark_unavailable_by_fail_count(self, threshold: int = 5) -> int:
+        """将 fail_count >= threshold 的可用代理标记为不可用
+
+        Returns:
+            被标记为不可用的代理数量
+        """
+        now = _utc_now()
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE proxies
+                    SET available = 0, updated_at = ?
+                    WHERE available = 1 AND fail_count >= ?
+                    """,
+                    (now, threshold),
+                )
+                conn.commit()
+                return cursor.rowcount
+
+    def update_check_result(self, normalized_key: str, success: bool) -> None:
+        """更新代理的检查结果统计
+
+        Args:
+            normalized_key: 代理的唯一标识
+            success: 本次检查是否成功
+        """
+        now = _utc_now()
+        with self._write_lock:
+            with self._connect() as conn:
+                if success:
+                    conn.execute(
+                        """
+                        UPDATE proxies
+                        SET success_count = success_count + 1,
+                            total_checks = total_checks + 1,
+                            updated_at = ?
+                        WHERE normalized_key = ?
+                        """,
+                        (now, normalized_key),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE proxies
+                        SET total_checks = total_checks + 1,
+                            updated_at = ?
+                        WHERE normalized_key = ?
+                        """,
+                        (now, normalized_key),
                     )
                 conn.commit()
 
@@ -1941,6 +2025,15 @@ class SQLiteProxyStorage:
             data["openai_unlocked"] = None
         else:
             data["openai_unlocked"] = bool(val)
+
+        # 计算成功率
+        success_count = int(data.get("success_count") or 0)
+        total_checks = int(data.get("total_checks") or 0)
+        if total_checks > 0:
+            data["success_rate"] = round(success_count / total_checks * 100, 2)
+        else:
+            data["success_rate"] = None
+
         return data
 
     def _subscription_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -2481,6 +2574,120 @@ class SQLiteProxyStorage:
                 )
                 conn.commit()
                 return int(cursor.rowcount or 0)
+
+    # ---- Failed Routes Persistence ----
+
+    def upsert_failed_route(self, endpoint_id: int, route_signature: str, expires_at: str) -> None:
+        """Persist a failed route with expiration time."""
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """INSERT INTO failed_routes (endpoint_id, route_signature, expires_at, created_at)
+                       VALUES (?, ?, ?, datetime('now'))
+                       ON CONFLICT(endpoint_id, route_signature)
+                       DO UPDATE SET expires_at = excluded.expires_at, created_at = excluded.created_at""",
+                    (int(endpoint_id), str(route_signature or "").strip(), str(expires_at or "")),
+                )
+                conn.commit()
+
+    def is_route_failed(self, endpoint_id: int, route_signature: str) -> bool:
+        """Check if a route is currently failed (not expired)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM failed_routes
+                   WHERE endpoint_id = ? AND route_signature = ? AND expires_at > datetime('now')""",
+                (int(endpoint_id), str(route_signature or "").strip()),
+            ).fetchone()
+            return row is not None
+
+    def delete_failed_route(self, endpoint_id: int, route_signature: str) -> int:
+        """Delete a failed route record."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM failed_routes WHERE endpoint_id = ? AND route_signature = ?",
+                    (int(endpoint_id), str(route_signature or "").strip()),
+                )
+                conn.commit()
+                return int(cursor.rowcount or 0)
+
+    def cleanup_expired_failed_routes(self) -> int:
+        """Delete expired failed routes."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM failed_routes WHERE expires_at <= datetime('now')"
+                )
+                conn.commit()
+                return int(cursor.rowcount or 0)
+
+    def list_active_failed_routes(self) -> list[dict[str, Any]]:
+        """List all non-expired failed routes."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT endpoint_id, route_signature, expires_at
+                   FROM failed_routes WHERE expires_at > datetime('now')"""
+            ).fetchall()
+            return [
+                {"endpoint_id": row[0], "route_signature": row[1], "expires_at": row[2]}
+                for row in rows
+            ]
+
+    def upsert_failed_route_node(self, endpoint_id: int, node_key: str, expires_at: str) -> None:
+        """Persist a failed route node with expiration time."""
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """INSERT INTO failed_route_nodes (endpoint_id, node_key, expires_at, created_at)
+                       VALUES (?, ?, ?, datetime('now'))
+                       ON CONFLICT(endpoint_id, node_key)
+                       DO UPDATE SET expires_at = excluded.expires_at, created_at = excluded.created_at""",
+                    (int(endpoint_id), str(node_key or "").strip(), str(expires_at or "")),
+                )
+                conn.commit()
+
+    def is_route_node_failed(self, endpoint_id: int, node_key: str) -> bool:
+        """Check if a route node is currently failed (not expired)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM failed_route_nodes
+                   WHERE endpoint_id = ? AND node_key = ? AND expires_at > datetime('now')""",
+                (int(endpoint_id), str(node_key or "").strip()),
+            ).fetchone()
+            return row is not None
+
+    def delete_failed_route_node(self, endpoint_id: int, node_key: str) -> int:
+        """Delete a failed route node record."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM failed_route_nodes WHERE endpoint_id = ? AND node_key = ?",
+                    (int(endpoint_id), str(node_key or "").strip()),
+                )
+                conn.commit()
+                return int(cursor.rowcount or 0)
+
+    def cleanup_expired_failed_route_nodes(self) -> int:
+        """Delete expired failed route nodes."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM failed_route_nodes WHERE expires_at <= datetime('now')"
+                )
+                conn.commit()
+                return int(cursor.rowcount or 0)
+
+    def list_active_failed_route_nodes(self) -> list[dict[str, Any]]:
+        """List all non-expired failed route nodes."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT endpoint_id, node_key, expires_at
+                   FROM failed_route_nodes WHERE expires_at > datetime('now')"""
+            ).fetchall()
+            return [
+                {"endpoint_id": row[0], "node_key": row[1], "expires_at": row[2]}
+                for row in rows
+            ]
 
     def create_http_proxy_endpoint(
         self,

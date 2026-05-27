@@ -92,6 +92,11 @@ python -m proxypool.main
 | `PROXYPOOL_TEST_URL` | `https://www.cloudflare.com/cdn-cgi/trace` | Test URL for health checks |
 | `PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST` | `127.0.0.1` | Default gateway listen host |
 | `PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT` | `8899` | Default gateway listen port |
+| `PROXYPOOL_MAX_PROXY_COUNT` | `50000` | Maximum number of proxies to store |
+| `PROXYPOOL_FETCH_MAX_CONTENT_LENGTH` | `10485760` | Max content size for subscription fetches (bytes) |
+| `PROXYPOOL_MAX_FAILURES_THRESHOLD` | `5` | Auto-mark proxies unavailable after N failures |
+| `PROXYPOOL_LOG_MAX_BYTES` | `52428800` | Max log file size before rotation (bytes) |
+| `PROXYPOOL_LOG_BACKUP_COUNT` | `5` | Number of rotated log files to keep |
 
 ### Example `.env`
 
@@ -173,6 +178,7 @@ make help           # Show all commands
 make test           # Run tests
 make test-cov       # Run tests with coverage
 make test-security  # Run security tests
+make test-e2e       # Run E2E tests (Playwright, requires server running)
 make lint           # Check code style
 make lint-fix       # Fix linting issues
 make format         # Format code

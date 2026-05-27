@@ -69,9 +69,35 @@ async def get_http_gateway_status(
 
 
 @router.post("/gateway/http-health-check")
-async def run_http_gateway_health_check() -> dict:
+async def run_http_gateway_health_check(request: Request) -> dict:
     """运行 HTTP 网关健康检查"""
-    return {"item": {"status": "not implemented"}}
+    gateway_runtime = request.app.state.gateway_runtime
+    status = gateway_runtime.status()
+
+    # Check if gateway is running and healthy
+    is_running = bool(status.get("running"))
+    last_error = str(status.get("last_error") or "")
+
+    # Check endpoint health
+    endpoints = status.get("items", [])
+    healthy_endpoints = sum(1 for ep in endpoints if bool(ep.get("running")))
+    total_endpoints = len(endpoints)
+
+    health_status = "healthy" if is_running and not last_error else "unhealthy"
+    if is_running and healthy_endpoints < total_endpoints:
+        health_status = "degraded"
+
+    return {
+        "item": {
+            "status": health_status,
+            "running": is_running,
+            "last_error": last_error,
+            "endpoints": {
+                "total": total_endpoints,
+                "healthy": healthy_endpoints,
+            },
+        }
+    }
 
 
 @router.post("/gateway/http-test")

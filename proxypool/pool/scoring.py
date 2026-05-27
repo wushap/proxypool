@@ -524,6 +524,37 @@ class CircuitBreaker:
         with self._lock:
             self._transition_to_closed()
 
+    def restore_state(
+        self,
+        state: CircuitState,
+        failure_count: int = 0,
+        consecutive_successes: int = 0,
+        last_failure_time: float | None = None,
+        last_success_time: float | None = None,
+        open_since: float | None = None,
+        backoff_until: float | None = None,
+        current_backoff_sec: float | None = None,
+    ) -> None:
+        """Restore circuit breaker state from persisted data.
+
+        This method properly sets the internal state without triggering
+        side effects of normal state transitions.
+        """
+        with self._lock:
+            self._state = state
+            self._failure_count = failure_count
+            self._consecutive_successes = consecutive_successes
+            self._last_failure_time = last_failure_time
+            self._last_success_time = last_success_time
+            self._open_since = open_since
+            self._backoff_until = backoff_until
+            if current_backoff_sec is not None:
+                self._current_backoff_sec = current_backoff_sec
+            if state == CircuitState.OPEN:
+                self._half_open_probes = 0
+            elif state == CircuitState.HALF_OPEN:
+                self._half_open_probes = 0
+
 
 class CircuitBreakerManager:
     """Manages circuit breakers for all nodes."""

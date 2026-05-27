@@ -100,7 +100,7 @@ async def backend_instance_start(
     """启动后端实例"""
     singbox_manager = request.app.state.singbox_manager
     try:
-        singbox_manager.start_instance(instance_id=instance_id)
+        await singbox_manager.start_instance_async(instance_id=instance_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return singbox_manager.status()
@@ -113,7 +113,7 @@ async def backend_instance_stop(
 ) -> dict:
     """停止后端实例"""
     singbox_manager = request.app.state.singbox_manager
-    singbox_manager.stop_instance(instance_id=instance_id)
+    await singbox_manager.stop_instance_async(instance_id=instance_id)
     return singbox_manager.status()
 
 
@@ -180,7 +180,7 @@ async def backend_latency(
     singbox_manager = request.app.state.singbox_manager
     return {
         "running": singbox_manager.is_running(),
-        "items": singbox_manager.measure_all_routes_latency(timeout_sec=timeout_sec),
+        "items": await singbox_manager.measure_all_routes_latency_async(timeout_sec=timeout_sec),
     }
 
 
@@ -230,7 +230,7 @@ async def backend_start(
     """启动后端"""
     singbox_manager = request.app.state.singbox_manager
     try:
-        singbox_manager.start()
+        await singbox_manager.start_async()
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return singbox_manager.status()
@@ -242,7 +242,7 @@ async def backend_stop(
 ) -> dict:
     """停止后端"""
     singbox_manager = request.app.state.singbox_manager
-    singbox_manager.stop()
+    await singbox_manager.stop_async()
     return singbox_manager.status()
 
 
@@ -253,7 +253,7 @@ async def backend_restart(
     """重启后端"""
     singbox_manager = request.app.state.singbox_manager
     try:
-        singbox_manager.restart()
+        await singbox_manager.restart_async()
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return singbox_manager.status()

@@ -22,6 +22,11 @@ proxies.db
 # frontend build artifacts
 node_modules/
 proxypool/webui/dist/
+package-lock.json
+
+# Playwright artifacts
+playwright-report/
+test-results/
 
 # local import/export artifacts
 output/

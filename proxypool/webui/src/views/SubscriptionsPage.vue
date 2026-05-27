@@ -3,6 +3,9 @@
               <div class="card-body">
                 <!-- Breadcrumb -->
                 <Breadcrumb :items="breadcrumbItems" />
+
+                <!-- Loading State -->
+                <LoadingState v-if="isLoading" text="加载订阅数据中..." size="small" />
                 <div class="section-header">
                   <h2 class="section-title">订阅管理</h2>
                   <div class="btn-group">
@@ -45,7 +48,7 @@
                 <!-- Add subscription form -->
                 <div class="form-row-3" style="gap: 8px; margin-bottom: 12px;">
                   <input v-model.trim="subscriptionForm.name" type="text" placeholder="订阅名称" class="input" />
-                  <input v-model.trim="subscriptionForm.url" type="text" placeholder="订阅链接 URL" class="input" />
+                  <input ref="subscriptionUrlInput" v-model.trim="subscriptionForm.url" type="text" placeholder="订阅链接 URL" class="input" />
                   <button @click="onCreateSubscription" :disabled="isActionRunning('createSubscription')" class="btn btn-primary">
                     {{ buttonLabel('createSubscription', '添加订阅', '添加中...') }}
                   </button>
@@ -86,7 +89,11 @@
                 </div>
 
                 <!-- Empty State -->
-                <EmptyState v-if="!subscriptions.length" title="暂无订阅" description="点击上方添加订阅按钮创建第一个订阅源" size="normal" />
+                <EmptyState v-if="!subscriptions.length" title="暂无订阅" description="点击下方按钮创建第一个订阅源" size="normal">
+                  <template #actions>
+                    <button class="btn btn-xs btn-primary" @click="focusSubscriptionUrlInput">添加订阅</button>
+                  </template>
+                </EmptyState>
 
                 <!-- Table -->
                 <div v-else class="table-wrap">
@@ -142,14 +149,21 @@
 import { rootProxyMixin } from "../rootProxyMixin";
 import Breadcrumb from '../components/layout/Breadcrumb.vue';
 import EmptyState from '../components/common/EmptyState.vue';
+import LoadingState from '../components/common/LoadingState.vue';
 
 export default {
   name: "SubscriptionsPage",
   components: {
     Breadcrumb,
     EmptyState,
+    LoadingState,
   },
   mixins: [rootProxyMixin],
+  data() {
+    return {
+      isLoading: false,
+    };
+  },
   computed: {
     breadcrumbItems() {
       return [
@@ -159,6 +173,11 @@ export default {
     },
   },
   methods: {
+    focusSubscriptionUrlInput() {
+      this.$nextTick(() => {
+        this.$refs.subscriptionUrlInput?.focus();
+      });
+    },
     freshnessStyle(ts) {
       if (!ts) return { color: 'var(--muted)' };
       const age = Date.now() - new Date(ts).getTime();

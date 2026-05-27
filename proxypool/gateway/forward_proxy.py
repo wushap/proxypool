@@ -153,11 +153,15 @@ class ForwardProxyGateway:
         session_id: str,
         target_domain: str,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        import time as _time
+
         endpoint_id = int((endpoint or {}).get("id") or 0)
         pool_id = int(pool["id"])
         attempts = self._route_instance_attempts(endpoint)
         last_error: Exception | None = None
-        for _ in range(attempts):
+        failed_routes: list[str] = []  # Track failed route signatures to avoid retrying
+
+        for attempt_idx in range(attempts):
             route = self._route_request(
                 session_id=session_id,
                 pool_id=pool_id,
@@ -170,6 +174,12 @@ class ForwardProxyGateway:
             )
             if route is None:
                 break
+
+            # Skip routes we've already failed on
+            route_sig = str(route.get("route_signature") or "")
+            if route_sig in failed_routes:
+                continue
+
             try:
                 instance = self._ensure_instance(
                     pool_id=pool_id,
@@ -179,6 +189,7 @@ class ForwardProxyGateway:
                 return route, instance
             except Exception as exc:
                 last_error = exc
+                failed_routes.append(route_sig)
                 self.report_route_failure({
                     "endpoint": endpoint,
                     "pool": pool,
@@ -186,6 +197,11 @@ class ForwardProxyGateway:
                     "route": route,
                     "instance": {},
                 }, str(exc) or exc.__class__.__name__)
+
+                # Small cooldown between retries to avoid rapid process spawning
+                if attempt_idx < attempts - 1:
+                    _time.sleep(0.1)
+
         if last_error is not None:
             raise RuntimeError(f"no available chain route: {last_error}") from last_error
         raise RuntimeError("no available chain route")

@@ -13,6 +13,10 @@ export function useProxyFilters() {
   const filters = ref({ ...DEFAULT_PROXY_FILTERS })
   const allProxies = ref([])
 
+  // 排序状态
+  const sortBy = ref('latency')
+  const sortOrder = ref('asc')
+
   // 计算筛选选项
   const protocolFilterOptions = computed(() => {
     const map = new Map()
@@ -156,8 +160,8 @@ export function useProxyFilters() {
     if (f.source) params.source = f.source
     if (f.speed_min_mbps) params.speed_min_mbps = f.speed_min_mbps
 
-    params.sort_by = "latency"
-    params.sort_order = "asc"
+    params.sort_by = sortBy.value
+    params.sort_order = sortOrder.value
 
     return params
   }
@@ -165,6 +169,8 @@ export function useProxyFilters() {
   return {
     filters,
     allProxies,
+    sortBy,
+    sortOrder,
     protocolFilterOptions,
     statusFilterOptions,
     geoCountryOptions,

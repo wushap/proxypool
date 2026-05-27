@@ -130,11 +130,20 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     cfg = settings or load_settings()
 
     storage = SQLiteProxyStorage(cfg.db_path)
-    collector = CollectorService(storage, singbox_binary=cfg.singbox_binary)
+    collector = CollectorService(
+        storage,
+        singbox_binary=cfg.singbox_binary,
+        max_proxy_count=cfg.max_proxy_count,
+    )
     prober = SingboxProber(binary=cfg.singbox_binary, test_url=cfg.test_url)
     tester = TesterService(storage, prober=prober)
     geoip = GeoIPService(storage, proxy_json_fetcher=prober.fetch_json_via_proxy)
-    scheduler = SchedulerService(collector, tester)
+    scheduler = SchedulerService(
+        collector,
+        tester,
+        storage=storage,
+        max_failures_threshold=cfg.max_failures_threshold,
+    )
     task_manager = TaskManager()
     singbox_manager = SingBoxBackendManager(
         storage=storage,
@@ -401,9 +410,13 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        # Log the full exception server-side for debugging
+        import logging
+        logging.exception("Unhandled exception")
+        # Return generic error message without leaking exception type
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Internal server error: {type(exc).__name__}"},
+            content={"detail": "Internal server error"},
         )
 
     app.state.settings = cfg
@@ -599,7 +612,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         while True:
             await asyncio.sleep(interval)
             try:
-                singbox_manager.health_check(timeout_sec=1.5, auto_restart=True)
+                await singbox_manager.health_check_async(timeout_sec=1.5, auto_restart=True)
             except Exception:
                 # health loop must not crash the API process
                 continue
