@@ -81,6 +81,7 @@ class ProxyChainService:
             self._load_pool_configs()
             self._refresh_pools_locked()
             self._load_sticky_leases()
+            self._load_failed_routes()
             self._initialized = True
             logger.info("ProxyChainService initialized")
 
@@ -146,6 +147,40 @@ class ProxyChainService:
                 self.sticky_router._leases[key] = lease
                 if lease.egress_ip:
                     self.sticky_router._ip_load[lease.egress_ip] = self.sticky_router._ip_load.get(lease.egress_ip, 0) + 1
+
+    def _load_failed_routes(self) -> None:
+        """Load persisted failed routes and nodes from database into memory."""
+        # Load failed routes
+        for route in self.storage.list_active_failed_routes():
+            endpoint_id = int(route.get("endpoint_id") or 0)
+            route_signature = str(route.get("route_signature") or "").strip()
+            expires_at_str = str(route.get("expires_at") or "")
+            if endpoint_id > 0 and route_signature:
+                try:
+                    expires_at = datetime.fromisoformat(expires_at_str)
+                    # Parse route_signature back into tuple key
+                    # Format: "node_key_1,node_key_2,..." (comma-separated)
+                    keys = tuple(k.strip() for k in route_signature.split(",") if k.strip())
+                    if keys:
+                        self._failed_endpoint_routes[(endpoint_id, keys)] = expires_at
+                except (ValueError, AttributeError):
+                    pass
+
+        # Load failed route nodes
+        for node_record in self.storage.list_active_failed_route_nodes():
+            endpoint_id = int(node_record.get("endpoint_id") or 0)
+            node_key = str(node_record.get("node_key") or "").strip()
+            expires_at_str = str(node_record.get("expires_at") or "")
+            if endpoint_id > 0 and node_key:
+                try:
+                    expires_at = datetime.fromisoformat(expires_at_str)
+                    self._failed_endpoint_nodes[(endpoint_id, node_key)] = expires_at
+                except (ValueError, AttributeError):
+                    pass
+
+        # Cleanup expired records from database
+        self.storage.cleanup_expired_failed_routes()
+        self.storage.cleanup_expired_failed_route_nodes()
 
     def _rebuild_pools(self) -> None:
         """Rebuild both pools from all proxies in storage."""

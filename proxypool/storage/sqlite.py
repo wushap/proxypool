@@ -2621,6 +2621,18 @@ class SQLiteProxyStorage:
                 conn.commit()
                 return int(cursor.rowcount or 0)
 
+    def list_active_failed_routes(self) -> list[dict[str, Any]]:
+        """List all non-expired failed routes."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT endpoint_id, route_signature, expires_at
+                   FROM failed_routes WHERE expires_at > datetime('now')"""
+            ).fetchall()
+            return [
+                {"endpoint_id": row[0], "route_signature": row[1], "expires_at": row[2]}
+                for row in rows
+            ]
+
     def upsert_failed_route_node(self, endpoint_id: int, node_key: str, expires_at: str) -> None:
         """Persist a failed route node with expiration time."""
         with self._write_lock:
@@ -2664,6 +2676,18 @@ class SQLiteProxyStorage:
                 )
                 conn.commit()
                 return int(cursor.rowcount or 0)
+
+    def list_active_failed_route_nodes(self) -> list[dict[str, Any]]:
+        """List all non-expired failed route nodes."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT endpoint_id, node_key, expires_at
+                   FROM failed_route_nodes WHERE expires_at > datetime('now')"""
+            ).fetchall()
+            return [
+                {"endpoint_id": row[0], "node_key": row[1], "expires_at": row[2]}
+                for row in rows
+            ]
 
     def create_http_proxy_endpoint(
         self,

@@ -4,6 +4,7 @@
 提供代理节点的查询、导入、测试、删除等端点。
 """
 
+import asyncio
 import base64
 from pathlib import Path
 
@@ -99,7 +100,7 @@ async def import_files(
             raise HTTPException(status_code=400, detail=f"not a file: {validated_path}")
         validated_paths.append(validated_path)
 
-    report = collector.collect_from_files(validated_paths)
+    report = await asyncio.to_thread(collector.collect_from_files, validated_paths)
     return _collect_report_to_dict(report)
 
 
@@ -113,7 +114,7 @@ async def import_texts(
     if not body.get("items"):
         raise HTTPException(status_code=400, detail="items is empty")
     items = [(item["filename"], item["content"]) for item in body["items"]]
-    report = collector.collect_from_text_items(items)
+    report = await asyncio.to_thread(collector.collect_from_text_items, items)
     return _collect_report_to_dict(report)
 
 
@@ -127,7 +128,7 @@ async def import_urls(
     if not body.urls:
         raise HTTPException(status_code=400, detail="urls is empty")
 
-    report = collector.collect_from_urls(urls=body.urls, timeout_sec=body.timeout_sec)
+    report = await asyncio.to_thread(collector.collect_from_urls, body.urls, body.timeout_sec)
     return _collect_report_to_dict(report)
 
 
@@ -152,7 +153,7 @@ async def import_sources(
             validated_path = validate_file_path_or_raise(source)
             validated_sources.append(str(validated_path))
 
-    report = collector.collect_from_sources(sources=validated_sources, timeout_sec=body.timeout_sec)
+    report = await asyncio.to_thread(collector.collect_from_sources, validated_sources, body.timeout_sec)
     return _collect_report_to_dict(report)
 
 
@@ -166,7 +167,7 @@ async def import_sources_file(
     sources = _read_sources_file(settings.sources_file)
     if not sources:
         raise HTTPException(status_code=400, detail=f"no valid sources in {settings.sources_file}")
-    report = collector.collect_from_sources(sources=sources)
+    report = await asyncio.to_thread(collector.collect_from_sources, sources)
     return _collect_report_to_dict(report)
 
 
@@ -180,7 +181,7 @@ async def import_output(
     paths: list[Path] = []
     for pattern in ("*.txt", "*.yaml", "*.yml"):
         paths.extend(sorted(settings.output_dir.glob(pattern)))
-    report = collector.collect_from_files(paths)
+    report = await asyncio.to_thread(collector.collect_from_files, paths)
     return _collect_report_to_dict(report)
 
 
