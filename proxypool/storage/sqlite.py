@@ -234,6 +234,42 @@ class SQLiteProxyStorage:
             updated_at TEXT NOT NULL,
             PRIMARY KEY (pool_id, url_prefix)
         );
+        CREATE TABLE IF NOT EXISTS probe_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_key TEXT NOT NULL,
+            timestamp REAL NOT NULL,
+            probe_type TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            latency_ms INTEGER,
+            error_type TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_probe_records_node ON probe_records(node_key, timestamp DESC);
+        CREATE TABLE IF NOT EXISTS node_scores (
+            node_key TEXT PRIMARY KEY,
+            final_score REAL NOT NULL,
+            grade TEXT NOT NULL,
+            raw_score REAL NOT NULL,
+            confidence REAL NOT NULL,
+            success_rate REAL,
+            avg_latency_ms INTEGER,
+            stability_score REAL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_node_scores_grade ON node_scores(grade, final_score DESC);
+        CREATE TABLE IF NOT EXISTS circuit_breaker_state (
+            node_key TEXT PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT 'closed',
+            failure_count INTEGER NOT NULL DEFAULT 0,
+            consecutive_successes INTEGER NOT NULL DEFAULT 0,
+            last_failure_time REAL,
+            last_success_time REAL,
+            open_since REAL,
+            backoff_until REAL,
+            current_backoff_sec REAL NOT NULL DEFAULT 30.0,
+            updated_at TEXT NOT NULL
+        );
         """
         with self._connect() as conn:
             conn.executescript(sql)
