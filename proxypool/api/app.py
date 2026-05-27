@@ -812,6 +812,31 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     # 注册所有 Router
     register_routers(app)
 
+    # ---- WebUI 静态文件服务 ----
+    from pathlib import Path
+    from fastapi.responses import HTMLResponse
+
+    _webui_dir = cfg.project_root / "proxypool" / "webui"
+    _webui_dist = _webui_dir / "dist"
+
+    # Serve built Vite assets
+    if (_webui_dist / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_webui_dist / "assets")), name="webui-assets")
+    # Legacy CSS directory
+    if (_webui_dir / "css").is_dir():
+        app.mount("/css", StaticFiles(directory=str(_webui_dir / "css")), name="webui-css")
+
+    @app.get("/", response_class=HTMLResponse)
+    async def serve_index():
+        dist_index = _webui_dist / "index.html"
+        if dist_index.exists():
+            return dist_index.read_text(encoding="utf-8")
+        # Fallback to legacy location
+        legacy_index = _webui_dir / "index.html"
+        if legacy_index.exists():
+            return legacy_index.read_text(encoding="utf-8")
+        raise HTTPException(status_code=404, detail="WebUI not found. Run `npm run build` in proxypool/webui.")
+
     return app
 
 
