@@ -2,17 +2,28 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from proxypool.pool.node_pool import NodeEntry
+from proxypool.pool.protocol_compat import (
+    SINGBOX_PROTOCOLS,
+    check_nodes_compatibility,
+    filter_compatible_nodes,
+    get_supported_protocols,
+    supports_protocol,
+)
 from proxypool.tester.singbox import build_singbox_outbound
+
+logger = logging.getLogger(__name__)
 
 
 class ChainBuilder:
     """Builds sing-box configurations for dynamic proxy chains."""
-    
-    def __init__(self, storage) -> None:
+
+    def __init__(self, storage, backend_type: str = "singbox") -> None:
         self.storage = storage
+        self.backend_type = backend_type
     
     def build_chain_config(
         self,
@@ -21,24 +32,37 @@ class ChainBuilder:
         exit_node: NodeEntry,
         listen: str = "127.0.0.1",
     ) -> dict[str, Any]:
-        """Build a sing-box config for a proxy chain."""
+        """Build a config for a proxy chain, checking protocol compatibility."""
+        # Check protocol compatibility before building
+        nodes_data = [
+            {"protocol": front_node.protocol, "normalized_key": front_node.key},
+            {"protocol": exit_node.protocol, "normalized_key": exit_node.key},
+        ]
+        compat = check_nodes_compatibility(nodes_data, self.backend_type)
+        if not compat["compatible"]:
+            incompatible = compat["incompatible_nodes"]
+            raise RuntimeError(
+                f"Protocol incompatible with {self.backend_type}: "
+                + ", ".join(f"{n['node_key']}({n['protocol']})" for n in incompatible)
+            )
+
         inbound_tag = "in-0"
         front_tag = "out-0-hop-0"
         exit_tag = "out-0-hop-1"
-        
+
         # Build front outbound
         front_outbound = self._build_outbound(front_node, front_tag)
         if front_outbound is None:
             raise RuntimeError(f"Cannot build outbound for front node: {front_node.key}")
-        
+
         # Build exit outbound with detour to front
         exit_outbound = self._build_outbound(exit_node, exit_tag)
         if exit_outbound is None:
             raise RuntimeError(f"Cannot build outbound for exit node: {exit_node.key}")
-        
+
         # Chain: exit -> front (detour)
         exit_outbound["detour"] = front_tag
-        
+
         return {
             "log": {"disabled": True, "level": "warn", "timestamp": True},
             "inbounds": [
@@ -107,15 +131,19 @@ class ChainBuilder:
         exit_node: NodeEntry,
         temp_port: int = 0,
     ) -> str:
-        """Build a proxy URL for curl testing through a chain.
-        
-        This creates a temporary sing-box instance and returns the proxy URL.
-        For actual implementation, we use a simpler approach with curl chaining.
-        """
-        # For curl-based testing, we'll use HTTP proxy chaining
-        # Format: http://front_user:front_pass@front_host:front_port
-        # This requires the front node to support HTTP proxy
-        
-        # For now, return the direct proxy URL for testing
-        # In production, this would start a temporary sing-box instance
+        """Build a proxy URL for curl testing through a chain."""
         return f"{exit_node.protocol}://{exit_node.host}:{exit_node.port}"
+
+    def check_nodes_compatibility(
+        self,
+        nodes: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Check if nodes are compatible with this builder's backend."""
+        return check_nodes_compatibility(nodes, self.backend_type)
+
+    def filter_compatible_nodes(
+        self,
+        nodes: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Filter nodes to only those compatible with this builder's backend."""
+        return filter_compatible_nodes(nodes, self.backend_type)
