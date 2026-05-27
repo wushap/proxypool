@@ -1,4 +1,4 @@
-.PHONY: help test test-fast test-security test-cov test-parallel lint lint-fix format type-check check clean run run-debug build docker stop-docker install
+.PHONY: help test test-fast test-security test-cov test-parallel test-e2e lint lint-fix format type-check check clean run run-debug build docker stop-docker install
 
 # Default target
 help:
@@ -48,6 +48,9 @@ test-cov:
 
 test-parallel:
 	python3 -m pytest tests/ -v -n auto
+
+test-e2e:
+	npx playwright test
 
 # Linting
 lint:
