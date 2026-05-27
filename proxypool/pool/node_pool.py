@@ -6,6 +6,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+from proxypool.pool.scoring import CircuitBreaker, CircuitBreakerConfig, CircuitState, NodeScore
+
 DEFAULT_PROTOCOLS_BY_POOL_TYPE: dict[str, set[str]] = {
     "front": {"http", "socks", "ss"},
     "exit": {"http", "socks", "ss", "trojan", "vless", "vmess", "hysteria2"},
@@ -22,7 +24,7 @@ class NodeEntry:
     raw_link: str
     name: str = ""
     tags: list[str] = field(default_factory=list)
-    
+
     # Health state
     failure_count: int = 0
     circuit_open: bool = False
@@ -30,7 +32,11 @@ class NodeEntry:
     egress_region: str = ""
     latency_ms: int | None = None
     routeable: bool = False
-    
+
+    # Scoring
+    score: NodeScore | None = None
+    circuit_breaker: CircuitBreaker | None = None
+
     # Timestamps
     last_success_at: str = ""
     last_failure_at: str = ""
@@ -85,9 +91,16 @@ class NodePool:
             return self._nodes.get(node_key)
     
     def get_healthy_nodes(self) -> list[NodeEntry]:
-        """Get all healthy (non-circuit-open) nodes."""
+        """Get all healthy nodes, sorted by score (highest first)."""
         with self._lock:
-            return [n for n in self._nodes.values() if not n.circuit_open and n.routeable]
+            healthy = [n for n in self._nodes.values() if not n.circuit_open and n.routeable]
+        # Sort by score descending (nodes with None score go to end)
+        def _sort_key(n: NodeEntry) -> float:
+            if n.score is not None:
+                return -n.score.final_score
+            return 0.0
+        healthy.sort(key=_sort_key)
+        return healthy
     
     def get_all_nodes(self) -> list[NodeEntry]:
         """Get all nodes."""
