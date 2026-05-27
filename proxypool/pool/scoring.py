@@ -103,14 +103,21 @@ class SlidingWindow:
     @property
     def stability_score(self) -> float:
         """Stability based on coefficient of variation. 1.0 = perfectly stable."""
-        avg = self.avg_latency
-        if avg is None or avg == 0:
-            return 0.0
         with self._lock:
+            self._cleanup()
             latencies = [s.latency_ms for s in self._samples if s.latency_ms is not None]
+
+        if not latencies:
+            return 0.0
+
+        avg = sum(latencies) / len(latencies)
+        if avg == 0:
+            return 0.0
+
         if len(latencies) < 2:
             return 1.0
-        mean = sum(latencies) / len(latencies)
+
+        mean = avg
         variance = sum((x - mean) ** 2 for x in latencies) / (len(latencies) - 1)
         stddev = math.sqrt(variance)
         cv = stddev / avg
