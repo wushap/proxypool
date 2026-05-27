@@ -519,9 +519,20 @@ class ProxyChainService:
                 self.storage.delete_sticky_lease(safe_session_id, safe_pool_id, safe_endpoint_id)
             if safe_endpoint_id > 0 and keys:
                 expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(1, int(cooldown_sec or 300)))
+                expires_at_str = expires_at.isoformat()
+                route_signature = ">".join(keys)
+
+                # Update in-memory cache
                 self._failed_endpoint_routes[(safe_endpoint_id, keys)] = expires_at
                 self._healthy_endpoint_routes.pop((safe_endpoint_id, keys), None)
                 self._failed_endpoint_nodes[(safe_endpoint_id, keys[0])] = expires_at
+
+                # Persist to database
+                try:
+                    self.storage.upsert_failed_route(safe_endpoint_id, route_signature, expires_at_str)
+                    self.storage.upsert_failed_route_node(safe_endpoint_id, keys[0], expires_at_str)
+                except Exception as e:
+                    logger.error(f"Failed to persist failed route: {e}")
 
     def report_endpoint_route_success(
         self,
@@ -533,13 +544,25 @@ class ProxyChainService:
         keys = tuple(str(item or "").strip() for item in list(hop_node_keys or []) if str(item or "").strip())
         if safe_endpoint_id <= 0 or not keys:
             return
+
+        route_signature = ">".join(keys)
+
         with self._lock:
+            # Update in-memory cache
             self._failed_endpoint_routes.pop((safe_endpoint_id, keys), None)
             for node_key in keys:
                 self._failed_endpoint_nodes.pop((safe_endpoint_id, node_key), None)
             self._healthy_endpoint_routes[(safe_endpoint_id, keys)] = datetime.now(timezone.utc) + timedelta(
                 seconds=max(1, int(ttl_sec or 600))
             )
+
+            # Remove from database
+            try:
+                self.storage.delete_failed_route(safe_endpoint_id, route_signature)
+                for node_key in keys:
+                    self.storage.delete_failed_route_node(safe_endpoint_id, node_key)
+            except Exception as e:
+                logger.error(f"Failed to delete failed route: {e}")
 
     def get_health_status(self) -> dict[str, Any]:
         """Get health manager status."""
@@ -804,29 +827,51 @@ class ProxyChainService:
         return True
 
     def _is_endpoint_route_failed(self, endpoint_id: int, hop_node_keys: list[str]) -> bool:
+        route_signature = ">".join(str(item or "").strip() for item in hop_node_keys if str(item or "").strip())
         key = (int(endpoint_id or 0), tuple(str(item or "").strip() for item in hop_node_keys if str(item or "").strip()))
+
+        # Check in-memory cache first
         with self._lock:
             expires_at = self._failed_endpoint_routes.get(key)
-            if expires_at is None:
-                return False
-            if datetime.now(timezone.utc) >= expires_at:
-                self._failed_endpoint_routes.pop(key, None)
-                return False
-        return True
+            if expires_at is not None:
+                if datetime.now(timezone.utc) >= expires_at:
+                    self._failed_endpoint_routes.pop(key, None)
+                else:
+                    return True
+
+        # Check database
+        try:
+            if self.storage.is_route_failed(endpoint_id, route_signature):
+                return True
+        except Exception as e:
+            logger.error(f"Failed to check route failure in DB: {e}")
+
+        return False
 
     def _is_endpoint_node_failed(self, endpoint_id: int, node_key: str) -> bool:
         safe_key = str(node_key or "").strip()
         if not safe_key:
             return False
+
         key = (int(endpoint_id or 0), safe_key)
+
+        # Check in-memory cache first
         with self._lock:
             expires_at = self._failed_endpoint_nodes.get(key)
-            if expires_at is None:
-                return False
-            if datetime.now(timezone.utc) >= expires_at:
-                self._failed_endpoint_nodes.pop(key, None)
-                return False
-        return True
+            if expires_at is not None:
+                if datetime.now(timezone.utc) >= expires_at:
+                    self._failed_endpoint_nodes.pop(key, None)
+                else:
+                    return True
+
+        # Check database
+        try:
+            if self.storage.is_route_node_failed(endpoint_id, safe_key):
+                return True
+        except Exception as e:
+            logger.error(f"Failed to check node failure in DB: {e}")
+
+        return False
 
     def endpoint_route_health(self, endpoint_id: int, hop_node_keys: list[str]) -> dict[str, Any]:
         clean_keys = tuple(str(item or "").strip() for item in hop_node_keys if str(item or "").strip())

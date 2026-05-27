@@ -48,7 +48,7 @@
                 <!-- Add subscription form -->
                 <div class="form-row-3" style="gap: 8px; margin-bottom: 12px;">
                   <input v-model.trim="subscriptionForm.name" type="text" placeholder="订阅名称" class="input" />
-                  <input v-model.trim="subscriptionForm.url" type="text" placeholder="订阅链接 URL" class="input" />
+                  <input ref="subscriptionUrlInput" v-model.trim="subscriptionForm.url" type="text" placeholder="订阅链接 URL" class="input" />
                   <button @click="onCreateSubscription" :disabled="isActionRunning('createSubscription')" class="btn btn-primary">
                     {{ buttonLabel('createSubscription', '添加订阅', '添加中...') }}
                   </button>
@@ -89,7 +89,11 @@
                 </div>
 
                 <!-- Empty State -->
-                <EmptyState v-if="!subscriptions.length" title="暂无订阅" description="点击上方添加订阅按钮创建第一个订阅源" size="normal" />
+                <EmptyState v-if="!subscriptions.length" title="暂无订阅" description="点击下方按钮创建第一个订阅源" size="normal">
+                  <template #actions>
+                    <button class="btn btn-xs btn-primary" @click="focusSubscriptionUrlInput">添加订阅</button>
+                  </template>
+                </EmptyState>
 
                 <!-- Table -->
                 <div v-else class="table-wrap">
@@ -169,6 +173,11 @@ export default {
     },
   },
   methods: {
+    focusSubscriptionUrlInput() {
+      this.$nextTick(() => {
+        this.$refs.subscriptionUrlInput?.focus();
+      });
+    },
     freshnessStyle(ts) {
       if (!ts) return { color: 'var(--muted)' };
       const age = Date.now() - new Date(ts).getTime();

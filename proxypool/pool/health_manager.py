@@ -112,26 +112,25 @@ class HealthManager:
                 failure_count = cb_data["failure_count"]
                 consecutive_successes = cb_data["consecutive_successes"]
 
-                breaker = self.circuit_breaker_manager.get_breaker(node_key)
-                if state_str == "open":
-                    breaker._state = CircuitState.OPEN
-                    breaker._failure_count = failure_count
-                    breaker._open_since = cb_data.get("open_since")
-                    breaker._backoff_until = cb_data.get("backoff_until")
-                    breaker._current_backoff_sec = cb_data.get("current_backoff_sec", 30.0)
-                elif state_str == "half_open":
-                    breaker._state = CircuitState.HALF_OPEN
-                    breaker._failure_count = failure_count
-                    breaker._consecutive_successes = consecutive_successes
-                elif state_str == "closed":
-                    breaker._state = CircuitState.CLOSED
-                    breaker._failure_count = failure_count
-                    breaker._consecutive_successes = consecutive_successes
+                # Map state string to CircuitState enum
+                state_map = {
+                    "open": CircuitState.OPEN,
+                    "half_open": CircuitState.HALF_OPEN,
+                    "closed": CircuitState.CLOSED,
+                }
+                state = state_map.get(state_str, CircuitState.CLOSED)
 
-                if cb_data.get("last_failure_time"):
-                    breaker._last_failure_time = cb_data["last_failure_time"]
-                if cb_data.get("last_success_time"):
-                    breaker._last_success_time = cb_data["last_success_time"]
+                breaker = self.circuit_breaker_manager.get_breaker(node_key)
+                breaker.restore_state(
+                    state=state,
+                    failure_count=failure_count,
+                    consecutive_successes=consecutive_successes,
+                    last_failure_time=cb_data.get("last_failure_time"),
+                    last_success_time=cb_data.get("last_success_time"),
+                    open_since=cb_data.get("open_since"),
+                    backoff_until=cb_data.get("backoff_until"),
+                    current_backoff_sec=cb_data.get("current_backoff_sec"),
+                )
 
             # Restore node scores
             for score_data in self.health_storage.get_all_node_scores():
@@ -229,8 +228,19 @@ class HealthManager:
             "curl", "-sS", "-o", "/dev/null", "-w", "%{time_total}",
             "--max-time", str(int(self.config.probe_timeout_sec)),
             "--proxy", proxy_url,
-            self.config.latency_test_url,
         ]
+
+        # Add proxy authentication if available
+        proxy = self.storage.get_proxy_by_key(node.key)
+        if proxy:
+            extra = proxy.get("extra") or {}
+            username = str(extra.get("username") or "").strip()
+            password = str(extra.get("password") or "").strip()
+            if username and password:
+                cmd.extend(["-U", f"{username}:{password}"])
+
+        cmd.append(self.config.latency_test_url)
+
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.config.probe_timeout_sec + 2)
             if result.returncode == 0:
@@ -394,6 +404,12 @@ class HealthManager:
             latency_ms=latency_ms,
             max_failures=self.config.max_consecutive_failures,
         )
+
+        # 4. Update database statistics
+        try:
+            self.storage.update_check_result(node_key, success)
+        except Exception:
+            logger.warning("Failed to update check result for %s", node_key, exc_info=True)
 
         # 4. Update score
         window = self.window_manager.get_window(node_key)

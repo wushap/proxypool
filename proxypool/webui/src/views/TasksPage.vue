@@ -233,7 +233,7 @@
                       {{ buttonLabel('refreshTasks', '刷新', '刷新中...') }}
                     </button>
                   </div>
-                  <EmptyState v-if="!taskItems.length" title="暂无任务" description="点击上方按钮开始执行任务" size="small" />
+                  <EmptyState v-else-if="!taskItems.length" title="暂无任务" description="点击上方按钮开始执行任务" size="small" />
                   <div v-else class="task-list">
                     <div v-for="task in taskItems" :key="task.task_id" class="task-item">
                       <div class="task-row">

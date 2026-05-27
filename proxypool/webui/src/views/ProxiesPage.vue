@@ -167,6 +167,8 @@
                           <template v-else-if="col.key === 'address'"><span>{{ item.host }}:{{ item.port }}</span></template>
                           <template v-else-if="col.key === 'latency'"><span :style="latencyStyle(item.latency_ms)">{{ item.latency_ms ? item.latency_ms + ' ms' : '-' }}</span></template>
                           <template v-else-if="col.key === 'bandwidth'"><span class="mono text-xs" :style="bandwidthStyle(item.speed_mbps)">{{ formatBandwidthMbps(item) }}</span></template>
+                          <template v-else-if="col.key === 'success_rate'"><span class="mono text-xs" :style="successRateStyle(item.success_rate)">{{ formatSuccessRate(item) }}</span></template>
+                          <template v-else-if="col.key === 'fail_count'"><span class="mono text-xs" :style="failCountStyle(item.fail_count)">{{ item.fail_count ?? 0 }}</span></template>
                           <template v-else-if="col.key === 'status'"><span class="badge" :class="item.available ? 'badge-success' : 'badge-danger'">{{ item.available ? 'UP' : 'DOWN' }}</span></template>
                           <template v-else-if="col.key === 'checked_at'"><span class="text-xs text-muted">{{ formatTime(item.last_checked_at) }}</span></template>
                           <template v-else-if="col.key === 'geo'"><span class="text-xs text-muted">{{ formatGeo(item) }}</span></template>
@@ -292,6 +294,23 @@ export default {
       if (!mbps || mbps <= 0) return {};
       if (mbps >= 50) return { color: '#16a34a' };
       if (mbps >= 10) return { color: '#ca8a04' };
+      return { color: '#dc2626' };
+    },
+    formatSuccessRate(item) {
+      const rate = item.success_rate;
+      if (rate === null || rate === undefined) return '-';
+      return rate.toFixed(1) + '%';
+    },
+    successRateStyle(rate) {
+      if (rate === null || rate === undefined) return {};
+      if (rate >= 80) return { color: '#16a34a', fontWeight: 600 };
+      if (rate >= 50) return { color: '#ca8a04', fontWeight: 600 };
+      return { color: '#dc2626', fontWeight: 600 };
+    },
+    failCountStyle(count) {
+      const num = count ?? 0;
+      if (num === 0) return { color: '#16a34a' };
+      if (num < 3) return { color: '#ca8a04' };
       return { color: '#dc2626' };
     },
   },

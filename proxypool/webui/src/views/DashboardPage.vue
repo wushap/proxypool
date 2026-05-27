@@ -103,7 +103,11 @@
                 </div>
               </div>
             </template>
-            <EmptyState v-else title="暂无节点数据" size="small" />
+            <EmptyState v-else title="暂无节点数据" size="small">
+              <template #actions>
+                <button class="btn btn-xs btn-secondary" @click="goToTasks">导入节点</button>
+              </template>
+            </EmptyState>
           </div>
         </div>
 
@@ -124,7 +128,11 @@
                 </div>
               </div>
             </template>
-            <EmptyState v-else title="暂无国家数据" description="请先运行 IP 位置补全" size="small" />
+            <EmptyState v-else title="暂无国家数据" description="请先运行 IP 位置补全" size="small">
+              <template #actions>
+                <button class="btn btn-xs btn-secondary" @click="onEnrichGeo">补全 IP 位置</button>
+              </template>
+            </EmptyState>
           </div>
         </div>
       </div>
@@ -148,7 +156,11 @@
                 </div>
               </div>
             </template>
-            <EmptyState v-else title="暂无纯净度数据" description="请先运行 IP 纯净度检测" size="small" />
+            <EmptyState v-else title="暂无纯净度数据" description="请先运行 IP 纯净度检测" size="small">
+              <template #actions>
+                <button class="btn btn-xs btn-secondary" @click="onRunIpPurity">检测纯净度</button>
+              </template>
+            </EmptyState>
           </div>
         </div>
 
@@ -205,7 +217,11 @@
               </div>
             </div>
           </template>
-          <EmptyState v-else title="暂无任务记录" size="small" />
+          <EmptyState v-else title="暂无任务记录" size="small">
+            <template #actions>
+              <button class="btn btn-xs btn-secondary" @click="goToTasks">执行任务</button>
+            </template>
+          </EmptyState>
         </div>
       </div>
 

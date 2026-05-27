@@ -272,6 +272,24 @@ class SQLiteProxyStorage:
             current_backoff_sec REAL NOT NULL DEFAULT 30.0,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS failed_routes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint_id INTEGER NOT NULL,
+            route_signature TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(endpoint_id, route_signature)
+        );
+        CREATE INDEX IF NOT EXISTS idx_failed_routes_expiry ON failed_routes(expires_at);
+        CREATE TABLE IF NOT EXISTS failed_route_nodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint_id INTEGER NOT NULL,
+            node_key TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(endpoint_id, node_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_failed_route_nodes_expiry ON failed_route_nodes(expires_at);
         """
         with self._connect() as conn:
             conn.executescript(sql)
@@ -2007,6 +2025,15 @@ class SQLiteProxyStorage:
             data["openai_unlocked"] = None
         else:
             data["openai_unlocked"] = bool(val)
+
+        # 计算成功率
+        success_count = int(data.get("success_count") or 0)
+        total_checks = int(data.get("total_checks") or 0)
+        if total_checks > 0:
+            data["success_rate"] = round(success_count / total_checks * 100, 2)
+        else:
+            data["success_rate"] = None
+
         return data
 
     def _subscription_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -2544,6 +2571,96 @@ class SQLiteProxyStorage:
                 cursor = conn.execute(
                     "DELETE FROM sticky_leases WHERE session_id = ? AND pool_id = ? AND endpoint_id = ?",
                     (str(session_id or "").strip(), int(pool_id), int(endpoint_id)),
+                )
+                conn.commit()
+                return int(cursor.rowcount or 0)
+
+    # ---- Failed Routes Persistence ----
+
+    def upsert_failed_route(self, endpoint_id: int, route_signature: str, expires_at: str) -> None:
+        """Persist a failed route with expiration time."""
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """INSERT INTO failed_routes (endpoint_id, route_signature, expires_at, created_at)
+                       VALUES (?, ?, ?, datetime('now'))
+                       ON CONFLICT(endpoint_id, route_signature)
+                       DO UPDATE SET expires_at = excluded.expires_at, created_at = excluded.created_at""",
+                    (int(endpoint_id), str(route_signature or "").strip(), str(expires_at or "")),
+                )
+                conn.commit()
+
+    def is_route_failed(self, endpoint_id: int, route_signature: str) -> bool:
+        """Check if a route is currently failed (not expired)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM failed_routes
+                   WHERE endpoint_id = ? AND route_signature = ? AND expires_at > datetime('now')""",
+                (int(endpoint_id), str(route_signature or "").strip()),
+            ).fetchone()
+            return row is not None
+
+    def delete_failed_route(self, endpoint_id: int, route_signature: str) -> int:
+        """Delete a failed route record."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM failed_routes WHERE endpoint_id = ? AND route_signature = ?",
+                    (int(endpoint_id), str(route_signature or "").strip()),
+                )
+                conn.commit()
+                return int(cursor.rowcount or 0)
+
+    def cleanup_expired_failed_routes(self) -> int:
+        """Delete expired failed routes."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM failed_routes WHERE expires_at <= datetime('now')"
+                )
+                conn.commit()
+                return int(cursor.rowcount or 0)
+
+    def upsert_failed_route_node(self, endpoint_id: int, node_key: str, expires_at: str) -> None:
+        """Persist a failed route node with expiration time."""
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """INSERT INTO failed_route_nodes (endpoint_id, node_key, expires_at, created_at)
+                       VALUES (?, ?, ?, datetime('now'))
+                       ON CONFLICT(endpoint_id, node_key)
+                       DO UPDATE SET expires_at = excluded.expires_at, created_at = excluded.created_at""",
+                    (int(endpoint_id), str(node_key or "").strip(), str(expires_at or "")),
+                )
+                conn.commit()
+
+    def is_route_node_failed(self, endpoint_id: int, node_key: str) -> bool:
+        """Check if a route node is currently failed (not expired)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM failed_route_nodes
+                   WHERE endpoint_id = ? AND node_key = ? AND expires_at > datetime('now')""",
+                (int(endpoint_id), str(node_key or "").strip()),
+            ).fetchone()
+            return row is not None
+
+    def delete_failed_route_node(self, endpoint_id: int, node_key: str) -> int:
+        """Delete a failed route node record."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM failed_route_nodes WHERE endpoint_id = ? AND node_key = ?",
+                    (int(endpoint_id), str(node_key or "").strip()),
+                )
+                conn.commit()
+                return int(cursor.rowcount or 0)
+
+    def cleanup_expired_failed_route_nodes(self) -> int:
+        """Delete expired failed route nodes."""
+        with self._write_lock:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "DELETE FROM failed_route_nodes WHERE expires_at <= datetime('now')"
                 )
                 conn.commit()
                 return int(cursor.rowcount or 0)
