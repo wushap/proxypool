@@ -6,6 +6,8 @@
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from proxypool.api.schemas import AutoTaskConfigRequest
+
 router = APIRouter(prefix="/api", tags=["任务"])
 
 
@@ -31,17 +33,10 @@ async def get_auto_task_config(request: Request) -> dict:
 
 
 @router.put("/tasks/auto-config")
-async def update_auto_task_config(body: dict, request: Request) -> dict:
+async def update_auto_task_config(body: AutoTaskConfigRequest, request: Request) -> dict:
     """更新自动任务配置"""
     app_state = request.app.state
-    url = str(body.get("speed_test_url") or "").strip()
-    if body.get("speed_test_enabled") and not (
-        url.startswith("http://") or url.startswith("https://")
-    ):
-        raise HTTPException(
-            status_code=400, detail="speed_test_url must start with http:// or https://"
-        )
-    app_state.auto_task_config = body
+    app_state.auto_task_config = body.model_dump()
     return {
         "item": dict(app_state.auto_task_config),
         "last_run": dict(app_state.auto_task_last_run or {}),

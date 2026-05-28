@@ -288,6 +288,7 @@ def _read_sources_file(path: Path) -> list[str]:
         if not text or text.startswith("#"):
             continue
         sources.append(text)
+    return sources
 
 
 @router.post("/proxies/batch-test")

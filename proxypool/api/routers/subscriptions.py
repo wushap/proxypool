@@ -11,7 +11,11 @@ from dataclasses import asdict
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from proxypool.api.schemas import SubscriptionBatchRefreshRequest
+from proxypool.api.schemas import (
+    SubscriptionBatchRefreshRequest,
+    SubscriptionCreateRequest,
+    SubscriptionUpdateRequest,
+)
 
 router = APIRouter(prefix="/api", tags=["订阅"])
 
@@ -28,16 +32,16 @@ async def list_subscriptions(
 
 @router.post("/subscriptions")
 async def create_subscription(
-    body: dict,
+    body: SubscriptionCreateRequest,
     request: Request,
 ) -> dict:
     """创建订阅"""
     storage = request.app.state.storage
     try:
         item = storage.create_subscription(
-            name=body["name"],
-            url=body["url"],
-            enabled=body.get("enabled", True),
+            name=body.name,
+            url=body.url,
+            enabled=body.enabled,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -47,7 +51,7 @@ async def create_subscription(
 @router.put("/subscriptions/{subscription_id}")
 async def update_subscription(
     subscription_id: int,
-    body: dict,
+    body: SubscriptionUpdateRequest,
     request: Request,
 ) -> dict:
     """更新订阅"""
@@ -55,9 +59,9 @@ async def update_subscription(
     try:
         item = storage.update_subscription(
             subscription_id=subscription_id,
-            name=body.get("name"),
-            url=body.get("url"),
-            enabled=body.get("enabled"),
+            name=body.name,
+            url=body.url,
+            enabled=body.enabled,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

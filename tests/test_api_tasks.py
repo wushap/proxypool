@@ -161,8 +161,8 @@ async def test_update_auto_task_config_rejects_invalid_speed_test_url(tmp_path: 
             },
         )
 
-    assert resp.status_code == 400
-    assert "speed_test_url" in resp.json()["detail"]
+    assert resp.status_code == 422
+    assert "speed_test_url" in resp.text or "URL" in resp.text
 
 
 @pytest.mark.anyio
