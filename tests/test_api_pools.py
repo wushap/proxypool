@@ -1219,7 +1219,6 @@ async def test_pool_chain_instance_lifecycle(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.xfail(reason="Chain lease inherit_lease method not implemented yet")
 async def test_pool_chain_lease_endpoints_and_chain_route_session_id(tmp_path: Path) -> None:
     settings = _make_settings(tmp_path)
     app = create_app(settings)

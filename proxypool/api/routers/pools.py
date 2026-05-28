@@ -495,9 +495,9 @@ async def delete_pool_chain_lease(
     request: Request,
 ) -> dict:
     """删除租约"""
-    chain_instance_manager = request.app.state.chain_instance_manager
+    chain_service = request.app.state.chain_service
     try:
-        deleted = chain_instance_manager.delete_lease(session_id=session_id)
+        deleted = chain_service.delete_lease(session_id, pool_id)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"deleted": deleted}
@@ -511,12 +511,12 @@ async def inherit_pool_chain_lease(
 ) -> dict:
     """继承租约"""
     pool_service = request.app.state.pool_service
-    chain_instance_manager = request.app.state.chain_instance_manager
+    chain_service = request.app.state.chain_service
     item = pool_service.get_pool(pool_id)
     if item is None:
         raise HTTPException(status_code=404, detail="pool not found")
     try:
-        lease = chain_instance_manager.inherit_lease(
+        lease = chain_service.inherit_lease(
             pool_id=pool_id,
             source_session_id=body.from_session_id,
             target_session_id=body.to_session_id,

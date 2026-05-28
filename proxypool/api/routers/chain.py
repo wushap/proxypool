@@ -98,8 +98,8 @@ async def list_chain_leases(
     request: Request,
 ) -> dict:
     """获取链租约列表"""
-    chain_instance_manager = request.app.state.chain_instance_manager
-    return {"items": chain_instance_manager.list_all_leases()}
+    chain_service = request.app.state.chain_service
+    return {"items": chain_service.get_leases()}
 
 
 @router.post(
@@ -113,8 +113,8 @@ async def cleanup_chain_leases(
     max_age_sec: int = Query(default=3600, ge=60),
 ) -> dict:
     """清理过期租约"""
-    chain_instance_manager = request.app.state.chain_instance_manager
-    cleaned = chain_instance_manager.cleanup_expired_leases(max_age_sec=max_age_sec)
+    chain_service = request.app.state.chain_service
+    cleaned = chain_service.cleanup_leases()
     return {"cleaned": cleaned}
 
 

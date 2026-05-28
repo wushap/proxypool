@@ -539,6 +539,34 @@ class ProxyChainService:
             return items
         return self.sticky_router.get_leases(pool_id)
 
+    def delete_lease(self, session_id: str, pool_id: int = 0) -> bool:
+        """Delete a sticky lease by session_id."""
+        return self.sticky_router.delete_lease(session_id, pool_id)
+
+    def inherit_lease(
+        self, pool_id: int, source_session_id: str, target_session_id: str
+    ) -> dict[str, Any]:
+        """Copy a lease's node pair from source session to target session."""
+        leases = self.sticky_router.get_leases(pool_id)
+        source = next(
+            (l for l in leases if l["session_id"] == source_session_id), None
+        )
+        if source is None:
+            raise ValueError(f"source lease not found: {source_session_id}")
+        # Create a new lease for the target session with the same routing
+        self.sticky_router.route(
+            session_id=target_session_id,
+            pool_id=pool_id,
+            target_domain="",
+        )
+        target_leases = self.sticky_router.get_leases(pool_id)
+        target = next(
+            (l for l in target_leases if l["session_id"] == target_session_id), None
+        )
+        if target is None:
+            raise ValueError("failed to create inherited lease")
+        return target
+
     def cleanup_leases(self) -> int:
         """Cleanup expired leases."""
         removed = self.sticky_router.cleanup_expired_leases()

@@ -44,5 +44,26 @@
 - `make lint` → All checks passed
 - Deprecation warnings reduced from 6327 to 1 (only TesterService class name warning remains)
 
+### Commit: c4b2a68
+
+---
+
+## Round 2: Chain Lease Implementation & Warning Cleanup
+
+**Goal**: Implement chain lease inherit/delete methods; fix TesterService pytest warning
+**Status**: COMPLETED
+**Result**: 627 passed, 0 failed, 3 skipped, 2 xfailed (was: 626 passed, 0 failed, 3 skipped, 3 xfailed)
+
+### Changes
+- `proxypool/pool/chain_service.py`: Added `delete_lease()` and `inherit_lease()` methods delegating to sticky router
+- `proxypool/api/routers/pools.py`: Fixed lease endpoints to use `chain_service` instead of `chain_instance_manager`
+- `proxypool/api/routers/chain.py`: Fixed lease list and cleanup endpoints to use `chain_service`
+- `proxypool/tester/service.py`: Added `__test__ = False` to prevent pytest collection warning
+- `tests/test_api_pools.py`: Removed xfail from test_pool_chain_lease_endpoints_and_chain_route_session_id
+
+### Verification
+- `uv run pytest tests/` → 627 passed, 0 failed, 3 skipped, 2 xfailed
+- Zero warnings remaining
+
 ### Commit: (pending)
 

@@ -29,6 +29,8 @@ class BatchOpenAIReport:
 
 
 class TesterService:
+    __test__ = False  # Prevent pytest collection
+
     def __init__(
         self,
         storage: SQLiteProxyStorage,
