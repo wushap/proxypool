@@ -153,5 +153,38 @@
 ### Verification
 - `uv run pytest tests/` → 678 passed, 0 failed, 3 skipped, 1 xfailed
 
-### Commit: (pending)
+### Commit: 3ef4f81
+
+---
+
+## Round 7-8: Lint Fixes & Storage Cleanup
+
+**Goal**: Fix all lint errors; complete storage decomposition cleanup
+**Status**: COMPLETED
+**Result**: 678 passed, 0 failed, 0 lint errors
+
+### Changes
+- Fixed E741 ambiguous variable names in chain_service.py
+- Fixed I001 import ordering in test files
+- Completed sqlite.py cleanup after mixin extraction
+
+### Commits: cc5c277, 21e0187
+
+---
+
+## Round 9: Health Storage, Scheduler, Task Manager Tests
+
+**Goal**: Add tests for low-coverage modules
+**Status**: COMPLETED
+**Result**: 762 passed, 0 failed, 3 skipped, 1 xfailed
+
+### Changes
+- `tests/test_health_storage.py`: New - 45 tests for health storage methods
+- `tests/test_scheduler_service.py`: New - 13 tests for scheduler service
+- `tests/test_task_manager_extended.py`: New - extended task manager tests
+
+### Verification
+- `uv run pytest tests/` → 762 passed, 0 failed, 3 skipped, 1 xfailed
+
+### Commit: 6555e54
 
