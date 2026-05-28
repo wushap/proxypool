@@ -1,6 +1,7 @@
 """
 Tests for ChainBuilder module.
 """
+
 from __future__ import annotations
 
 import unittest
@@ -50,8 +51,10 @@ class TestChainBuilder(unittest.TestCase):
             raw_link="trojan://password@exit.example.com:443",
         )
 
-        with patch('proxypool.pool.chain_builder.check_nodes_compatibility') as mock_check, \
-             patch('proxypool.pool.chain_builder.build_singbox_outbound') as mock_build:
+        with (
+            patch("proxypool.pool.chain_builder.check_nodes_compatibility") as mock_check,
+            patch("proxypool.pool.chain_builder.build_singbox_outbound") as mock_build,
+        ):
             mock_check.return_value = {
                 "compatible": True,
                 "incompatible_nodes": [],
@@ -106,7 +109,7 @@ class TestChainBuilder(unittest.TestCase):
             raw_link="vmess://uuid@exit.example.com:443",
         )
 
-        with patch('proxypool.pool.chain_builder.check_nodes_compatibility') as mock_check:
+        with patch("proxypool.pool.chain_builder.check_nodes_compatibility") as mock_check:
             mock_check.return_value = {
                 "compatible": False,
                 "incompatible_nodes": [
@@ -149,8 +152,10 @@ class TestChainBuilder(unittest.TestCase):
             raw_link="trojan://password@exit.example.com:443",
         )
 
-        with patch('proxypool.pool.chain_builder.check_nodes_compatibility') as mock_check, \
-             patch('proxypool.pool.chain_builder.build_singbox_outbound') as mock_build:
+        with (
+            patch("proxypool.pool.chain_builder.check_nodes_compatibility") as mock_check,
+            patch("proxypool.pool.chain_builder.build_singbox_outbound") as mock_build,
+        ):
             mock_check.return_value = {
                 "compatible": True,
                 "incompatible_nodes": [],
@@ -183,7 +188,7 @@ class TestChainBuilder(unittest.TestCase):
             {"protocol": "trojan", "normalized_key": "key2"},
         ]
 
-        with patch('proxypool.pool.chain_builder.check_nodes_compatibility') as mock_check:
+        with patch("proxypool.pool.chain_builder.check_nodes_compatibility") as mock_check:
             mock_check.return_value = {"compatible": True, "incompatible_nodes": []}
             result = self.builder.check_nodes_compatibility(nodes)
 
@@ -197,7 +202,7 @@ class TestChainBuilder(unittest.TestCase):
             {"protocol": "vless", "normalized_key": "key2"},
         ]
 
-        with patch('proxypool.pool.chain_builder.filter_compatible_nodes') as mock_filter:
+        with patch("proxypool.pool.chain_builder.filter_compatible_nodes") as mock_filter:
             mock_filter.return_value = [nodes[0]]
             result = self.builder.filter_compatible_nodes(nodes)
 

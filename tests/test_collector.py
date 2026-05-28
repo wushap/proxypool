@@ -26,12 +26,14 @@ class TestCollectorService(unittest.TestCase):
             }
             vmess = "vmess://" + base64.b64encode(json.dumps(vmess_payload).encode()).decode()
             source_file.write_text(
-                "\n".join([
-                    vmess,
-                    "trojan://pwd@example.org:443#t-1",
-                    "invalid-entry",
-                    vmess,
-                ]),
+                "\n".join(
+                    [
+                        vmess,
+                        "trojan://pwd@example.org:443#t-1",
+                        "invalid-entry",
+                        vmess,
+                    ]
+                ),
                 encoding="utf-8",
             )
 

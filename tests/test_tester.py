@@ -1,13 +1,18 @@
 import asyncio
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from proxypool.models import ProxyNode
 from proxypool.storage.sqlite import SQLiteProxyStorage
 from proxypool.tester.service import TesterService
-from proxypool.tester.singbox import DEFAULT_LATENCY_TEST_URLS, ProbeResult, SingboxProber, build_singbox_outbound
+from proxypool.tester.singbox import (
+    DEFAULT_LATENCY_TEST_URLS,
+    ProbeResult,
+    SingboxProber,
+    build_singbox_outbound,
+)
 
 
 class FakeProber:
@@ -79,8 +84,15 @@ class OpenAIFallbackProber:
         host = str(node.get("host") or "")
         key = str(node.get("normalized_key") or "")
         if host.startswith("target"):
-            return ProbeResult(normalized_key=key, available=False, openai_unlocked=None, error="direct down")
-        return ProbeResult(normalized_key=key, available=True, openai_unlocked=True, openai_status="401 unauthorized")
+            return ProbeResult(
+                normalized_key=key, available=False, openai_unlocked=None, error="direct down"
+            )
+        return ProbeResult(
+            normalized_key=key,
+            available=True,
+            openai_unlocked=True,
+            openai_status="401 unauthorized",
+        )
 
     async def probe_with_front_proxy_async(self, node: dict, front_proxy: dict):
         node_key = str(node.get("normalized_key") or "")
@@ -186,7 +198,9 @@ class TestSingboxProber(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(latency_ms, 123)
         self.assertEqual(error, "")
-        self.assertEqual(calls[:2], ["https://www.cloudflare.com/cdn-cgi/trace", "https://one.example.com/ping"])
+        self.assertEqual(
+            calls[:2], ["https://www.cloudflare.com/cdn-cgi/trace", "https://one.example.com/ping"]
+        )
         self.assertEqual(calls[2], "https://two.example.com/ping")
 
 
@@ -197,10 +211,22 @@ class TestTesterService(unittest.TestCase):
             storage = SQLiteProxyStorage(db)
 
             storage.upsert_proxy(
-                ProxyNode(protocol="trojan", host="up.example.com", port=443, raw_link="trojan://a", extra={"password": "p"})
+                ProxyNode(
+                    protocol="trojan",
+                    host="up.example.com",
+                    port=443,
+                    raw_link="trojan://a",
+                    extra={"password": "p"},
+                )
             )
             storage.upsert_proxy(
-                ProxyNode(protocol="trojan", host="down.example.com", port=443, raw_link="trojan://b", extra={"password": "p"})
+                ProxyNode(
+                    protocol="trojan",
+                    host="down.example.com",
+                    port=443,
+                    raw_link="trojan://b",
+                    extra={"password": "p"},
+                )
             )
 
             tester = TesterService(storage, prober=FakeProber())
@@ -221,10 +247,22 @@ class TestTesterService(unittest.TestCase):
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
             storage.upsert_proxy(
-                ProxyNode(protocol="trojan", host="up-1.example.com", port=443, raw_link="trojan://a", extra={"password": "p"})
+                ProxyNode(
+                    protocol="trojan",
+                    host="up-1.example.com",
+                    port=443,
+                    raw_link="trojan://a",
+                    extra={"password": "p"},
+                )
             )
             storage.upsert_proxy(
-                ProxyNode(protocol="trojan", host="down-2.example.com", port=443, raw_link="trojan://b", extra={"password": "p"})
+                ProxyNode(
+                    protocol="trojan",
+                    host="down-2.example.com",
+                    port=443,
+                    raw_link="trojan://b",
+                    extra={"password": "p"},
+                )
             )
 
             tester = TesterService(storage, prober=FakeProber())
@@ -268,8 +306,20 @@ class TestTesterService(unittest.TestCase):
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
 
-            n1 = ProxyNode(protocol="trojan", host="up.example.com", port=443, raw_link="trojan://a", extra={"password": "p"})
-            n2 = ProxyNode(protocol="trojan", host="down.example.com", port=443, raw_link="trojan://b", extra={"password": "p"})
+            n1 = ProxyNode(
+                protocol="trojan",
+                host="up.example.com",
+                port=443,
+                raw_link="trojan://a",
+                extra={"password": "p"},
+            )
+            n2 = ProxyNode(
+                protocol="trojan",
+                host="down.example.com",
+                port=443,
+                raw_link="trojan://b",
+                extra={"password": "p"},
+            )
             storage.upsert_proxy(n1)
             storage.upsert_proxy(n2)
             storage.update_test_result(n1.normalized_key(), available=True, latency_ms=10)
@@ -305,16 +355,38 @@ class TestTesterService(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
-            old_down = ProxyNode(protocol="trojan", host="down-old.example.com", port=443, raw_link="trojan://old", extra={"password": "p"})
-            recent_down = ProxyNode(protocol="trojan", host="down-recent.example.com", port=443, raw_link="trojan://recent", extra={"password": "p"})
-            up_old = ProxyNode(protocol="trojan", host="up-old.example.com", port=443, raw_link="trojan://up", extra={"password": "p"})
+            old_down = ProxyNode(
+                protocol="trojan",
+                host="down-old.example.com",
+                port=443,
+                raw_link="trojan://old",
+                extra={"password": "p"},
+            )
+            recent_down = ProxyNode(
+                protocol="trojan",
+                host="down-recent.example.com",
+                port=443,
+                raw_link="trojan://recent",
+                extra={"password": "p"},
+            )
+            up_old = ProxyNode(
+                protocol="trojan",
+                host="up-old.example.com",
+                port=443,
+                raw_link="trojan://up",
+                extra={"password": "p"},
+            )
             storage.upsert_proxy(old_down)
             storage.upsert_proxy(recent_down)
             storage.upsert_proxy(up_old)
-            storage.update_test_result(old_down.normalized_key(), available=False, latency_ms=None, error="down")
-            storage.update_test_result(recent_down.normalized_key(), available=False, latency_ms=None, error="down")
+            storage.update_test_result(
+                old_down.normalized_key(), available=False, latency_ms=None, error="down"
+            )
+            storage.update_test_result(
+                recent_down.normalized_key(), available=False, latency_ms=None, error="down"
+            )
             storage.update_test_result(up_old.normalized_key(), available=True, latency_ms=20)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             with storage._connect() as conn:
                 conn.execute(
                     "UPDATE proxies SET last_checked_at = ? WHERE normalized_key = ?",
@@ -365,7 +437,9 @@ class TestTesterService(unittest.TestCase):
             )
 
             tester = TesterService(storage, prober=OpenAICheckProber())
-            report = asyncio.run(tester.run_openai_check_batch(limit=10, concurrency=2, only_available=True))
+            report = asyncio.run(
+                tester.run_openai_check_batch(limit=10, concurrency=2, only_available=True)
+            )
             self.assertEqual(report.requested, 1)
             self.assertEqual(report.checked, 1)
             self.assertEqual(report.blocked, 1)
@@ -382,16 +456,32 @@ class TestTesterService(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
-            up = ProxyNode(protocol="trojan", host="up.example.com", port=443, raw_link="trojan://up", extra={"password": "p"})
-            down = ProxyNode(protocol="trojan", host="down.example.com", port=443, raw_link="trojan://down", extra={"password": "p"})
+            up = ProxyNode(
+                protocol="trojan",
+                host="up.example.com",
+                port=443,
+                raw_link="trojan://up",
+                extra={"password": "p"},
+            )
+            down = ProxyNode(
+                protocol="trojan",
+                host="down.example.com",
+                port=443,
+                raw_link="trojan://down",
+                extra={"password": "p"},
+            )
             storage.upsert_proxy(up)
             storage.upsert_proxy(down)
             storage.update_test_result(up.normalized_key(), available=True, latency_ms=30)
-            storage.update_test_result(down.normalized_key(), available=False, latency_ms=None, error="down")
+            storage.update_test_result(
+                down.normalized_key(), available=False, latency_ms=None, error="down"
+            )
 
             prober = RecordingOpenAIProber()
             tester = TesterService(storage, prober=prober)
-            report = asyncio.run(tester.run_openai_check_batch(limit=10, concurrency=2, only_available=False))
+            report = asyncio.run(
+                tester.run_openai_check_batch(limit=10, concurrency=2, only_available=False)
+            )
             self.assertEqual(report.requested, 1)
             self.assertEqual(prober.hosts, ["up.example.com"])
 
@@ -425,7 +515,9 @@ class TestTesterService(unittest.TestCase):
 
             prober = OpenAIFallbackProber()
             tester = TesterService(storage, prober=prober)
-            report = asyncio.run(tester.run_openai_check_batch(limit=0, concurrency=2, only_available=True))
+            report = asyncio.run(
+                tester.run_openai_check_batch(limit=0, concurrency=2, only_available=True)
+            )
             self.assertEqual(report.requested, 2)
             self.assertEqual(report.checked, 2)
             self.assertEqual(report.unlocked, 2)
@@ -493,8 +585,20 @@ class TestTesterService(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
-            down = ProxyNode(protocol="trojan", host="down.example.com", port=443, raw_link="trojan://down", extra={"password": "p"})
-            replacement = ProxyNode(protocol="trojan", host="up-replacement.example.com", port=443, raw_link="trojan://up", extra={"password": "p"})
+            down = ProxyNode(
+                protocol="trojan",
+                host="down.example.com",
+                port=443,
+                raw_link="trojan://down",
+                extra={"password": "p"},
+            )
+            replacement = ProxyNode(
+                protocol="trojan",
+                host="up-replacement.example.com",
+                port=443,
+                raw_link="trojan://up",
+                extra={"password": "p"},
+            )
             storage.upsert_proxy(down)
             storage.upsert_proxy(replacement)
             storage.update_test_result(replacement.normalized_key(), available=True, latency_ms=10)
@@ -503,8 +607,12 @@ class TestTesterService(unittest.TestCase):
             def replace_failed(old_key: str, new_key: str) -> None:
                 replacements.append((old_key, new_key))
 
-            tester = TesterService(storage, prober=FakeProber(), replace_failed_proxy_cb=replace_failed)
-            report = asyncio.run(tester.run_batch(limit=10, concurrency=2, replace_failed_with_available=True))
+            tester = TesterService(
+                storage, prober=FakeProber(), replace_failed_proxy_cb=replace_failed
+            )
+            report = asyncio.run(
+                tester.run_batch(limit=10, concurrency=2, replace_failed_with_available=True)
+            )
 
             self.assertEqual(report.unavailable, 1)
             self.assertEqual(replacements, [(down.normalized_key(), replacement.normalized_key())])

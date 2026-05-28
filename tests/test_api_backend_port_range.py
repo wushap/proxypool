@@ -59,7 +59,7 @@ async def test_backend_default_port_range_rejects_invalid_range(tmp_path: Path) 
             "/api/backend/default-port-range",
             json={"start": 35000, "end": 34000},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422  # Pydantic validation error
 
 
 @pytest.mark.anyio
@@ -78,7 +78,9 @@ async def test_backend_default_listen_get_and_set(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_backend_instances_endpoint_lists_reconciled_instances(tmp_path: Path, monkeypatch) -> None:
+async def test_backend_instances_endpoint_lists_reconciled_instances(
+    tmp_path: Path, monkeypatch
+) -> None:
     app = create_app(_make_settings(tmp_path))
     app.state.storage.upsert_backend_instance(
         instance_id="alpha",
@@ -111,7 +113,9 @@ async def test_backend_instance_start_and_stop_endpoints(tmp_path: Path, monkeyp
     async def fake_stop_instance_async(instance_id: str = "default") -> None:
         calls.append(("stop", instance_id))
 
-    monkeypatch.setattr(app.state.singbox_manager, "start_instance_async", fake_start_instance_async)
+    monkeypatch.setattr(
+        app.state.singbox_manager, "start_instance_async", fake_start_instance_async
+    )
     monkeypatch.setattr(app.state.singbox_manager, "stop_instance_async", fake_stop_instance_async)
     monkeypatch.setattr(app.state.singbox_manager, "status", lambda: {"ok": True})
     transport = httpx.ASGITransport(app=app)

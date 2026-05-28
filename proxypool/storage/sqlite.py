@@ -4,7 +4,7 @@ import base64
 import json
 import sqlite3
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlsplit, urlunsplit
@@ -248,6 +248,12 @@ class SQLiteProxyStorage:
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_probe_records_node ON probe_records(node_key, timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_proxies_last_checked ON proxies(last_checked_at);
+        CREATE INDEX IF NOT EXISTS idx_proxies_latency ON proxies(available, latency_ms);
+        CREATE INDEX IF NOT EXISTS idx_proxies_country ON proxies(country);
+        CREATE INDEX IF NOT EXISTS idx_proxies_openai ON proxies(openai_unlocked);
+        CREATE INDEX IF NOT EXISTS idx_proxies_ip_purity ON proxies(ip_purity_level);
+        CREATE INDEX IF NOT EXISTS idx_proxies_speed ON proxies(available, speed_mbps);
         CREATE TABLE IF NOT EXISTS node_scores (
             node_key TEXT PRIMARY KEY,
             final_score REAL NOT NULL,
@@ -290,6 +296,10 @@ class SQLiteProxyStorage:
             UNIQUE(endpoint_id, node_key)
         );
         CREATE INDEX IF NOT EXISTS idx_failed_route_nodes_expiry ON failed_route_nodes(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_sticky_leases_session ON sticky_leases(session_id, pool_id);
+        CREATE INDEX IF NOT EXISTS idx_sticky_leases_expires ON sticky_leases(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_chain_egress_instances_endpoint ON chain_egress_instances(endpoint_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_chain_egress_instances_status ON chain_egress_instances(status);
         """
         with self._connect() as conn:
             conn.executescript(sql)
@@ -297,9 +307,7 @@ class SQLiteProxyStorage:
             conn.commit()
 
     def _ensure_columns(self, conn: sqlite3.Connection) -> None:
-        columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(proxies)").fetchall()
-        }
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(proxies)").fetchall()}
         if "fail_count" not in columns:
             conn.execute("ALTER TABLE proxies ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0")
         if "last_error" not in columns:
@@ -325,7 +333,9 @@ class SQLiteProxyStorage:
         if "openai_checked_at" not in columns:
             conn.execute("ALTER TABLE proxies ADD COLUMN openai_checked_at TEXT")
         if "fallback_front_keys_json" not in columns:
-            conn.execute("ALTER TABLE proxies ADD COLUMN fallback_front_keys_json TEXT NOT NULL DEFAULT '[]'")
+            conn.execute(
+                "ALTER TABLE proxies ADD COLUMN fallback_front_keys_json TEXT NOT NULL DEFAULT '[]'"
+            )
         if "speed_mbps" not in columns:
             conn.execute("ALTER TABLE proxies ADD COLUMN speed_mbps REAL")
         if "speed_tested_at" not in columns:
@@ -339,29 +349,46 @@ class SQLiteProxyStorage:
             row["name"] for row in conn.execute("PRAGMA table_info(subscriptions)").fetchall()
         }
         if "update_proxy_key" not in sub_columns:
-            conn.execute("ALTER TABLE subscriptions ADD COLUMN update_proxy_key TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                "ALTER TABLE subscriptions ADD COLUMN update_proxy_key TEXT NOT NULL DEFAULT ''"
+            )
 
         pub_sub_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(published_subscriptions)").fetchall()
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(published_subscriptions)").fetchall()
         }
         if "format" not in pub_sub_columns:
-            conn.execute("ALTER TABLE published_subscriptions ADD COLUMN format TEXT NOT NULL DEFAULT 'raw'")
+            conn.execute(
+                "ALTER TABLE published_subscriptions ADD COLUMN format TEXT NOT NULL DEFAULT 'raw'"
+            )
 
         pool_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(proxy_pools)").fetchall()
         }
         if "chain_enabled" not in pool_columns:
-            conn.execute("ALTER TABLE proxy_pools ADD COLUMN chain_enabled INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                "ALTER TABLE proxy_pools ADD COLUMN chain_enabled INTEGER NOT NULL DEFAULT 0"
+            )
         if "sticky_ttl_sec" not in pool_columns:
-            conn.execute("ALTER TABLE proxy_pools ADD COLUMN sticky_ttl_sec INTEGER NOT NULL DEFAULT 3600")
+            conn.execute(
+                "ALTER TABLE proxy_pools ADD COLUMN sticky_ttl_sec INTEGER NOT NULL DEFAULT 3600"
+            )
         if "session_missing_action" not in pool_columns:
-            conn.execute("ALTER TABLE proxy_pools ADD COLUMN session_missing_action TEXT NOT NULL DEFAULT 'RANDOM'")
+            conn.execute(
+                "ALTER TABLE proxy_pools ADD COLUMN session_missing_action TEXT NOT NULL DEFAULT 'RANDOM'"
+            )
         if "session_header_names_json" not in pool_columns:
-            conn.execute("ALTER TABLE proxy_pools ADD COLUMN session_header_names_json TEXT NOT NULL DEFAULT '[]'")
+            conn.execute(
+                "ALTER TABLE proxy_pools ADD COLUMN session_header_names_json TEXT NOT NULL DEFAULT '[]'"
+            )
         if "session_query_param_names_json" not in pool_columns:
-            conn.execute("ALTER TABLE proxy_pools ADD COLUMN session_query_param_names_json TEXT NOT NULL DEFAULT '[]'")
+            conn.execute(
+                "ALTER TABLE proxy_pools ADD COLUMN session_query_param_names_json TEXT NOT NULL DEFAULT '[]'"
+            )
         if "gateway_path_prefix" not in pool_columns:
-            conn.execute("ALTER TABLE proxy_pools ADD COLUMN gateway_path_prefix TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                "ALTER TABLE proxy_pools ADD COLUMN gateway_path_prefix TEXT NOT NULL DEFAULT ''"
+            )
 
         conn.executescript(
             """
@@ -391,14 +418,21 @@ class SQLiteProxyStorage:
             """
         )
         chain_instance_columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(chain_egress_instances)").fetchall()
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(chain_egress_instances)").fetchall()
         }
         if "endpoint_id" not in chain_instance_columns:
-            conn.execute("ALTER TABLE chain_egress_instances ADD COLUMN endpoint_id INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                "ALTER TABLE chain_egress_instances ADD COLUMN endpoint_id INTEGER NOT NULL DEFAULT 0"
+            )
         if "hop_node_keys_json" not in chain_instance_columns:
-            conn.execute("ALTER TABLE chain_egress_instances ADD COLUMN hop_node_keys_json TEXT NOT NULL DEFAULT '[]'")
+            conn.execute(
+                "ALTER TABLE chain_egress_instances ADD COLUMN hop_node_keys_json TEXT NOT NULL DEFAULT '[]'"
+            )
         if "route_signature" not in chain_instance_columns:
-            conn.execute("ALTER TABLE chain_egress_instances ADD COLUMN route_signature TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                "ALTER TABLE chain_egress_instances ADD COLUMN route_signature TEXT NOT NULL DEFAULT ''"
+            )
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS pool_session_header_rules (
@@ -448,7 +482,11 @@ class SQLiteProxyStorage:
             row["name"] for row in conn.execute("PRAGMA table_info(sticky_leases)").fetchall()
         ]
         sticky_column_set = set(sticky_columns)
-        if sticky_columns and "session_id" not in sticky_column_set and "account" in sticky_column_set:
+        if (
+            sticky_columns
+            and "session_id" not in sticky_column_set
+            and "account" in sticky_column_set
+        ):
             conn.execute("ALTER TABLE sticky_leases RENAME TO sticky_leases_legacy")
             conn.execute(
                 """
@@ -476,7 +514,9 @@ class SQLiteProxyStorage:
             )
             conn.execute("DROP TABLE sticky_leases_legacy")
         elif sticky_columns and "instance_id" not in sticky_column_set:
-            conn.execute("ALTER TABLE sticky_leases ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                "ALTER TABLE sticky_leases ADD COLUMN instance_id TEXT NOT NULL DEFAULT ''"
+            )
         sticky_columns = {
             row["name"] for row in conn.execute("PRAGMA table_info(sticky_leases)").fetchall()
         }
@@ -688,7 +728,7 @@ class SQLiteProxyStorage:
             where.append("speed_mbps > ?")
             params.append(float(speed_min_mbps))
         if freshness_hours is not None and int(freshness_hours) > 0:
-            cutoff = (datetime.now(timezone.utc) - timedelta(hours=int(freshness_hours))).isoformat()
+            cutoff = (datetime.now(UTC) - timedelta(hours=int(freshness_hours))).isoformat()
             where.append("last_checked_at >= ?")
             params.append(cutoff)
         if exclude_keys:
@@ -710,7 +750,7 @@ class SQLiteProxyStorage:
             order_clause = f"CASE WHEN last_checked_at IS NULL THEN 1 ELSE 0 END ASC, last_checked_at {norm_order}, updated_at DESC"
         elif sort_key in ("success_rate", "success"):
             # 按可用性排序（作为成功率的代理指标）
-            order_clause = f"available DESC, fail_count ASC, updated_at DESC"
+            order_clause = "available DESC, fail_count ASC, updated_at DESC"
         else:
             order_clause = "updated_at DESC"
 
@@ -757,7 +797,7 @@ class SQLiteProxyStorage:
         if not only_unchecked:
             min_age_hours = max(0, int(min_last_checked_age_hours or 0))
             if min_age_hours > 0:
-                cutoff = (datetime.now(timezone.utc) - timedelta(hours=min_age_hours)).isoformat()
+                cutoff = (datetime.now(UTC) - timedelta(hours=min_age_hours)).isoformat()
                 where.append("last_checked_at IS NOT NULL")
                 where.append("last_checked_at <= ?")
                 params.append(cutoff)
@@ -810,7 +850,16 @@ class SQLiteProxyStorage:
                             openai_unlocked = ?, openai_status = ?, openai_checked_at = ?, fallback_front_keys_json = ?, updated_at = ?
                         WHERE normalized_key = ?
                         """,
-                        (latency_ms, now, openai_val, openai_status[:160], now, fallback_keys_json, now, normalized_key),
+                        (
+                            latency_ms,
+                            now,
+                            openai_val,
+                            openai_status[:160],
+                            now,
+                            fallback_keys_json,
+                            now,
+                            normalized_key,
+                        ),
                     )
                 else:
                     conn.execute(
@@ -821,7 +870,16 @@ class SQLiteProxyStorage:
                             fallback_front_keys_json = ?, updated_at = ?
                         WHERE normalized_key = ?
                         """,
-                        (now, error[:1000], openai_val, openai_status[:160], now, fallback_keys_json, now, normalized_key),
+                        (
+                            now,
+                            error[:1000],
+                            openai_val,
+                            openai_status[:160],
+                            now,
+                            fallback_keys_json,
+                            now,
+                            normalized_key,
+                        ),
                     )
                 conn.commit()
 
@@ -832,27 +890,26 @@ class SQLiteProxyStorage:
         speed_mbps: float | None = None,
     ) -> None:
         now = _utc_now()
-        with self._write_lock:
-            with self._connect() as conn:
-                if ok and speed_mbps is not None and float(speed_mbps) >= 0:
-                    conn.execute(
-                        """
+        with self._write_lock, self._connect() as conn:
+            if ok and speed_mbps is not None and float(speed_mbps) >= 0:
+                conn.execute(
+                    """
                         UPDATE proxies
                         SET speed_mbps = ?, speed_tested_at = ?, updated_at = ?
                         WHERE normalized_key = ?
                         """,
-                        (round(float(speed_mbps), 3), now, now, normalized_key),
-                    )
-                else:
-                    conn.execute(
-                        """
+                    (round(float(speed_mbps), 3), now, now, normalized_key),
+                )
+            else:
+                conn.execute(
+                    """
                         UPDATE proxies
                         SET speed_tested_at = ?, updated_at = ?
                         WHERE normalized_key = ?
                         """,
-                        (now, now, normalized_key),
-                    )
-                conn.commit()
+                    (now, now, normalized_key),
+                )
+            conn.commit()
 
     def mark_unavailable_by_fail_count(self, threshold: int = 5) -> int:
         """将 fail_count >= threshold 的可用代理标记为不可用
@@ -861,18 +918,17 @@ class SQLiteProxyStorage:
             被标记为不可用的代理数量
         """
         now = _utc_now()
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    """
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
                     UPDATE proxies
                     SET available = 0, updated_at = ?
                     WHERE available = 1 AND fail_count >= ?
                     """,
-                    (now, threshold),
-                )
-                conn.commit()
-                return cursor.rowcount
+                (now, threshold),
+            )
+            conn.commit()
+            return cursor.rowcount
 
     def update_check_result(self, normalized_key: str, success: bool) -> None:
         """更新代理的检查结果统计
@@ -882,30 +938,29 @@ class SQLiteProxyStorage:
             success: 本次检查是否成功
         """
         now = _utc_now()
-        with self._write_lock:
-            with self._connect() as conn:
-                if success:
-                    conn.execute(
-                        """
+        with self._write_lock, self._connect() as conn:
+            if success:
+                conn.execute(
+                    """
                         UPDATE proxies
                         SET success_count = success_count + 1,
                             total_checks = total_checks + 1,
                             updated_at = ?
                         WHERE normalized_key = ?
                         """,
-                        (now, normalized_key),
-                    )
-                else:
-                    conn.execute(
-                        """
+                    (now, normalized_key),
+                )
+            else:
+                conn.execute(
+                    """
                         UPDATE proxies
                         SET total_checks = total_checks + 1,
                             updated_at = ?
                         WHERE normalized_key = ?
                         """,
-                        (now, normalized_key),
-                    )
-                conn.commit()
+                    (now, normalized_key),
+                )
+            conn.commit()
 
     def get_proxies_by_keys(self, normalized_keys: list[str]) -> list[dict[str, Any]]:
         keys = [str(key).strip() for key in normalized_keys if str(key).strip()]
@@ -936,34 +991,31 @@ class SQLiteProxyStorage:
     ) -> None:
         now = _utc_now()
         openai_val = None if openai_unlocked is None else (1 if openai_unlocked else 0)
-        with self._write_lock:
-            with self._connect() as conn:
-                conn.execute(
-                    """
+        with self._write_lock, self._connect() as conn:
+            conn.execute(
+                """
                     UPDATE proxies
                     SET openai_unlocked = ?, openai_status = ?, openai_checked_at = ?
                     WHERE normalized_key = ?
                     """,
-                    (openai_val, openai_status[:160], now, normalized_key),
-                )
-                conn.commit()
+                (openai_val, openai_status[:160], now, normalized_key),
+            )
+            conn.commit()
 
     def delete_stale_unavailable(self, max_fail_count: int = 20) -> int:
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM proxies WHERE available = 0 AND fail_count >= ?",
-                    (max_fail_count,),
-                )
-                conn.commit()
-                return int(cursor.rowcount)
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM proxies WHERE available = 0 AND fail_count >= ?",
+                (max_fail_count,),
+            )
+            conn.commit()
+            return int(cursor.rowcount)
 
     def delete_unavailable(self) -> int:
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute("DELETE FROM proxies WHERE available = 0")
-                conn.commit()
-                return int(cursor.rowcount)
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute("DELETE FROM proxies WHERE available = 0")
+            conn.commit()
+            return int(cursor.rowcount)
 
     def delete_proxies_by_keys(self, normalized_keys: list[str]) -> int:
         keys: list[str] = []
@@ -977,26 +1029,31 @@ class SQLiteProxyStorage:
         if not keys:
             return 0
         placeholders = ",".join("?" for _ in keys)
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    f"DELETE FROM proxies WHERE normalized_key IN ({placeholders})",
-                    keys,
-                )
-                conn.commit()
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                f"DELETE FROM proxies WHERE normalized_key IN ({placeholders})",
+                keys,
+            )
+            conn.commit()
         return int(cursor.rowcount or 0)
 
     def get_stats(self) -> dict[str, Any]:
         with self._connect() as conn:
             total = int(conn.execute("SELECT COUNT(*) FROM proxies").fetchone()[0])
-            available = int(conn.execute("SELECT COUNT(*) FROM proxies WHERE available = 1").fetchone()[0])
+            available = int(
+                conn.execute("SELECT COUNT(*) FROM proxies WHERE available = 1").fetchone()[0]
+            )
             checked = int(
-                conn.execute("SELECT COUNT(*) FROM proxies WHERE last_checked_at IS NOT NULL").fetchone()[0]
+                conn.execute(
+                    "SELECT COUNT(*) FROM proxies WHERE last_checked_at IS NOT NULL"
+                ).fetchone()[0]
             )
             avg_latency_row = conn.execute(
                 "SELECT AVG(latency_ms) FROM proxies WHERE available = 1 AND latency_ms IS NOT NULL"
             ).fetchone()
-            avg_latency_ms = int(avg_latency_row[0]) if avg_latency_row and avg_latency_row[0] else None
+            avg_latency_ms = (
+                int(avg_latency_row[0]) if avg_latency_row and avg_latency_row[0] else None
+            )
 
             # Country distribution
             country_rows = conn.execute(
@@ -1005,12 +1062,14 @@ class SQLiteProxyStorage:
             by_country = {str(r["country"]): int(r["cnt"]) for r in country_rows}
 
             # OpenAI unlock stats
-            openai_unlocked = int(conn.execute(
-                "SELECT COUNT(*) FROM proxies WHERE openai_unlocked = 1"
-            ).fetchone()[0])
-            openai_blocked = int(conn.execute(
-                "SELECT COUNT(*) FROM proxies WHERE openai_unlocked = 0 AND openai_status IS NOT NULL AND openai_status != ''"
-            ).fetchone()[0])
+            openai_unlocked = int(
+                conn.execute("SELECT COUNT(*) FROM proxies WHERE openai_unlocked = 1").fetchone()[0]
+            )
+            openai_blocked = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM proxies WHERE openai_unlocked = 0 AND openai_status IS NOT NULL AND openai_status != ''"
+                ).fetchone()[0]
+            )
 
             # IP purity stats
             purity_rows = conn.execute(
@@ -1022,7 +1081,9 @@ class SQLiteProxyStorage:
             avg_bw_row = conn.execute(
                 "SELECT AVG(speed_mbps) FROM proxies WHERE available = 1 AND speed_mbps IS NOT NULL AND speed_mbps > 0"
             ).fetchone()
-            avg_speed_mbps = round(float(avg_bw_row[0]), 1) if avg_bw_row and avg_bw_row[0] else None
+            avg_speed_mbps = (
+                round(float(avg_bw_row[0]), 1) if avg_bw_row and avg_bw_row[0] else None
+            )
 
             # Subscription count
             sub_count = int(conn.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0])
@@ -1060,17 +1121,16 @@ class SQLiteProxyStorage:
         city: str = "",
     ) -> None:
         now = _utc_now()
-        with self._write_lock:
-            with self._connect() as conn:
-                conn.execute(
-                    """
+        with self._write_lock, self._connect() as conn:
+            conn.execute(
+                """
                     UPDATE proxies
                     SET resolved_ip = ?, country = ?, city = ?, geo_updated_at = ?, updated_at = ?
                     WHERE normalized_key = ?
                     """,
-                    (resolved_ip, country, city, now, now, normalized_key),
-                )
-                conn.commit()
+                (resolved_ip, country, city, now, now, normalized_key),
+            )
+            conn.commit()
 
     def list_geo_candidates(
         self,
@@ -1079,19 +1139,21 @@ class SQLiteProxyStorage:
         only_tested: bool = False,
     ) -> list[dict[str, Any]]:
         norm_limit = max(0, int(limit))
-        where: list[str] = ["(resolved_ip = '' OR country = '' OR city = '' OR ip_purity_checked_at IS NULL)"]
+        where: list[str] = [
+            "(resolved_ip = '' OR country = '' OR city = '' OR ip_purity_checked_at IS NULL)"
+        ]
         if only_available:
             where.append("available = 1")
         if only_tested:
             where.append("last_checked_at IS NOT NULL")
         where_clause = " AND ".join(where)
         with self._connect() as conn:
-            sql = """
+            sql = f"""
             SELECT *
             FROM proxies
             WHERE {where_clause}
             ORDER BY updated_at DESC
-            """.format(where_clause=where_clause)
+            """
             params: tuple[Any, ...] = ()
             if norm_limit > 0:
                 sql += "\nLIMIT ?"
@@ -1164,25 +1226,24 @@ class SQLiteProxyStorage:
         config_file: str = "",
     ) -> None:
         now = _utc_now()
-        with self._write_lock:
-            with self._connect() as conn:
-                conn.execute(
-                    """
+        with self._write_lock, self._connect() as conn:
+            conn.execute(
+                """
                     INSERT INTO backend_process_events (
                         backend, action, pid, result, detail, config_file, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        str(backend or "")[:32],
-                        str(action or "")[:32],
-                        int(pid),
-                        str(result or "")[:32],
-                        str(detail or "")[:1000],
-                        str(config_file or "")[:300],
-                        now,
-                    ),
-                )
-                conn.commit()
+                (
+                    str(backend or "")[:32],
+                    str(action or "")[:32],
+                    int(pid),
+                    str(result or "")[:32],
+                    str(detail or "")[:1000],
+                    str(config_file or "")[:300],
+                    now,
+                ),
+            )
+            conn.commit()
 
     def list_backend_process_events(self, limit: int = 100) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -1247,7 +1308,9 @@ class SQLiteProxyStorage:
                         now,
                     ),
                 )
-                row = conn.execute("SELECT * FROM backend_instances WHERE instance_id = ?", (safe_id,)).fetchone()
+                row = conn.execute(
+                    "SELECT * FROM backend_instances WHERE instance_id = ?", (safe_id,)
+                ).fetchone()
                 conn.commit()
         if row is None:
             raise RuntimeError("failed to upsert backend instance")
@@ -1274,26 +1337,28 @@ class SQLiteProxyStorage:
         last_error: str = "",
     ) -> None:
         updates = ["status = ?", "last_error = ?", "updated_at = ?"]
-        params: list[Any] = [str(status or "stopped")[:32], str(last_error or "")[:1000], _utc_now()]
+        params: list[Any] = [
+            str(status or "stopped")[:32],
+            str(last_error or "")[:1000],
+            _utc_now(),
+        ]
         if pid is not None:
             updates.append("pid = ?")
             params.append(int(pid))
         params.append(str(instance_id or "").strip() or "default")
-        with self._write_lock:
-            with self._connect() as conn:
-                conn.execute(
-                    f"UPDATE backend_instances SET {', '.join(updates)} WHERE instance_id = ?",
-                    params,
-                )
-                conn.commit()
+        with self._write_lock, self._connect() as conn:
+            conn.execute(
+                f"UPDATE backend_instances SET {', '.join(updates)} WHERE instance_id = ?",
+                params,
+            )
+            conn.commit()
 
     def delete_backend_instance(self, instance_id: str) -> int:
         safe_id = str(instance_id or "").strip() or "default"
-        with self._write_lock:
-            with self._connect() as conn:
-                cur = conn.execute("DELETE FROM backend_instances WHERE instance_id = ?", (safe_id,))
-                deleted = int(cur.rowcount or 0)
-                conn.commit()
+        with self._write_lock, self._connect() as conn:
+            cur = conn.execute("DELETE FROM backend_instances WHERE instance_id = ?", (safe_id,))
+            deleted = int(cur.rowcount or 0)
+            conn.commit()
         return deleted
 
     def list_subscriptions(self, limit: int = 200) -> list[dict[str, Any]]:
@@ -1340,7 +1405,11 @@ class SQLiteProxyStorage:
         format: str = "raw",
     ) -> dict[str, Any]:
         now = _utc_now()
-        filters_json = json.dumps(_normalize_published_subscription_filters(filters), ensure_ascii=False, separators=(",", ":"))
+        filters_json = json.dumps(
+            _normalize_published_subscription_filters(filters),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         output_format = _normalize_published_subscription_format(format)
         with self._write_lock:
             with self._connect() as conn:
@@ -1381,7 +1450,13 @@ class SQLiteProxyStorage:
             params.append((str(name or "").strip() or "published-subscription")[:120])
         if filters is not None:
             updates.append("filters_json = ?")
-            params.append(json.dumps(_normalize_published_subscription_filters(filters), ensure_ascii=False, separators=(",", ":")))
+            params.append(
+                json.dumps(
+                    _normalize_published_subscription_filters(filters),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         if enabled is not None:
             updates.append("enabled = ?")
             params.append(1 if enabled else 0)
@@ -1392,17 +1467,16 @@ class SQLiteProxyStorage:
         params.append(_utc_now())
         params.append(int(subscription_id))
 
-        with self._write_lock:
-            with self._connect() as conn:
-                conn.execute(
-                    f"UPDATE published_subscriptions SET {', '.join(updates)} WHERE id = ?",
-                    params,
-                )
-                row = conn.execute(
-                    "SELECT * FROM published_subscriptions WHERE id = ? LIMIT 1",
-                    (int(subscription_id),),
-                ).fetchone()
-                conn.commit()
+        with self._write_lock, self._connect() as conn:
+            conn.execute(
+                f"UPDATE published_subscriptions SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            row = conn.execute(
+                "SELECT * FROM published_subscriptions WHERE id = ? LIMIT 1",
+                (int(subscription_id),),
+            ).fetchone()
+            conn.commit()
         if row is None:
             raise ValueError("published subscription not found")
         return self._published_subscription_row_to_dict(row)
@@ -1410,28 +1484,40 @@ class SQLiteProxyStorage:
     def delete_published_subscription(self, subscription_id: int) -> int:
         with self._write_lock:
             with self._connect() as conn:
-                cur = conn.execute("DELETE FROM published_subscriptions WHERE id = ?", (int(subscription_id),))
+                cur = conn.execute(
+                    "DELETE FROM published_subscriptions WHERE id = ?", (int(subscription_id),)
+                )
                 conn.commit()
                 return int(cur.rowcount)
 
-    def get_published_subscription_links(self, subscription_id: int, limit: int = 5000) -> list[str]:
+    def get_published_subscription_links(
+        self, subscription_id: int, limit: int = 5000
+    ) -> list[str]:
         item = self.get_published_subscription(subscription_id)
         if item is None:
             raise ValueError("published subscription not found")
-        return self.get_subscription_links(limit=limit, **_filters_to_subscription_link_kwargs(item.get("filters") or {}))
+        return self.get_subscription_links(
+            limit=limit, **_filters_to_subscription_link_kwargs(item.get("filters") or {})
+        )
 
-    def get_published_subscription_proxies(self, subscription_id: int, limit: int = 5000) -> list[dict[str, Any]]:
+    def get_published_subscription_proxies(
+        self, subscription_id: int, limit: int = 5000
+    ) -> list[dict[str, Any]]:
         item = self.get_published_subscription(subscription_id)
         if item is None:
             raise ValueError("published subscription not found")
-        return self.list_proxies_filtered(limit=limit, **_filters_to_proxy_list_kwargs(item.get("filters") or {}))
+        return self.list_proxies_filtered(
+            limit=limit, **_filters_to_proxy_list_kwargs(item.get("filters") or {})
+        )
 
     def get_app_setting(self, key: str, default: str = "") -> str:
         safe_key = str(key or "").strip()
         if not safe_key:
             return str(default or "")
         with self._connect() as conn:
-            row = conn.execute("SELECT value FROM app_settings WHERE key = ? LIMIT 1", (safe_key,)).fetchone()
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = ? LIMIT 1", (safe_key,)
+            ).fetchone()
         if row is None:
             return str(default or "")
         return str(row["value"] or "")
@@ -1457,7 +1543,9 @@ class SQLiteProxyStorage:
         return self.get_app_setting("subscription_update_proxy_key", "")
 
     def set_subscription_update_proxy_key(self, normalized_key: str) -> None:
-        self.set_app_setting("subscription_update_proxy_key", str(normalized_key or "").strip()[:64])
+        self.set_app_setting(
+            "subscription_update_proxy_key", str(normalized_key or "").strip()[:64]
+        )
 
     def get_backend_default_port_range(self) -> dict[str, int]:
         start_raw = self.get_app_setting("backend_default_port_start", "1081")
@@ -1511,12 +1599,20 @@ class SQLiteProxyStorage:
         gateway_path_prefix: str = "",
     ) -> dict[str, Any]:
         now = _utc_now()
-        filters_json = json.dumps(_normalize_pool_filters(filters), ensure_ascii=False, separators=(",", ":"))
+        filters_json = json.dumps(
+            _normalize_pool_filters(filters), ensure_ascii=False, separators=(",", ":")
+        )
         safe_name = (str(name or "").strip() or "proxy-pool")[:120]
         safe_listen = str(listen or "0.0.0.0").strip() or "0.0.0.0"
         safe_type = str(inbound_type or "http").strip().lower() or "http"
-        header_names_json = json.dumps(_normalize_string_list(session_header_names), ensure_ascii=False, separators=(",", ":"))
-        query_names_json = json.dumps(_normalize_string_list(session_query_param_names), ensure_ascii=False, separators=(",", ":"))
+        header_names_json = json.dumps(
+            _normalize_string_list(session_header_names), ensure_ascii=False, separators=(",", ":")
+        )
+        query_names_json = json.dumps(
+            _normalize_string_list(session_query_param_names),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         sticky_ttl = max(1, int(sticky_ttl_sec))
         missing_action = _normalize_session_missing_action(session_missing_action)
         safe_gateway_path_prefix = str(gateway_path_prefix or "").strip()[:200]
@@ -1576,7 +1672,11 @@ class SQLiteProxyStorage:
             params.append((str(name or "").strip() or "proxy-pool")[:120])
         if filters is not None:
             updates.append("filters_json = ?")
-            params.append(json.dumps(_normalize_pool_filters(filters), ensure_ascii=False, separators=(",", ":")))
+            params.append(
+                json.dumps(
+                    _normalize_pool_filters(filters), ensure_ascii=False, separators=(",", ":")
+                )
+            )
         if listen is not None:
             updates.append("listen = ?")
             params.append(str(listen or "0.0.0.0").strip() or "0.0.0.0")
@@ -1597,10 +1697,22 @@ class SQLiteProxyStorage:
             params.append(_normalize_session_missing_action(session_missing_action))
         if session_header_names is not None:
             updates.append("session_header_names_json = ?")
-            params.append(json.dumps(_normalize_string_list(session_header_names), ensure_ascii=False, separators=(",", ":")))
+            params.append(
+                json.dumps(
+                    _normalize_string_list(session_header_names),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         if session_query_param_names is not None:
             updates.append("session_query_param_names_json = ?")
-            params.append(json.dumps(_normalize_string_list(session_query_param_names), ensure_ascii=False, separators=(",", ":")))
+            params.append(
+                json.dumps(
+                    _normalize_string_list(session_query_param_names),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         if gateway_path_prefix is not None:
             updates.append("gateway_path_prefix = ?")
             params.append(str(gateway_path_prefix or "").strip()[:200])
@@ -1609,29 +1721,29 @@ class SQLiteProxyStorage:
         updates.append("updated_at = ?")
         params.append(_utc_now())
         params.append(int(pool_id))
-        with self._write_lock:
-            with self._connect() as conn:
-                conn.execute(
-                    f"UPDATE proxy_pools SET {', '.join(updates)} WHERE id = ?",
-                    params,
-                )
-                row = conn.execute("SELECT * FROM proxy_pools WHERE id = ?", (int(pool_id),)).fetchone()
-                conn.commit()
+        with self._write_lock, self._connect() as conn:
+            conn.execute(
+                f"UPDATE proxy_pools SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            row = conn.execute("SELECT * FROM proxy_pools WHERE id = ?", (int(pool_id),)).fetchone()
+            conn.commit()
         if row is None:
             raise ValueError("proxy pool not found")
         return self._pool_row_to_dict(row)
 
     def delete_proxy_pool(self, pool_id: int) -> int:
-        with self._write_lock:
-            with self._connect() as conn:
-                cur = conn.execute("DELETE FROM proxy_pools WHERE id = ?", (int(pool_id),))
-                deleted = int(cur.rowcount or 0)
-                conn.commit()
+        with self._write_lock, self._connect() as conn:
+            cur = conn.execute("DELETE FROM proxy_pools WHERE id = ?", (int(pool_id),))
+            deleted = int(cur.rowcount or 0)
+            conn.commit()
         return deleted
 
     def get_proxy_pool(self, pool_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
-            row = conn.execute("SELECT * FROM proxy_pools WHERE id = ? LIMIT 1", (int(pool_id),)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM proxy_pools WHERE id = ? LIMIT 1", (int(pool_id),)
+            ).fetchone()
         if row is None:
             return None
         return self._pool_row_to_dict(row)
@@ -1666,27 +1778,34 @@ class SQLiteProxyStorage:
         last_synced_at: str | None = None,
     ) -> None:
         updates = ["status = ?", "last_error = ?", "updated_at = ?"]
-        params: list[Any] = [str(status or "stopped")[:32], str(last_error or "")[:1000], _utc_now()]
+        params: list[Any] = [
+            str(status or "stopped")[:32],
+            str(last_error or "")[:1000],
+            _utc_now(),
+        ]
         if last_synced_at is not None:
             updates.append("last_synced_at = ?")
             params.append(last_synced_at)
         params.append(int(pool_id))
-        with self._write_lock:
-            with self._connect() as conn:
-                conn.execute(
-                    f"UPDATE proxy_pools SET {', '.join(updates)} WHERE id = ?",
-                    params,
-                )
-                conn.commit()
+        with self._write_lock, self._connect() as conn:
+            conn.execute(
+                f"UPDATE proxy_pools SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
 
     def _pool_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
         data["filters"] = _normalize_pool_filters(_loads_json_object(data.get("filters_json")))
         data["chain_enabled"] = bool(data.get("chain_enabled"))
         data["sticky_ttl_sec"] = int(data.get("sticky_ttl_sec") or 3600)
-        data["session_missing_action"] = _normalize_session_missing_action(data.get("session_missing_action"))
+        data["session_missing_action"] = _normalize_session_missing_action(
+            data.get("session_missing_action")
+        )
         data["session_header_names"] = _loads_json_array(data.get("session_header_names_json"))
-        data["session_query_param_names"] = _loads_json_array(data.get("session_query_param_names_json"))
+        data["session_query_param_names"] = _loads_json_array(
+            data.get("session_query_param_names_json")
+        )
         data["gateway_path_prefix"] = str(data.get("gateway_path_prefix") or "")
         data.pop("resin_subscription_id", None)
         data.pop("resin_platform_id", None)
@@ -1694,7 +1813,9 @@ class SQLiteProxyStorage:
         data.pop("session_header_names_json", None)
         data.pop("session_query_param_names_json", None)
         data["match_count"] = len(
-            self.list_proxies_filtered(limit=20000, **_pool_filters_to_list_kwargs(data.get("filters") or {}))
+            self.list_proxies_filtered(
+                limit=20000, **_pool_filters_to_list_kwargs(data.get("filters") or {})
+            )
         )
         return data
 
@@ -1785,37 +1906,34 @@ class SQLiteProxyStorage:
         params.append(_utc_now())
         params.append(int(subscription_id))
 
-        with self._write_lock:
-            with self._connect() as conn:
-                conn.execute(
-                    f"UPDATE subscriptions SET {', '.join(updates)} WHERE id = ?",
-                    params,
-                )
-                row = conn.execute(
-                    "SELECT * FROM subscriptions WHERE id = ? LIMIT 1",
-                    (int(subscription_id),),
-                ).fetchone()
-                conn.commit()
+        with self._write_lock, self._connect() as conn:
+            conn.execute(
+                f"UPDATE subscriptions SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            row = conn.execute(
+                "SELECT * FROM subscriptions WHERE id = ? LIMIT 1",
+                (int(subscription_id),),
+            ).fetchone()
+            conn.commit()
         if row is None:
             raise ValueError("subscription not found")
         return self._subscription_row_to_dict(row)
 
     def delete_subscription(self, subscription_id: int) -> int:
-        with self._write_lock:
-            with self._connect() as conn:
-                cur = conn.execute("DELETE FROM subscriptions WHERE id = ?", (int(subscription_id),))
-                conn.commit()
-                return int(cur.rowcount)
+        with self._write_lock, self._connect() as conn:
+            cur = conn.execute("DELETE FROM subscriptions WHERE id = ?", (int(subscription_id),))
+            conn.commit()
+            return int(cur.rowcount)
 
     def delete_unavailable_subscriptions(self, include_disabled: bool = False) -> int:
         where = "last_status = 'failed'"
         if include_disabled:
             where = f"({where} OR enabled = 0)"
-        with self._write_lock:
-            with self._connect() as conn:
-                cur = conn.execute(f"DELETE FROM subscriptions WHERE {where}")
-                conn.commit()
-                return int(cur.rowcount)
+        with self._write_lock, self._connect() as conn:
+            cur = conn.execute(f"DELETE FROM subscriptions WHERE {where}")
+            conn.commit()
+            return int(cur.rowcount)
 
     def list_enabled_subscriptions(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -2015,7 +2133,9 @@ class SQLiteProxyStorage:
         try:
             parsed = json.loads(fallback_json)
             if isinstance(parsed, list):
-                data["fallback_front_keys"] = [str(item).strip() for item in parsed if str(item).strip()]
+                data["fallback_front_keys"] = [
+                    str(item).strip() for item in parsed if str(item).strip()
+                ]
             else:
                 data["fallback_front_keys"] = []
         except json.JSONDecodeError:
@@ -2055,9 +2175,13 @@ class SQLiteProxyStorage:
         data = dict(row)
         data["enabled"] = bool(data.get("enabled"))
         data["format"] = _normalize_published_subscription_format(data.get("format"))
-        filters = _normalize_published_subscription_filters(_loads_json_object(data.get("filters_json")))
+        filters = _normalize_published_subscription_filters(
+            _loads_json_object(data.get("filters_json"))
+        )
         data["filters"] = filters
-        data["match_count"] = len(self.list_proxies_filtered(limit=20000, **_filters_to_proxy_list_kwargs(filters)))
+        data["match_count"] = len(
+            self.list_proxies_filtered(limit=20000, **_filters_to_proxy_list_kwargs(filters))
+        )
         data.pop("filters_json", None)
         return data
 
@@ -2068,9 +2192,7 @@ class SQLiteProxyStorage:
     def list_proxy_pools_v2(self) -> list[dict[str, Any]]:
         """List all proxy chain pool configurations."""
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM proxy_pools_v2 ORDER BY name"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM proxy_pools_v2 ORDER BY name").fetchall()
             return [self._proxy_pool_v2_row_to_dict(row) for row in rows]
 
     def get_proxy_pool_v2(self, name: str) -> dict[str, Any] | None:
@@ -2113,14 +2235,13 @@ class SQLiteProxyStorage:
 
     def delete_proxy_pool_v2(self, name: str) -> int:
         """Delete a proxy chain pool configuration."""
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM proxy_pools_v2 WHERE name = ?",
-                    (name,),
-                )
-                conn.commit()
-                return cursor.rowcount
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM proxy_pools_v2 WHERE name = ?",
+                (name,),
+            )
+            conn.commit()
+            return cursor.rowcount
 
     def _proxy_pool_v2_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         """Convert a proxy_pools_v2 row to dict."""
@@ -2145,10 +2266,16 @@ class SQLiteProxyStorage:
         data["enabled"] = bool(data.get("enabled"))
         data["listen_port"] = int(data.get("listen_port") or 0)
         data["sticky_ttl_sec"] = int(data.get("sticky_ttl_sec") or 3600)
-        data["session_missing_action"] = _normalize_session_missing_action(data.get("session_missing_action"))
+        data["session_missing_action"] = _normalize_session_missing_action(
+            data.get("session_missing_action")
+        )
         data["session_header_names"] = _loads_json_array(data.get("session_header_names_json"))
-        data["session_query_param_names"] = _loads_json_array(data.get("session_query_param_names_json"))
-        data["connect_session_header_names"] = _loads_json_array(data.get("connect_session_header_names_json"))
+        data["session_query_param_names"] = _loads_json_array(
+            data.get("session_query_param_names_json")
+        )
+        data["connect_session_header_names"] = _loads_json_array(
+            data.get("connect_session_header_names_json")
+        )
         data.pop("session_header_names_json", None)
         data.pop("session_query_param_names_json", None)
         data.pop("connect_session_header_names_json", None)
@@ -2196,16 +2323,25 @@ class SQLiteProxyStorage:
                 if row is None:
                     # Create new record
                     failure_count = 0 if success else 1
-                    circuit_open = None if success else (now if failure_count >= max_failures else None)
+                    circuit_open = (
+                        None if success else (now if failure_count >= max_failures else None)
+                    )
                     conn.execute(
                         """
-                        INSERT INTO node_health (node_key, failure_count, circuit_open_since, 
+                        INSERT INTO node_health (node_key, failure_count, circuit_open_since,
                             last_success_at, last_failure_at, egress_ip, latency_avg_ms, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (node_key, failure_count, circuit_open,
-                         now if success else None, None if success else now,
-                         egress_ip, latency_ms, now),
+                        (
+                            node_key,
+                            failure_count,
+                            circuit_open,
+                            now if success else None,
+                            None if success else now,
+                            egress_ip,
+                            latency_ms,
+                            now,
+                        ),
                     )
                 else:
                     # Update existing record
@@ -2215,7 +2351,9 @@ class SQLiteProxyStorage:
                         circuit_open = None
                     else:
                         failure_count += 1
-                        circuit_open = now if failure_count >= max_failures else row["circuit_open_since"]
+                        circuit_open = (
+                            now if failure_count >= max_failures else row["circuit_open_since"]
+                        )
 
                     conn.execute(
                         """
@@ -2229,11 +2367,20 @@ class SQLiteProxyStorage:
                             updated_at = ?
                         WHERE node_key = ?
                         """,
-                        (failure_count, circuit_open,
-                         success, now, success, now,
-                         egress_ip, egress_ip,
-                         latency_ms, latency_ms,
-                         now, node_key),
+                        (
+                            failure_count,
+                            circuit_open,
+                            success,
+                            now,
+                            success,
+                            now,
+                            egress_ip,
+                            egress_ip,
+                            latency_ms,
+                            latency_ms,
+                            now,
+                            node_key,
+                        ),
                     )
                 conn.commit()
 
@@ -2256,21 +2403,18 @@ class SQLiteProxyStorage:
     def list_node_health(self) -> list[dict[str, Any]]:
         """List all node health records."""
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM node_health ORDER BY node_key"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM node_health ORDER BY node_key").fetchall()
             return [dict(row) for row in rows]
 
     def delete_node_health(self, node_key: str) -> int:
         """Delete a node health record."""
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM node_health WHERE node_key = ?",
-                    (node_key,),
-                )
-                conn.commit()
-                return cursor.rowcount
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM node_health WHERE node_key = ?",
+                (node_key,),
+            )
+            conn.commit()
+            return cursor.rowcount
 
     # ------------------------------------------------------------------
     # Sticky Lease Methods
@@ -2334,7 +2478,11 @@ class SQLiteProxyStorage:
                         str(backend_type or "mihomo").strip()[:32] or "mihomo",
                         str(front_node_key or "").strip()[:300],
                         str(exit_node_key or "").strip()[:300],
-                        json.dumps(_normalize_string_list(hop_node_keys), ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(
+                            _normalize_string_list(hop_node_keys),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
                         str(route_signature or "").strip()[:500],
                         str(listen or "127.0.0.1").strip()[:80] or "127.0.0.1",
                         max(0, int(port)),
@@ -2415,13 +2563,12 @@ class SQLiteProxyStorage:
         return [self._chain_egress_instance_row_to_dict(row) for row in rows]
 
     def delete_chain_egress_instance(self, instance_id: str) -> int:
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM chain_egress_instances WHERE instance_id = ?",
-                    (str(instance_id or "").strip(),),
-                )
-                conn.commit()
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM chain_egress_instances WHERE instance_id = ?",
+                (str(instance_id or "").strip(),),
+            )
+            conn.commit()
         return int(cursor.rowcount or 0)
 
     def upsert_pool_session_rule(
@@ -2434,11 +2581,12 @@ class SQLiteProxyStorage:
         safe_prefix = str(url_prefix or "").strip().strip("/")[:500]
         if not safe_prefix:
             raise ValueError("url_prefix is required")
-        headers_json = json.dumps(_normalize_string_list(headers), ensure_ascii=False, separators=(",", ":"))
-        with self._write_lock:
-            with self._connect() as conn:
-                conn.execute(
-                    """
+        headers_json = json.dumps(
+            _normalize_string_list(headers), ensure_ascii=False, separators=(",", ":")
+        )
+        with self._write_lock, self._connect() as conn:
+            conn.execute(
+                """
                     INSERT INTO pool_session_header_rules (
                         pool_id, url_prefix, headers_json, updated_at
                     )
@@ -2447,18 +2595,18 @@ class SQLiteProxyStorage:
                         headers_json = excluded.headers_json,
                         updated_at = excluded.updated_at
                     """,
-                    (int(pool_id), safe_prefix, headers_json, now),
-                )
-                row = conn.execute(
-                    """
+                (int(pool_id), safe_prefix, headers_json, now),
+            )
+            row = conn.execute(
+                """
                     SELECT *
                     FROM pool_session_header_rules
                     WHERE pool_id = ? AND url_prefix = ?
                     LIMIT 1
                     """,
-                    (int(pool_id), safe_prefix),
-                ).fetchone()
-                conn.commit()
+                (int(pool_id), safe_prefix),
+            ).fetchone()
+            conn.commit()
         if row is None:
             raise RuntimeError("failed to upsert pool session rule")
         return self._pool_session_rule_row_to_dict(row)
@@ -2478,16 +2626,15 @@ class SQLiteProxyStorage:
 
     def delete_pool_session_rule(self, pool_id: int, url_prefix: str) -> int:
         safe_prefix = str(url_prefix or "").strip().strip("/")[:500]
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    """
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
                     DELETE FROM pool_session_header_rules
                     WHERE pool_id = ? AND url_prefix = ?
                     """,
-                    (int(pool_id), safe_prefix),
-                )
-                conn.commit()
+                (int(pool_id), safe_prefix),
+            )
+            conn.commit()
         return int(cursor.rowcount or 0)
 
     def upsert_sticky_lease(
@@ -2531,7 +2678,9 @@ class SQLiteProxyStorage:
                 conn.commit()
         return self.get_sticky_lease(session_id, pool_id, endpoint_id) or {}
 
-    def get_sticky_lease(self, session_id: str, pool_id: int, endpoint_id: int = 0) -> dict[str, Any] | None:
+    def get_sticky_lease(
+        self, session_id: str, pool_id: int, endpoint_id: int = 0
+    ) -> dict[str, Any] | None:
         """Get a sticky lease."""
         with self._connect() as conn:
             row = conn.execute(
@@ -2540,7 +2689,9 @@ class SQLiteProxyStorage:
             ).fetchone()
             return dict(row) if row else None
 
-    def list_sticky_leases(self, pool_id: int | None = None, endpoint_id: int | None = None) -> list[dict[str, Any]]:
+    def list_sticky_leases(
+        self, pool_id: int | None = None, endpoint_id: int | None = None
+    ) -> list[dict[str, Any]]:
         """List all sticky leases, optionally filtered by pool_id."""
         with self._connect() as conn:
             if pool_id is not None and endpoint_id is not None:
@@ -2602,24 +2753,20 @@ class SQLiteProxyStorage:
 
     def delete_failed_route(self, endpoint_id: int, route_signature: str) -> int:
         """Delete a failed route record."""
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM failed_routes WHERE endpoint_id = ? AND route_signature = ?",
-                    (int(endpoint_id), str(route_signature or "").strip()),
-                )
-                conn.commit()
-                return int(cursor.rowcount or 0)
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM failed_routes WHERE endpoint_id = ? AND route_signature = ?",
+                (int(endpoint_id), str(route_signature or "").strip()),
+            )
+            conn.commit()
+            return int(cursor.rowcount or 0)
 
     def cleanup_expired_failed_routes(self) -> int:
         """Delete expired failed routes."""
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM failed_routes WHERE expires_at <= datetime('now')"
-                )
-                conn.commit()
-                return int(cursor.rowcount or 0)
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute("DELETE FROM failed_routes WHERE expires_at <= datetime('now')")
+            conn.commit()
+            return int(cursor.rowcount or 0)
 
     def list_active_failed_routes(self) -> list[dict[str, Any]]:
         """List all non-expired failed routes."""
@@ -2658,24 +2805,22 @@ class SQLiteProxyStorage:
 
     def delete_failed_route_node(self, endpoint_id: int, node_key: str) -> int:
         """Delete a failed route node record."""
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM failed_route_nodes WHERE endpoint_id = ? AND node_key = ?",
-                    (int(endpoint_id), str(node_key or "").strip()),
-                )
-                conn.commit()
-                return int(cursor.rowcount or 0)
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM failed_route_nodes WHERE endpoint_id = ? AND node_key = ?",
+                (int(endpoint_id), str(node_key or "").strip()),
+            )
+            conn.commit()
+            return int(cursor.rowcount or 0)
 
     def cleanup_expired_failed_route_nodes(self) -> int:
         """Delete expired failed route nodes."""
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM failed_route_nodes WHERE expires_at <= datetime('now')"
-                )
-                conn.commit()
-                return int(cursor.rowcount or 0)
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM failed_route_nodes WHERE expires_at <= datetime('now')"
+            )
+            conn.commit()
+            return int(cursor.rowcount or 0)
 
     def list_active_failed_route_nodes(self) -> list[dict[str, Any]]:
         """List all non-expired failed route nodes."""
@@ -2685,8 +2830,7 @@ class SQLiteProxyStorage:
                    FROM failed_route_nodes WHERE expires_at > datetime('now')"""
             ).fetchall()
             return [
-                {"endpoint_id": row[0], "node_key": row[1], "expires_at": row[2]}
-                for row in rows
+                {"endpoint_id": row[0], "node_key": row[1], "expires_at": row[2]} for row in rows
             ]
 
     def create_http_proxy_endpoint(
@@ -2722,15 +2866,29 @@ class SQLiteProxyStorage:
                         1 if enabled else 0,
                         max(1, int(sticky_ttl_sec)),
                         _normalize_session_missing_action(session_missing_action),
-                        json.dumps(_normalize_string_list(session_header_names), ensure_ascii=False, separators=(",", ":")),
-                        json.dumps(_normalize_string_list(session_query_param_names), ensure_ascii=False, separators=(",", ":")),
-                        json.dumps(_normalize_string_list(connect_session_header_names), ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(
+                            _normalize_string_list(session_header_names),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(
+                            _normalize_string_list(session_query_param_names),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(
+                            _normalize_string_list(connect_session_header_names),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
                         now,
                         now,
                     ),
                 )
                 endpoint_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-                row = conn.execute("SELECT * FROM http_proxy_endpoints WHERE id = ?", (endpoint_id,)).fetchone()
+                row = conn.execute(
+                    "SELECT * FROM http_proxy_endpoints WHERE id = ?", (endpoint_id,)
+                ).fetchone()
                 conn.commit()
         if row is None:
             raise RuntimeError("failed to create http proxy endpoint")
@@ -2777,13 +2935,31 @@ class SQLiteProxyStorage:
             params.append(_normalize_session_missing_action(session_missing_action))
         if session_header_names is not None:
             updates.append("session_header_names_json = ?")
-            params.append(json.dumps(_normalize_string_list(session_header_names), ensure_ascii=False, separators=(",", ":")))
+            params.append(
+                json.dumps(
+                    _normalize_string_list(session_header_names),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         if session_query_param_names is not None:
             updates.append("session_query_param_names_json = ?")
-            params.append(json.dumps(_normalize_string_list(session_query_param_names), ensure_ascii=False, separators=(",", ":")))
+            params.append(
+                json.dumps(
+                    _normalize_string_list(session_query_param_names),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         if connect_session_header_names is not None:
             updates.append("connect_session_header_names_json = ?")
-            params.append(json.dumps(_normalize_string_list(connect_session_header_names), ensure_ascii=False, separators=(",", ":")))
+            params.append(
+                json.dumps(
+                    _normalize_string_list(connect_session_header_names),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         if status is not None:
             updates.append("status = ?")
             params.append(str(status or "stopped").strip()[:32] or "stopped")
@@ -2797,8 +2973,12 @@ class SQLiteProxyStorage:
         params.append(int(endpoint_id))
         with self._write_lock:
             with self._connect() as conn:
-                conn.execute(f"UPDATE http_proxy_endpoints SET {', '.join(updates)} WHERE id = ?", params)
-                row = conn.execute("SELECT * FROM http_proxy_endpoints WHERE id = ?", (int(endpoint_id),)).fetchone()
+                conn.execute(
+                    f"UPDATE http_proxy_endpoints SET {', '.join(updates)} WHERE id = ?", params
+                )
+                row = conn.execute(
+                    "SELECT * FROM http_proxy_endpoints WHERE id = ?", (int(endpoint_id),)
+                ).fetchone()
                 conn.commit()
         if row is None:
             raise ValueError("http proxy endpoint not found")
@@ -2806,31 +2986,45 @@ class SQLiteProxyStorage:
 
     def get_http_proxy_endpoint(self, endpoint_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
-            row = conn.execute("SELECT * FROM http_proxy_endpoints WHERE id = ? LIMIT 1", (int(endpoint_id),)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM http_proxy_endpoints WHERE id = ? LIMIT 1", (int(endpoint_id),)
+            ).fetchone()
         if row is None:
             return None
         return self._http_proxy_endpoint_row_to_dict(row)
 
     def list_http_proxy_endpoints(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM http_proxy_endpoints ORDER BY updated_at DESC, id DESC").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM http_proxy_endpoints ORDER BY updated_at DESC, id DESC"
+            ).fetchall()
         return [self._http_proxy_endpoint_row_to_dict(row) for row in rows]
 
     def delete_http_proxy_endpoint(self, endpoint_id: int) -> int:
         with self._write_lock:
             with self._connect() as conn:
-                conn.execute("DELETE FROM http_proxy_endpoint_hops WHERE endpoint_id = ?", (int(endpoint_id),))
-                cursor = conn.execute("DELETE FROM http_proxy_endpoints WHERE id = ?", (int(endpoint_id),))
+                conn.execute(
+                    "DELETE FROM http_proxy_endpoint_hops WHERE endpoint_id = ?",
+                    (int(endpoint_id),),
+                )
+                cursor = conn.execute(
+                    "DELETE FROM http_proxy_endpoints WHERE id = ?", (int(endpoint_id),)
+                )
                 conn.commit()
         return int(cursor.rowcount or 0)
 
-    def replace_http_proxy_endpoint_hops(self, endpoint_id: int, pool_ids: list[int]) -> list[dict[str, Any]]:
+    def replace_http_proxy_endpoint_hops(
+        self, endpoint_id: int, pool_ids: list[int]
+    ) -> list[dict[str, Any]]:
         now = _utc_now()
         safe_endpoint_id = int(endpoint_id)
         safe_pool_ids = [int(pool_id) for pool_id in pool_ids if int(pool_id) > 0]
         with self._write_lock:
             with self._connect() as conn:
-                conn.execute("DELETE FROM http_proxy_endpoint_hops WHERE endpoint_id = ?", (safe_endpoint_id,))
+                conn.execute(
+                    "DELETE FROM http_proxy_endpoint_hops WHERE endpoint_id = ?",
+                    (safe_endpoint_id,),
+                )
                 for hop_index, pool_id in enumerate(safe_pool_ids):
                     conn.execute(
                         """
@@ -2860,18 +3054,17 @@ class SQLiteProxyStorage:
     def cleanup_expired_leases(self) -> int:
         """Delete expired sticky leases."""
         now = _utc_now()
-        with self._write_lock:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM sticky_leases WHERE expires_at < ?",
-                    (now,),
-                )
-                conn.commit()
-                return int(cursor.rowcount or 0)
+        with self._write_lock, self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM sticky_leases WHERE expires_at < ?",
+                (now,),
+            )
+            conn.commit()
+            return int(cursor.rowcount or 0)
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _loads_json_object(value: Any) -> dict[str, Any]:
@@ -2980,7 +3173,14 @@ def _normalize_published_subscription_filters(filters: dict[str, Any] | None) ->
         out.pop("geo_filter", None)
     if out.get("openai_filter") not in {None, "unlocked", "blocked", "unchecked"}:
         out.pop("openai_filter", None)
-    if out.get("ip_purity_filter") not in {None, "checked", "unchecked", "residential", "non_residential", "unknown"}:
+    if out.get("ip_purity_filter") not in {
+        None,
+        "checked",
+        "unchecked",
+        "residential",
+        "non_residential",
+        "unknown",
+    }:
         out.pop("ip_purity_filter", None)
     if out.get("fallback_front_filter") not in {None, "has", "none"}:
         out.pop("fallback_front_filter", None)
@@ -3147,9 +3347,13 @@ def _rewrite_vmess_alias(link: str, alias: str) -> str:
     if not isinstance(data, dict):
         return _rewrite_url_fragment_alias(link, alias)
     data["ps"] = alias
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    ).decode("utf-8").rstrip("=")
+    encoded = (
+        base64.urlsafe_b64encode(
+            json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        .decode("utf-8")
+        .rstrip("=")
+    )
     return "vmess://" + encoded
 
 

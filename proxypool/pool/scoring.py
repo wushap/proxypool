@@ -1,6 +1,7 @@
 """
 Scoring module: SlidingWindow statistics, NodeScorer, and CircuitBreaker.
 """
+
 from __future__ import annotations
 
 import logging
@@ -8,7 +9,7 @@ import math
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ProbeSample:
     """A single probe sample for sliding window."""
+
     timestamp: float
     success: bool
     latency_ms: int | None
@@ -41,7 +43,9 @@ class SlidingWindow:
         self._lock = threading.RLock()
 
     def record(self, success: bool, latency_ms: int | None = None, error_type: str = "") -> None:
-        sample = ProbeSample(timestamp=time.time(), success=success, latency_ms=latency_ms, error_type=error_type)
+        sample = ProbeSample(
+            timestamp=time.time(), success=success, latency_ms=latency_ms, error_type=error_type
+        )
         with self._lock:
             self._samples.append(sample)
             self._cleanup()
@@ -173,7 +177,9 @@ class WindowManager:
                 )
             return self._windows[node_key]
 
-    def record(self, node_key: str, success: bool, latency_ms: int | None = None, error_type: str = "") -> None:
+    def record(
+        self, node_key: str, success: bool, latency_ms: int | None = None, error_type: str = ""
+    ) -> None:
         window = self.get_window(node_key)
         window.record(success, latency_ms, error_type)
 
@@ -189,6 +195,7 @@ class WindowManager:
 # ---------------------------------------------------------------------------
 # Node Scorer
 # ---------------------------------------------------------------------------
+
 
 class ScoreGrade(Enum):
     A = "A"
@@ -367,13 +374,15 @@ class NodeScorerManager:
             if abs(delta) > 0.1:
                 logger.info(
                     "Score changed",
-                    extra={"extra_data": {
-                        "node_key": node_key,
-                        "old_score": round(old_score.final_score, 4),
-                        "new_score": round(score.final_score, 4),
-                        "delta": round(delta, 4),
-                        "grade": score.grade.value,
-                    }}
+                    extra={
+                        "extra_data": {
+                            "node_key": node_key,
+                            "old_score": round(old_score.final_score, 4),
+                            "new_score": round(score.final_score, 4),
+                            "delta": round(delta, 4),
+                            "grade": score.grade.value,
+                        }
+                    },
                 )
 
         return score
@@ -405,6 +414,7 @@ class NodeScorerManager:
 # ---------------------------------------------------------------------------
 # Circuit Breaker
 # ---------------------------------------------------------------------------
+
 
 class CircuitState(Enum):
     CLOSED = "closed"
@@ -550,9 +560,7 @@ class CircuitBreaker:
             self._backoff_until = backoff_until
             if current_backoff_sec is not None:
                 self._current_backoff_sec = current_backoff_sec
-            if state == CircuitState.OPEN:
-                self._half_open_probes = 0
-            elif state == CircuitState.HALF_OPEN:
+            if state == CircuitState.OPEN or state == CircuitState.HALF_OPEN:
                 self._half_open_probes = 0
 
 

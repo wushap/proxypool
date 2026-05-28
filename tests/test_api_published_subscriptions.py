@@ -33,12 +33,28 @@ async def test_published_subscription_crud_and_filtered_export(tmp_path: Path) -
     settings = _make_settings(tmp_path)
     app = create_app(settings)
     storage = app.state.storage
-    us = ProxyNode(protocol="trojan", host="us.example.com", port=443, raw_link="trojan://us", extra={"password": "p"})
-    jp = ProxyNode(protocol="trojan", host="jp.example.com", port=443, raw_link="trojan://jp", extra={"password": "p"})
+    us = ProxyNode(
+        protocol="trojan",
+        host="us.example.com",
+        port=443,
+        raw_link="trojan://us",
+        extra={"password": "p"},
+    )
+    jp = ProxyNode(
+        protocol="trojan",
+        host="jp.example.com",
+        port=443,
+        raw_link="trojan://jp",
+        extra={"password": "p"},
+    )
     storage.upsert_proxy(us)
     storage.upsert_proxy(jp)
-    storage.update_test_result(us.normalized_key(), available=True, latency_ms=100, openai_unlocked=True)
-    storage.update_test_result(jp.normalized_key(), available=True, latency_ms=120, openai_unlocked=False)
+    storage.update_test_result(
+        us.normalized_key(), available=True, latency_ms=100, openai_unlocked=True
+    )
+    storage.update_test_result(
+        jp.normalized_key(), available=True, latency_ms=120, openai_unlocked=False
+    )
     storage.update_geo(us.normalized_key(), resolved_ip="1.1.1.1", country="US", city="LA")
     storage.update_geo(jp.normalized_key(), resolved_ip="2.2.2.2", country="JP", city="Tokyo")
 
@@ -49,13 +65,19 @@ async def test_published_subscription_crud_and_filtered_export(tmp_path: Path) -
             json={
                 "name": "US GPT",
                 "enabled": True,
-                "filters": {"available": "true", "geo_location": "US:LA", "openai_filter": "unlocked"},
+                "filters": {
+                    "available": "true",
+                    "geo_location": "US:LA",
+                    "openai_filter": "unlocked",
+                },
             },
         )
         assert create_resp.status_code == 200
         item = create_resp.json()["item"]
         assert item["match_count"] == 1
-        assert item["export_url"].endswith(f"/api/published-subscriptions/{item['id']}/subscription")
+        assert item["export_url"].endswith(
+            f"/api/published-subscriptions/{item['id']}/subscription"
+        )
 
         export_resp = await client.get(f"/api/published-subscriptions/{item['id']}/subscription")
         assert export_resp.status_code == 200
@@ -88,7 +110,9 @@ async def test_published_subscription_can_export_clash_yaml(tmp_path: Path) -> N
         extra={"password": "secret", "security": "tls", "sni": "us.example.com"},
     )
     storage.upsert_proxy(node)
-    storage.update_test_result(node.normalized_key(), available=True, latency_ms=100, openai_unlocked=True)
+    storage.update_test_result(
+        node.normalized_key(), available=True, latency_ms=100, openai_unlocked=True
+    )
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

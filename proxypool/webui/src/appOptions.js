@@ -33,6 +33,7 @@ export const DEFAULT_PROXY_COLUMN_ORDER = [
 export const DEFAULT_PROXY_FILTERS = {
   protocol: "", available: "", geo: "", geo_country: "", geo_location: "",
   openai: "", ip_purity: "", fallback_front: "", source: "", speed_min_mbps: "",
+  score_min: "", latency_max: "",
 };
 
 export function cloneProxyColumnConfigs() {
@@ -47,7 +48,7 @@ export function cloneProxyColumnConfigs() {
 export const appOptions = {
   data() {
     return {
-      activePage: "tasks",
+      activePage: "dashboard",
       proxyPoolTab: "pools",
       stats: {},
       proxies: [],
@@ -61,6 +62,14 @@ export const appOptions = {
       backendEvents: [],
       buttonState: {},
       pageSizeOptions: [10, 50, 100],
+      // Data cache with TTL (5 minutes default)
+      dataCache: {
+        proxies: { data: null, timestamp: 0, ttl: 300000 },
+        stats: { data: null, timestamp: 0, ttl: 60000 },
+        subscriptions: { data: null, timestamp: 0, ttl: 120000 },
+        publishedSubscriptions: { data: null, timestamp: 0, ttl: 120000 },
+        proxyPools: { data: null, timestamp: 0, ttl: 120000 },
+      },
       pagination: {
         subscriptions: { page: 1, perPage: 10 },
         publishedSubscriptions: { page: 1, perPage: 10 },
@@ -105,7 +114,7 @@ export const appOptions = {
       subscriptionUpdateProxyRef: "",
       proxyPools: [],
       proxyPoolForm: {
-        name: "", listen: "0.0.0.0", inbound_type: "http",
+        name: "", listen: "0.0.0.0", inbound_type: "http", rotation_mode: "round-robin",
         filters: {
           route_mode_filter: "direct", geo_countries: [], geo_country: "", geo_location: "",
           openai_filter: "", ip_purity_filter: "",
@@ -194,11 +203,111 @@ export const appOptions = {
       proxyConfigDialogVisible: false,
       selectedProxyKeys: [],
       darkMode: false,
+      // Port management wizard state
+      portWizardVisible: false,
+      portWizardMode: 'create', // 'create' or 'edit'
+      portWizardStep: 1,
+      portWizardForm: {
+        id: 0,
+        name: '',
+        listen_host: '127.0.0.1',
+        listen_port: 18899,
+        enabled: true,
+        sticky_ttl_sec: 3600,
+        session_missing_action: 'RANDOM',
+        session_header_names_text: 'X-ProxyPool-Session',
+        session_query_param_names_text: 'session',
+        connect_session_header_names_text: 'X-ProxyPool-Session',
+        hop_pool_ids: [],
+      },
+      // Global search state
+      globalSearchQuery: '',
+      globalSearchResults: [],
+      globalSearchVisible: false,
+      globalSearchLoading: false,
+      // Saved filter presets
+      savedFilterPresets: [],
+      activeFilterPreset: '',
+      // Alert monitoring
+      alertConfig: {
+        browserNotifications: false,
+        poolHealthEnabled: true,
+        poolHealthThreshold: 80,
+        proxyCountEnabled: true,
+        proxyCountThreshold: 10,
+        backendCrashEnabled: true,
+        subRefreshFailEnabled: true,
+        silenceMinutes: 15,
+      },
+      alertHistory: [],
+      alertSilenceMap: {},
+      alertCheckTimer: null,
+      lastBackendRunning: null,
+
+      // Batch import
+      importDialogVisible: false,
+      importInputMode: 'file',
+      importTextInput: '',
+      importPreviewData: [],
+      importPreviewFormat: '',
+      importPreviewStats: { total: 0, new: 0, duplicates: 0, invalid: 0 },
+      importIsDragOver: false,
+      importIsProcessing: false,
+
+      // Export
+      exportDialogVisible: false,
+      exportFormat: 'csv',
+      exportScope: 'all',
+      exportApplyFilters: false,
+      exportPreviewData: [],
+      exportPreviewStats: { total: 0 },
+      exportIsProcessing: false,
+
+      // Configuration wizards
+      wizardDialogVisible: false,
+      currentWizard: null,
+      wizardCurrentStep: 0,
+      wizardDraftExists: false,
+      wizardData: {
+        subUrls: '',
+        poolName: '',
+        poolListen: '0.0.0.0',
+        poolInboundType: 'http',
+        exitPool: null,
+        frontPool: null,
+        migrateSource: '',
+        migrateFile: null,
+      },
+
+      // Virtual scrolling for proxy list
+      virtualScrollContainer: null,
+      virtualScrollTop: 0,
+      virtualRowHeight: 48,
+      virtualVisibleCount: 20,
+      virtualOverScan: 5,
     };
   },
 
   computed: {
     allProxyCount() { return Array.isArray(this.allProxies) ? this.allProxies.length : 0; },
+
+    // Virtual scrolling computed properties
+    virtualScrollEnabled() {
+      return (this.allProxies || []).length > 500;
+    },
+    virtualScrollTotalHeight() {
+      return (this.allProxies || []).length * this.virtualRowHeight;
+    },
+    virtualScrollStartIndex() {
+      return Math.max(0, Math.floor(this.virtualScrollTop / this.virtualRowHeight) - this.virtualOverScan);
+    },
+    virtualScrollEndIndex() {
+      const total = (this.allProxies || []).length;
+      return Math.min(total, this.virtualScrollStartIndex + this.virtualVisibleCount + this.virtualOverScan * 2);
+    },
+    virtualScrollOffsetY() {
+      return this.virtualScrollStartIndex * this.virtualRowHeight;
+    },
     protocolFilterOptions() {
       const map = new Map();
       (this.allProxies || []).forEach(item => {
@@ -318,10 +427,10 @@ export const appOptions = {
     },
     statCards() {
       return [
-        { title: "Total", value: this.stats.total ?? 0, desc: "总节点" },
-        { title: "Available", value: this.stats.available ?? 0, desc: "可用节点" },
-        { title: "Rate", value: (this.stats.availability_rate ?? 0) + "%", desc: "可用率" },
-        { title: "Avg RTT", value: this.stats.avg_latency_ms ? this.stats.avg_latency_ms + " ms" : "-", desc: "平均延迟" },
+        { title: "总节点", value: this.stats.total ?? 0, desc: "已收录代理节点" },
+        { title: "可用节点", value: this.stats.available ?? 0, desc: "通过可用性测试" },
+        { title: "可用率", value: (this.stats.availability_rate ?? 0) + "%", desc: "可用节点占比" },
+        { title: "平均延迟", value: this.stats.avg_latency_ms ? this.stats.avg_latency_ms + " ms" : "-", desc: "可用节点平均值" },
       ];
     },
     proxyColumnsOrdered() {
@@ -367,6 +476,90 @@ export const appOptions = {
     },
     gatewayHopPools() { return Array.isArray(this.gatewayStatus?.hop_pools) ? this.gatewayStatus.hop_pools : []; },
     gatewayTransitions() { return Array.isArray(this.gatewayStatus?.transitions) ? this.gatewayStatus.transitions : []; },
+
+    // --- Port conflict detection ---
+    portConflicts() {
+      const form = this.portWizardForm;
+      const host = String(form.listen_host || '').trim() || '127.0.0.1';
+      const port = Number(form.listen_port || 0);
+      const excludeId = Number(form.id || 0);
+      if (!port) return [];
+      const conflicts = [];
+      (this.gatewayEndpoints || []).forEach(ep => {
+        if (Number(ep.id || 0) === excludeId) return;
+        if (String(ep.listen_host || '').trim() === host && Number(ep.listen_port || 0) === port) {
+          conflicts.push({ endpoint: ep, type: 'port' });
+        }
+      });
+      return conflicts;
+    },
+    portHasConflict() {
+      return this.portConflicts.length > 0;
+    },
+
+    // --- Dashboard summary stats ---
+    poolCount() { return (this.proxyPools || []).length; },
+    healthyPoolCount() { return (this.proxyPools || []).filter(p => p.status === 'running').length; },
+    healthyPoolRate() {
+      const total = this.poolCount;
+      return total > 0 ? Math.round((this.healthyPoolCount / total) * 100) : 0;
+    },
+    activeEndpointCount() {
+      return (this.gatewayEndpoints || []).filter(ep => ep.enabled).length;
+    },
+    recentTestFailures() {
+      return (this.taskItems || []).filter(t =>
+        (t.task_type === 'test' || t.task_type === 'speed_test') &&
+        String(t.status || '') === 'failed'
+      ).length;
+    },
+
+    // --- System health computed ---
+    systemHealthStatus() {
+      if (!this.backendStatus?.running) return 'stopped';
+      const poolCount = this.poolCount;
+      const endpointCount = this.activeEndpointCount;
+      const activeTasks = (this.taskItems || []).filter(t => ['queued', 'running'].includes(String(t.status || ''))).length;
+      if (poolCount === 0 && endpointCount === 0) return 'idle';
+      if (activeTasks > 0) return 'busy';
+      return 'healthy';
+    },
+    gatewayHealthStatus() {
+      if (!this.gatewayStatus?.endpoint_runtime?.running) return 'stopped';
+      const summary = this.gatewayStatus?.summary;
+      if (summary?.available) return 'healthy';
+      if (summary?.total_transitions > 0 && summary?.healthy_transitions === 0) return 'degraded';
+      return 'unknown';
+    },
+    activeProcessesCount() {
+      let count = 0;
+      if (this.backendStatus?.running) count++;
+      if (this.gatewayStatus?.endpoint_runtime?.running) count++;
+      if (this.gatewayHealthMonitor?.running) count++;
+      const activeTasks = (this.taskItems || []).filter(t => String(t.status || '') === 'running').length;
+      count += activeTasks;
+      return count;
+    },
+    systemVersion() {
+      return this.backendStatus?.version || '-';
+    },
+
+    // --- Global search ---
+    globalSearchGrouped() {
+      const results = this.globalSearchResults || [];
+      const groups = {
+        pools: { label: '代理池', icon: '🏊', items: [] },
+        proxies: { label: '代理节点', icon: '🔗', items: [] },
+        subscriptions: { label: '订阅', icon: '📡', items: [] },
+        ports: { label: '入站端口', icon: '🔌', items: [] },
+      };
+      results.forEach(r => {
+        if (groups[r.category]) {
+          groups[r.category].items.push(r);
+        }
+      });
+      return Object.values(groups).filter(g => g.items.length > 0);
+    },
   },
 
   methods: {
@@ -388,6 +581,13 @@ export const appOptions = {
     // --- Navigation ---
     selectPage(key) {
       this.activePage = key;
+      // 使用 pushState 添加到历史记录（支持前进/后退）
+      try {
+        const params = new URLSearchParams();
+        if (key && key !== 'dashboard') params.set('page', key);
+        const newUrl = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
+        window.history.pushState({ page: key }, '', newUrl);
+      } catch {}
       if (key === "proxy-pools") {
         this.loadProxyPools();
         this.loadGatewayEndpoints();
@@ -399,7 +599,391 @@ export const appOptions = {
         this.loadChainStatus();
         this.loadChainHealth();
       }
+      else if (key === "ports") {
+        this.loadGatewayEndpoints();
+        this.loadBackendStatus();
+      }
+      else if (key === "dashboard") {
+        this.loadSystemHealth();
+      }
       else if (key === "published-subscriptions") { this.loadPublishedSubscriptions(); }
+    },
+
+    // --- Cache helpers ---
+    getCachedData(cacheKey) {
+      const cache = this.dataCache[cacheKey];
+      if (!cache || !cache.data) return null;
+      const now = Date.now();
+      if (now - cache.timestamp > cache.ttl) {
+        this.dataCache[cacheKey] = { data: null, timestamp: 0, ttl: cache.ttl };
+        return null;
+      }
+      return cache.data;
+    },
+
+    setCachedData(cacheKey, data, ttl) {
+      this.dataCache[cacheKey] = {
+        data,
+        timestamp: Date.now(),
+        ttl: ttl || this.dataCache[cacheKey]?.ttl || 300000,
+      };
+    },
+
+    invalidateCache(cacheKey) {
+      if (cacheKey) {
+        const cache = this.dataCache[cacheKey];
+        if (cache) cache.data = null;
+      } else {
+        Object.keys(this.dataCache).forEach(key => {
+          this.dataCache[key].data = null;
+        });
+      }
+    },
+
+    // --- System health ---
+    async loadSystemHealth() {
+      try {
+        await Promise.all([
+          this.loadBackendStatus(),
+          this.loadGatewayEndpoints(),
+          this.loadGatewayStatus(),
+        ]);
+      } catch (err) {
+        this.setMessage('加载系统状态失败: ' + err, true);
+      }
+    },
+
+    // --- Alert Monitoring ---
+    loadAlertConfig() {
+      try {
+        const raw = localStorage.getItem('proxypool-alert-config');
+        if (raw) this.alertConfig = { ...this.alertConfig, ...JSON.parse(raw) };
+      } catch {}
+    },
+    saveAlertConfig() {
+      try {
+        localStorage.setItem('proxypool-alert-config', JSON.stringify(this.alertConfig));
+        if (this.alertConfig.browserNotifications && 'Notification' in window && Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+      } catch {}
+    },
+    loadAlertHistory() {
+      try {
+        const raw = localStorage.getItem('proxypool-alert-history');
+        if (raw) this.alertHistory = JSON.parse(raw) || [];
+      } catch {}
+    },
+    persistAlertHistory() {
+      try {
+        const trimmed = this.alertHistory.slice(0, 100);
+        this.alertHistory = trimmed;
+        localStorage.setItem('proxypool-alert-history', JSON.stringify(trimmed));
+      } catch {}
+    },
+    clearAlertHistory() {
+      this.alertHistory = [];
+      try { localStorage.removeItem('proxypool-alert-history'); } catch {}
+    },
+    isAlertSilenced(type) {
+      const last = this.alertSilenceMap[type];
+      if (!last) return false;
+      const silenceMs = (this.alertConfig.silenceMinutes || 0) * 60000;
+      if (silenceMs <= 0) return false;
+      return (Date.now() - last) < silenceMs;
+    },
+    fireAlert(type, level, message) {
+      if (this.isAlertSilenced(type)) return;
+      this.alertSilenceMap[type] = Date.now();
+      const entry = { type, level, message, timestamp: new Date().toISOString() };
+      this.alertHistory = [entry, ...this.alertHistory];
+      this.persistAlertHistory();
+
+      // Browser notification
+      if (this.alertConfig.browserNotifications && 'Notification' in window) {
+        if (Notification.permission === 'granted') {
+          new Notification('ProxyPool 告警', { body: message, icon: '/favicon.ico' });
+        } else if (Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+      }
+
+      // In-app notification
+      this.setMessage(message, level === 'warning');
+    },
+    checkAlerts() {
+      this.loadAlertConfig();
+
+      // 1. Pool health check
+      if (this.alertConfig.poolHealthEnabled && this.poolCount > 0) {
+        const rate = this.healthyPoolRate;
+        if (rate < this.alertConfig.poolHealthThreshold) {
+          this.fireAlert('pool_health', 'warning', `代理池健康率降至 ${rate}%，低于阈值 ${this.alertConfig.poolHealthThreshold}%`);
+        }
+      }
+
+      // 2. Proxy count check
+      if (this.alertConfig.proxyCountEnabled) {
+        const available = this.stats?.available ?? 0;
+        if (available < this.alertConfig.proxyCountThreshold) {
+          this.fireAlert('proxy_count', 'warning', `可用代理数降至 ${available} 个，低于阈值 ${this.alertConfig.proxyCountThreshold} 个`);
+        }
+      }
+
+      // 3. Backend crash detection
+      if (this.alertConfig.backendCrashEnabled && this.lastBackendRunning !== null) {
+        const currentRunning = !!this.backendStatus?.running;
+        if (this.lastBackendRunning && !currentRunning) {
+          this.fireAlert('backend_crash', 'warning', '后端进程已停止运行');
+        }
+      }
+      this.lastBackendRunning = !!this.backendStatus?.running;
+    },
+    startAlertChecker() {
+      if (this.alertCheckTimer) return;
+      this.loadAlertConfig();
+      this.loadAlertHistory();
+      this.alertCheckTimer = setInterval(() => {
+        try { this.checkAlerts(); } catch {}
+      }, 30000);
+    },
+    stopAlertChecker() {
+      if (this.alertCheckTimer) {
+        clearInterval(this.alertCheckTimer);
+        this.alertCheckTimer = null;
+      }
+    },
+    initAlertMonitoring() {
+      this.startAlertChecker();
+    },
+
+    // --- Quick actions ---
+    triggerImportNodes() {
+      this.openImportFiles();
+    },
+
+    // --- Global search ---
+    async performGlobalSearch(query) {
+      this.globalSearchQuery = query;
+      if (!query || query.length < 2) {
+        this.globalSearchResults = [];
+        return;
+      }
+      this.globalSearchLoading = true;
+      const q = String(query).toLowerCase();
+      const results = [];
+      // Search pools
+      (this.proxyPools || []).forEach(pool => {
+        const name = String(pool.name || '').toLowerCase();
+        const id = String(pool.id || '');
+        if (name.includes(q) || id.includes(q)) {
+          results.push({
+            category: 'pools',
+            id: pool.id,
+            title: pool.name,
+            subtitle: `#${pool.id} - ${pool.status || '未知'}`,
+            action: () => this.selectPage('proxy-pools'),
+          });
+        }
+      });
+      // Search proxies
+      (this.allProxies || []).slice(0, 100).forEach(proxy => {
+        const key = String(proxy.normalized_key || '').toLowerCase();
+        const host = String(proxy.host || '').toLowerCase();
+        const protocol = String(proxy.protocol || '').toLowerCase();
+        if (key.includes(q) || host.includes(q) || protocol.includes(q)) {
+          results.push({
+            category: 'proxies',
+            id: proxy.normalized_key,
+            title: `${proxy.protocol} ${proxy.host}:${proxy.port}`,
+            subtitle: `#${proxy.serial || '-'} - ${proxy.available ? '可用' : '不可用'}`,
+            action: () => this.selectPage('proxies'),
+          });
+        }
+      });
+      // Search subscriptions
+      (this.subscriptions || []).forEach(sub => {
+        const name = String(sub.name || '').toLowerCase();
+        const url = String(sub.url || '').toLowerCase();
+        if (name.includes(q) || url.includes(q)) {
+          results.push({
+            category: 'subscriptions',
+            id: sub.id,
+            title: sub.name || '未命名订阅',
+            subtitle: sub.url ? `${sub.url.substring(0, 50)}...` : '',
+            action: () => this.selectPage('subscriptions'),
+          });
+        }
+      });
+      // Search ports
+      (this.gatewayEndpoints || []).forEach(ep => {
+        const name = String(ep.name || '').toLowerCase();
+        const addr = `${ep.listen_host}:${ep.listen_port}`;
+        if (name.includes(q) || addr.includes(q)) {
+          results.push({
+            category: 'ports',
+            id: ep.id,
+            title: ep.name || `端口 ${ep.listen_port}`,
+            subtitle: `${ep.listen_host}:${ep.listen_port} - ${ep.enabled ? '已启用' : '已禁用'}`,
+            action: () => this.selectPage('ports'),
+          });
+        }
+      });
+      this.globalSearchResults = results.slice(0, 20);
+      this.globalSearchLoading = false;
+    },
+    openGlobalSearch() {
+      this.globalSearchVisible = true;
+      this.globalSearchQuery = '';
+      this.globalSearchResults = [];
+    },
+    closeGlobalSearch() {
+      this.globalSearchVisible = false;
+      this.globalSearchQuery = '';
+      this.globalSearchResults = [];
+    },
+    navigateToSearchResult(result) {
+      if (result && typeof result.action === 'function') {
+        result.action();
+      }
+      this.closeGlobalSearch();
+    },
+
+    // --- URL-based filtering ---
+    applyUrlFilters() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const page = params.get('page');
+        if (page) this.selectPage(page);
+        const protocol = params.get('protocol');
+        if (protocol) this.proxyFilters.protocol = protocol;
+        const available = params.get('available');
+        if (available) this.proxyFilters.available = available;
+        const country = params.get('country');
+        if (country) this.proxyFilters.geo_country = country;
+        const scoreMin = params.get('score_min');
+        if (scoreMin) this.proxyFilters.score_min = scoreMin;
+        const latencyMax = params.get('latency_max');
+        if (latencyMax) this.proxyFilters.latency_max = latencyMax;
+      } catch {}
+    },
+    updateUrlWithFilters() {
+      try {
+        const params = new URLSearchParams();
+        if (this.activePage && this.activePage !== 'dashboard') params.set('page', this.activePage);
+        if (this.proxyFilters.protocol) params.set('protocol', this.proxyFilters.protocol);
+        if (this.proxyFilters.available) params.set('available', this.proxyFilters.available);
+        if (this.proxyFilters.geo_country) params.set('country', this.proxyFilters.geo_country);
+        if (this.proxyFilters.score_min) params.set('score_min', this.proxyFilters.score_min);
+        if (this.proxyFilters.latency_max) params.set('latency_max', this.proxyFilters.latency_max);
+        const newUrl = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
+        window.history.replaceState({}, '', newUrl);
+      } catch {}
+    },
+
+    // 处理浏览器前进/后退按钮
+    handlePopState(event) {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const page = params.get('page') || 'dashboard';
+
+        // 更新页面
+        if (page !== this.activePage) {
+          this.activePage = page;
+        }
+
+        // 更新筛选条件
+        this.proxyFilters.protocol = params.get('protocol') || '';
+        this.proxyFilters.available = params.get('available') || '';
+        this.proxyFilters.geo_country = params.get('country') || '';
+        this.proxyFilters.score_min = params.get('score_min') || '';
+        this.proxyFilters.latency_max = params.get('latency_max') || '';
+
+        // 重新加载数据
+        this.loadData();
+      } catch {}
+    },
+
+    // --- Saved filter presets ---
+    loadFilterPresets() {
+      try {
+        const raw = localStorage.getItem('proxypool.filter-presets.v1');
+        if (raw) {
+          this.savedFilterPresets = JSON.parse(raw) || [];
+          return;
+        }
+      } catch {}
+      // Seed default presets
+      this.savedFilterPresets = [
+        { name: '高分节点', filters: { ...DEFAULT_PROXY_FILTERS, score_min: '80' }, timestamp: 0 },
+        { name: '低延迟', filters: { ...DEFAULT_PROXY_FILTERS, latency_max: '200' }, timestamp: 0 },
+        { name: '仅可用', filters: { ...DEFAULT_PROXY_FILTERS, available: 'true' }, timestamp: 0 },
+      ];
+    },
+    saveFilterPreset(name) {
+      if (!name) return;
+      const preset = {
+        name,
+        filters: { ...this.proxyFilters },
+        timestamp: Date.now(),
+      };
+      this.savedFilterPresets = [...this.savedFilterPresets.filter(p => p.name !== name), preset];
+      try {
+        localStorage.setItem('proxypool.filter-presets.v1', JSON.stringify(this.savedFilterPresets));
+      } catch {}
+      this.setMessage(`筛选条件已保存: ${name}`);
+    },
+    loadFilterPreset(name) {
+      const preset = this.savedFilterPresets.find(p => p.name === name);
+      if (preset) {
+        this.proxyFilters = { ...DEFAULT_PROXY_FILTERS, ...preset.filters };
+        this.activeFilterPreset = name;
+        this.setMessage(`已加载筛选条件: ${name}`);
+      }
+    },
+    deleteFilterPreset(name) {
+      this.savedFilterPresets = this.savedFilterPresets.filter(p => p.name !== name);
+      try {
+        localStorage.setItem('proxypool.filter-presets.v1', JSON.stringify(this.savedFilterPresets));
+      } catch {}
+      if (this.activeFilterPreset === name) this.activeFilterPreset = '';
+      this.setMessage(`筛选条件已删除: ${name}`);
+    },
+
+    // --- User Preferences ---
+    applyUserPreferences() {
+      try {
+        const raw = localStorage.getItem('proxypool-preferences');
+        if (!raw) return;
+        const prefs = JSON.parse(raw);
+        // Apply default page if no URL-based filter overrides it
+        if (prefs.defaultPage && !window.location.search.includes('page=')) {
+          this.selectPage(prefs.defaultPage);
+        }
+        // Apply table density
+        if (prefs.tableDensity) {
+          document.documentElement.style.setProperty('--table-density', prefs.tableDensity);
+        }
+        // Apply theme
+        if (prefs.theme) {
+          const html = document.documentElement;
+          if (prefs.theme === 'auto') {
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            html.classList.toggle('dark', prefersDark);
+            html.classList.toggle('light', !prefersDark);
+          } else if (prefs.theme === 'dark') {
+            html.classList.add('dark');
+            html.classList.remove('light');
+          } else {
+            html.classList.add('light');
+            html.classList.remove('dark');
+          }
+        }
+        // Apply auto-refresh interval (wire to dashboard's localStorage key)
+        if (prefs.autoRefreshInterval !== undefined) {
+          try { localStorage.setItem('pp-dashboard-refresh', String(prefs.autoRefreshInterval / 1000)); } catch {}
+        }
+      } catch {}
     },
 
     // --- Form Validation ---
@@ -489,25 +1073,39 @@ export const appOptions = {
       const errorMsg = String(error?.message || error || '').toLowerCase();
       const httpStatus = error?.status || 0;
 
+      // 超时错误（特殊处理）
+      if (error?.isTimeout || errorMsg.includes('timeout') || errorMsg.includes('请求超时')) {
+        const timeoutMatch = errorMsg.match(/(\d+)秒/);
+        const seconds = timeoutMatch ? timeoutMatch[1] : '30';
+        return `请求超时 (${seconds}秒)，请检查网络或稍后重试`;
+      }
+
       // 网络错误
       if (errorMsg.includes('network') || errorMsg.includes('fetch')) {
         return '网络连接失败，请检查网络后重试';
       }
-      if (errorMsg.includes('timeout')) {
-        return '请求超时，请检查网络或稍后重试';
-      }
       if (errorMsg.includes('econnrefused') || errorMsg.includes('connection refused')) {
         return '服务未启动或无法连接，请检查后端服务状态';
       }
+      if (errorMsg.includes(' aborted') || errorMsg.includes('aborted')) {
+        return '请求被中断，请重试';
+      }
 
       // HTTP 状态码错误
-      if (httpStatus === 401 || httpStatus === 403) {
+      if (httpStatus === 401) {
+        return '会话已过期，请刷新页面重新登录';
+      }
+      if (httpStatus === 403) {
         return '权限不足，请检查访问权限';
       }
       if (httpStatus === 404) {
         return context ? `${context}不存在或已被删除` : '请求的资源不存在';
       }
       if (httpStatus === 409) {
+        // 并发编辑冲突
+        if (errorMsg.includes('conflict') || errorMsg.includes('冲突') || errorMsg.includes('已被修改')) {
+          return context ? `${context}已被其他人修改，请刷新后重试` : '数据已被其他人修改，请刷新后重试';
+        }
         return context ? `${context}已存在，请勿重复创建` : '资源冲突，请检查输入';
       }
       if (httpStatus === 422) {
@@ -530,7 +1128,8 @@ export const appOptions = {
         'failed': '操作失败，请重试',
         'denied': '被拒绝，权限不足',
         'limit exceeded': '已达上限，无法继续',
-        'timeout': '操作超时，请重试',
+        'concurrent': '正在被其他会话编辑，请稍后重试',
+        'modified': '已被其他人修改，请刷新后重试',
       };
 
       for (const [keyword, message] of Object.entries(errorMappings)) {
@@ -763,6 +1362,7 @@ export const appOptions = {
     clearProxyFilters() {
       this.proxyFilters = { ...DEFAULT_PROXY_FILTERS };
       this.persistFilterState();
+      this.updateUrlWithFilters();
       this.setMessage("筛选条件已清空");
     },
     loadFilterState() {
@@ -886,6 +1486,342 @@ export const appOptions = {
       }
     },
 
+    // --- Batch Import Dialog ---
+    openImportDialog() {
+      this.importDialogVisible = true;
+      this.importTextInput = '';
+      this.importPreviewData = [];
+      this.importPreviewFormat = '';
+      this.importPreviewStats = { total: 0, new: 0, duplicates: 0, invalid: 0 };
+      this.importIsDragOver = false;
+    },
+
+    onImportDragOver(event) {
+      event.preventDefault();
+      this.importIsDragOver = true;
+    },
+
+    onImportDragLeave() {
+      this.importIsDragOver = false;
+    },
+
+    async onImportDrop(event) {
+      event.preventDefault();
+      this.importIsDragOver = false;
+      const files = Array.from(event.dataTransfer?.files || []);
+      if (files.length) {
+        await this.processImportFiles(files);
+      }
+    },
+
+    async onImportFileSelect(event) {
+      const files = Array.from(event.target?.files || []);
+      if (files.length) {
+        await this.processImportFiles(files);
+        event.target.value = '';
+      }
+    },
+
+    async processImportFiles(files) {
+      this.importIsProcessing = true;
+      try {
+        const allTexts = [];
+        for (const file of files) {
+          const content = await file.text();
+          allTexts.push({ filename: file.name || 'upload.txt', content });
+        }
+        this.importTextInput = allTexts.map(f => f.content).join('\n');
+        await this.previewImportText(this.importTextInput);
+      } catch (err) {
+        this.setMessage('读取文件失败: ' + err, true);
+      } finally {
+        this.importIsProcessing = false;
+      }
+    },
+
+    async onImportPasteFromClipboard() {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text && text.trim()) {
+          this.importTextInput = text.trim();
+          await this.previewImportText(this.importTextInput);
+        } else {
+          this.setMessage('剪贴板为空', true);
+        }
+      } catch (err) {
+        this.setMessage('无法读取剪贴板: ' + err, true);
+      }
+    },
+
+    async previewImportText(text) {
+      if (!text || !text.trim()) {
+        this.importPreviewData = [];
+        this.importPreviewFormat = '';
+        this.importPreviewStats = { total: 0, new: 0, duplicates: 0, invalid: 0 };
+        return;
+      }
+
+      const format = this.detectImportFormat(text);
+      this.importPreviewFormat = format;
+
+      const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+      const preview = [];
+      const stats = { total: lines.length, new: 0, duplicates: 0, invalid: 0 };
+
+      let decodedText = text;
+      if (format === 'base64') {
+        try {
+          const decoded = atob(text.replace(/\s/g, ''));
+          decodedText = decodeURIComponent(escape(decoded));
+        } catch {
+          this.importPreviewStats = stats;
+          this.importPreviewData = [{ line: '(Base64 解码失败)', valid: false }];
+          return;
+        }
+      }
+
+      const decodedLines = decodedText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+      stats.total = decodedLines.length;
+
+      for (const line of decodedLines.slice(0, 100)) {
+        const proxyMatch = line.match(/^(\w+):\/\/(.+):(\d+)$/i);
+        if (proxyMatch) {
+          const [, protocol, host, port] = proxyMatch;
+          preview.push({
+            line: `${protocol}://${host}:${port}`,
+            protocol: protocol.toLowerCase(),
+            host,
+            port: parseInt(port),
+            valid: true,
+          });
+          stats.new++;
+        } else {
+          preview.push({ line: line.substring(0, 80), valid: false });
+          stats.invalid++;
+        }
+      }
+
+      if (decodedLines.length > 100) {
+        preview.push({ line: `... 还有 ${decodedLines.length - 100} 条`, valid: false, isMore: true });
+      }
+
+      this.importPreviewData = preview;
+      this.importPreviewStats = stats;
+    },
+
+    detectImportFormat(text) {
+      const trimmed = text.trim();
+      if (/^[A-Za-z0-9+/=\s]+$/.test(trimmed) && trimmed.length > 50) {
+        return 'base64';
+      }
+      if (/^https?:\/\//.test(trimmed)) {
+        return 'url';
+      }
+      return 'text';
+    },
+
+    async executeImport() {
+      if (!this.importTextInput.trim()) {
+        this.setMessage('请先输入或粘贴代理文本', true);
+        return;
+      }
+
+      this.importIsProcessing = true;
+      try {
+        const format = this.detectImportFormat(this.importTextInput);
+        let content = this.importTextInput;
+
+        if (format === 'base64') {
+          try {
+            const decoded = atob(content.replace(/\s/g, ''));
+            content = decodeURIComponent(escape(decoded));
+          } catch {
+            throw new Error('Base64 解码失败');
+          }
+        }
+
+        if (format === 'url') {
+          const resp = await fetch('/api/collector/import-urls', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ urls: [content] }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.detail || '订阅导入失败');
+
+          const total = data.total_parsed || 0;
+          const inserted = data.total_inserted || 0;
+          const invalid = data.total_invalid || 0;
+          let summary = `共解析 ${total} 个代理`;
+          if (inserted > 0) summary += `，新增 ${inserted} 个`;
+          if (invalid > 0) summary += `，无效 ${invalid} 个`;
+          summary += '。';
+          this.setMessage(summary);
+        } else {
+          const resp = await fetch('/api/collector/import-texts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items: [{ filename: 'paste.txt', content }] }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.detail || '导入失败');
+
+          const total = data.total_parsed || 0;
+          const inserted = data.total_inserted || 0;
+          const updated = data.total_updated || 0;
+          const invalid = data.total_invalid || 0;
+          const deduped = data.total_deduped || 0;
+
+          let summary = `共解析 ${total} 个代理`;
+          if (inserted > 0) summary += `，新增 ${inserted} 个`;
+          if (updated > 0) summary += `，更新 ${updated} 个`;
+          if (deduped > 0) summary += `，去重 ${deduped} 个`;
+          if (invalid > 0) summary += `，无效 ${invalid} 个`;
+          summary += '。';
+          this.setMessage(summary);
+        }
+
+        await this.loadData();
+        await this.loadProxyCatalog();
+        this.importDialogVisible = false;
+      } catch (err) {
+        const friendlyMsg = this.getFriendlyErrorMessage(err, '代理导入');
+        this.setMessage(friendlyMsg, true);
+      } finally {
+        this.importIsProcessing = false;
+      }
+    },
+
+    // --- Export Dialog ---
+    openExportDialog(scope = 'all') {
+      this.exportDialogVisible = true;
+      this.exportScope = scope;
+      this.exportApplyFilters = false;
+      this.exportFormat = 'csv';
+      this.refreshExportPreview();
+    },
+
+    refreshExportPreview() {
+      let proxies = [];
+      if (this.exportScope === 'selected' && this.selectedProxyKeys?.length) {
+        const allProxies = this.proxies || [];
+        proxies = this.selectedProxyKeys
+          .map(key => allProxies.find(p => p.normalized_key === key))
+          .filter(Boolean);
+      } else if (this.exportApplyFilters) {
+        proxies = this.proxies || [];
+      } else {
+        proxies = this.allProxies || [];
+      }
+
+      this.exportPreviewData = proxies.slice(0, 10);
+      this.exportPreviewStats = { total: proxies.length };
+    },
+
+    async executeExport() {
+      this.exportIsProcessing = true;
+      try {
+        let proxies = [];
+        if (this.exportScope === 'selected' && this.selectedProxyKeys?.length) {
+          const allProxies = this.proxies || [];
+          proxies = this.selectedProxyKeys
+            .map(key => allProxies.find(p => p.normalized_key === key))
+            .filter(Boolean);
+        } else if (this.exportApplyFilters) {
+          proxies = this.proxies || [];
+        } else {
+          proxies = this.allProxies || [];
+        }
+
+        if (!proxies.length) {
+          this.setMessage('没有可导出的代理', true);
+          return;
+        }
+
+        let content = '';
+        let filename = '';
+        let mimeType = '';
+
+        if (this.exportFormat === 'csv') {
+          content = this.generateCSV(proxies);
+          filename = `proxies_export_${Date.now()}.csv`;
+          mimeType = 'text/csv;charset=utf-8';
+        } else if (this.exportFormat === 'json') {
+          content = this.generateJSON(proxies);
+          filename = `proxies_export_${Date.now()}.json`;
+          mimeType = 'application/json;charset=utf-8';
+        } else if (this.exportFormat === 'links') {
+          content = this.generateProxyLinks(proxies);
+          filename = `proxies_export_${Date.now()}.txt`;
+          mimeType = 'text/plain;charset=utf-8';
+        }
+
+        this.downloadFile(content, filename, mimeType);
+        this.setMessage(`已导出 ${proxies.length} 个代理到 ${filename}`);
+        this.exportDialogVisible = false;
+      } catch (err) {
+        this.setMessage('导出失败: ' + err, true);
+      } finally {
+        this.exportIsProcessing = false;
+      }
+    },
+
+    generateCSV(proxies) {
+      const headers = ['Protocol', 'Host', 'Port', 'Available', 'Latency (ms)', 'Speed (Mbps)', 'Success Rate', 'Country', 'City', 'IP Purity', 'ChatGPT', 'Source', 'Last Checked'];
+      const rows = proxies.map(p => [
+        p.protocol,
+        p.host,
+        p.port,
+        p.available ? 'Yes' : 'No',
+        p.latency_ms || '',
+        p.speed_mbps || '',
+        p.success_rate != null ? p.success_rate.toFixed(1) : '',
+        p.country || '',
+        p.city || '',
+        p.ip_purity_level || '',
+        p.openai_unlocked === true ? 'Unlocked' : p.openai_unlocked === false ? 'Blocked' : 'Unknown',
+        p.source || '',
+        p.last_checked_at || '',
+      ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+
+      return [headers.join(','), ...rows].join('\n');
+    },
+
+    generateJSON(proxies) {
+      const data = proxies.map(p => ({
+        protocol: p.protocol,
+        host: p.host,
+        port: p.port,
+        available: p.available,
+        latency_ms: p.latency_ms,
+        speed_mbps: p.speed_mbps,
+        success_rate: p.success_rate,
+        country: p.country,
+        city: p.city,
+        ip_purity_level: p.ip_purity_level,
+        openai_unlocked: p.openai_unlocked,
+        source: p.source,
+        last_checked_at: p.last_checked_at,
+      }));
+      return JSON.stringify(data, null, 2);
+    },
+
+    generateProxyLinks(proxies) {
+      return proxies.map(p => `${p.protocol}://${p.host}:${p.port}`).join('\n');
+    },
+
+    downloadFile(content, filename, mimeType) {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    },
+
     // --- Data Loading ---
     normalizeFilterValue(value) {
       if (value === null || value === undefined) return "";
@@ -893,6 +1829,17 @@ export const appOptions = {
     },
     async loadData() {
       try {
+        // Check cache first (use filter hash as cache key)
+        const filterHash = JSON.stringify(this.proxyFilters);
+        const cacheKey = `proxies_${filterHash}`;
+        const cached = this.getCachedData(cacheKey);
+        if (cached) {
+          this.proxies = cached.proxies;
+          this.stats = cached.stats;
+          this.resetPage("proxies");
+          return;
+        }
+
         const statsResp = await fetch("/api/stats");
         this.stats = await statsResp.json();
         const params = new URLSearchParams({ limit: "5000" });
@@ -925,8 +1872,13 @@ export const appOptions = {
         const proxyResp = await fetch("/api/proxies?" + params.toString());
         const proxyData = await proxyResp.json();
         this.proxies = proxyData.items || [];
+
+        // Cache the result
+        this.setCachedData(cacheKey, { proxies: this.proxies, stats: this.stats }, 300000);
+
         this.resetPage("proxies");
         this.persistFilterState();
+        try { this.checkAlerts(); } catch {}
       } catch (err) {
         const friendlyMsg = this.getFriendlyErrorMessage(err, '代理数据');
         this.setMessage(friendlyMsg, true);
@@ -955,8 +1907,20 @@ export const appOptions = {
     // --- Subscriptions ---
     async loadSubscriptions() {
       try {
+        // Check cache first
+        const cached = this.getCachedData('subscriptions');
+        if (cached) {
+          this.subscriptions = cached;
+          this.resetPage("subscriptions");
+          return;
+        }
+
         const data = await subscriptionApi.getList({ limit: 1000 });
         this.subscriptions = data.items || [];
+
+        // Cache the result
+        this.setCachedData('subscriptions', this.subscriptions, 120000);
+
         this.resetPage("subscriptions");
       } catch (err) {
         const friendlyMsg = this.getFriendlyErrorMessage(err, '订阅');
@@ -975,6 +1939,7 @@ export const appOptions = {
         this.subscriptionForm.name = "";
         this.subscriptionForm.url = "";
         this.setMessage("订阅已保存，可在订阅管理页面刷新获取节点");
+        this.invalidateCache('subscriptions');
         await this.loadSubscriptions();
       } catch (err) {
         const errorMsg = err.message.includes("already exists")
@@ -1018,6 +1983,7 @@ export const appOptions = {
     async onRefreshSubscription(subscriptionId) {
       await this.runWithButtonState(`refreshSub-${subscriptionId}`, async () => {
         try {
+          this.loadAlertConfig();
           const resp = await fetch(`/api/subscriptions/${subscriptionId}/refresh`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1030,7 +1996,14 @@ export const appOptions = {
           await this.loadSubscriptions();
           await this.loadData();
           await this.loadProxyCatalog();
-        } catch (err) { this.setMessage("刷新订阅失败: " + err, true); }
+        } catch (err) {
+          if (this.alertConfig.subRefreshFailEnabled) {
+            const sub = (this.subscriptions || []).find(s => Number(s.id) === Number(subscriptionId));
+            this.fireAlert('sub_refresh_fail', 'warning', `订阅刷新失败: ${sub?.name || subscriptionId} - ${err}`);
+          } else {
+            this.setMessage("刷新订阅失败: " + err, true);
+          }
+        }
       });
     },
     async refreshAllSubscriptions() {
@@ -1130,10 +2103,22 @@ export const appOptions = {
     },
     async loadPublishedSubscriptions() {
       try {
+        // Check cache first
+        const cached = this.getCachedData('publishedSubscriptions');
+        if (cached) {
+          this.publishedSubscriptions = cached;
+          this.resetPage("publishedSubscriptions");
+          return;
+        }
+
         const resp = await fetch("/api/published-subscriptions?limit=1000");
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || "加载发布订阅失败");
         this.publishedSubscriptions = data.items || [];
+
+        // Cache the result
+        this.setCachedData('publishedSubscriptions', this.publishedSubscriptions, 120000);
+
         this.resetPage("publishedSubscriptions");
       } catch (err) { this.setMessage("加载发布订阅失败: " + err, true); }
     },
@@ -1273,8 +2258,29 @@ export const appOptions = {
     // --- Proxy Pools ---
     async loadProxyPools() {
       try {
+        // Check cache first
+        const cached = this.getCachedData('proxyPools');
+        if (cached) {
+          this.proxyPools = cached;
+          if (!this.selectedPoolIdForChain && this.proxyPools.length) {
+            this.selectPoolForChain(this.proxyPools[0]);
+          } else if (this.selectedPoolIdForChain) {
+            const selected = this.proxyPools.find(item => Number(item.id) === Number(this.selectedPoolIdForChain));
+            if (selected) this.selectPoolForChain(selected);
+            else this.selectPoolForChain(null);
+          } else {
+            this.resetSelectedPoolForChainState();
+          }
+          this.resetPage("proxyPools");
+          return;
+        }
+
         const data = await poolApi.getList({ limit: 1000 });
         this.proxyPools = data.items || [];
+
+        // Cache the result
+        this.setCachedData('proxyPools', this.proxyPools, 120000);
+
         if (!this.selectedPoolIdForChain && this.proxyPools.length) {
           this.selectPoolForChain(this.proxyPools[0]);
         } else if (this.selectedPoolIdForChain) {
@@ -1340,6 +2346,7 @@ export const appOptions = {
       this.proxyPoolForm.name = String(item?.name || "");
       this.proxyPoolForm.listen = String(item?.listen || "0.0.0.0");
       this.proxyPoolForm.inbound_type = String(item?.inbound_type || "http");
+      this.proxyPoolForm.rotation_mode = String(item?.rotation_mode || "round-robin");
       const itemFilters = { ...(item?.filters || {}) };
       const routeMode = this.routeModeFilterFromLegacyFilters(itemFilters);
       const geoCountries = Array.isArray(itemFilters.geo_countries)
@@ -1555,6 +2562,58 @@ export const appOptions = {
         target_domain: "",
       };
       this.poolRouteTestResult = null;
+    },
+
+    // --- Port Management Wizard ---
+    openPortWizard(mode = 'create', item = null) {
+      this.portWizardMode = mode;
+      this.portWizardStep = 1;
+      if (mode === 'edit' && item) {
+        this.editGatewayEndpoint(item);
+        this.portWizardForm = { ...this.gatewayEndpointForm };
+      } else {
+        this.resetGatewayEndpointForm();
+        this.portWizardForm = {
+          id: 0,
+          name: '',
+          listen_host: '127.0.0.1',
+          listen_port: 18899,
+          enabled: true,
+          sticky_ttl_sec: 3600,
+          session_missing_action: 'RANDOM',
+          session_header_names_text: 'X-ProxyPool-Session',
+          session_query_param_names_text: 'session',
+          connect_session_header_names_text: 'X-ProxyPool-Session',
+          hop_pool_ids: [],
+        };
+      }
+      this.portWizardVisible = true;
+    },
+    closePortWizard() {
+      this.portWizardVisible = false;
+      this.portWizardStep = 1;
+    },
+    nextPortWizardStep() {
+      if (this.portWizardStep === 1) {
+        const name = String(this.portWizardForm.name || '').trim();
+        if (!name) { this.setMessage('请输入端点名称', true); return; }
+        const port = Number(this.portWizardForm.listen_port || 0);
+        if (port < 1 || port > 65535) { this.setMessage('监听端口必须在 1-65535 范围内', true); return; }
+      }
+      if (this.portWizardStep === 2) {
+        if (!this.portWizardForm.hop_pool_ids || !this.portWizardForm.hop_pool_ids.length) {
+          this.setMessage('请至少选择一个代理池跳点', true); return;
+        }
+      }
+      if (this.portWizardStep < 3) this.portWizardStep++;
+    },
+    prevPortWizardStep() {
+      if (this.portWizardStep > 1) this.portWizardStep--;
+    },
+    async submitPortWizard() {
+      this.gatewayEndpointForm = { ...this.portWizardForm };
+      await this.saveGatewayEndpoint();
+      this.closePortWizard();
     },
     selectPoolForChain(item) {
       if (!item) {
@@ -1944,6 +3003,7 @@ export const appOptions = {
         this.routeLatencyMap = {};
         if (data.running && (data.routes_count || 0) > 0) await this.checkRouteLatency();
         await this.loadBackendEvents();
+        try { this.checkAlerts(); } catch {}
       } catch (err) { this.setMessage("加载后端状态失败: " + err, true); }
     },
     async loadBackendEvents() {
@@ -2904,6 +3964,69 @@ export const appOptions = {
       } catch (err) { this.setMessage("复制失败: " + err, true); }
     },
 
+    // --- Virtual Scrolling ---
+    initVirtualScroll(container) {
+      if (!container) return;
+      this.virtualScrollContainer = container;
+      container.addEventListener('scroll', this.handleVirtualScroll, { passive: true });
+      this.updateVirtualVisibleCount();
+    },
+    destroyVirtualScroll() {
+      if (this.virtualScrollContainer) {
+        this.virtualScrollContainer.removeEventListener('scroll', this.handleVirtualScroll);
+        this.virtualScrollContainer = null;
+      }
+    },
+    handleVirtualScroll(event) {
+      this.virtualScrollTop = event.target.scrollTop;
+    },
+    updateVirtualVisibleCount() {
+      if (!this.virtualScrollContainer) return;
+      const containerHeight = this.virtualScrollContainer.clientHeight;
+      this.virtualVisibleCount = Math.ceil(containerHeight / this.virtualRowHeight) + 10;
+    },
+    getVirtualScrollItems() {
+      if (!this.virtualScrollEnabled) return this.paginatedProxies;
+      return (this.allProxies || []).slice(this.virtualScrollStartIndex, this.virtualScrollEndIndex);
+    },
+
+    // --- Image Lazy Loading ---
+    setupLazyLoading() {
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              const img = entry.target;
+              if (img.dataset.src) {
+                img.src = img.dataset.src;
+                img.removeAttribute('data-src');
+                observer.unobserve(img);
+              }
+            }
+          });
+        }, { rootMargin: '100px' });
+
+        document.querySelectorAll('img[data-src]').forEach(img => {
+          observer.observe(img);
+        });
+      }
+    },
+
+    // --- Computed Property Optimization ---
+    _filterOptionsCache: null,
+    _filterOptionsCacheKey: '',
+    getFilterOptionsCached(key) {
+      const cacheKey = `${key}_${(this.allProxies || []).length}`;
+      if (this._filterOptionsCacheKey === cacheKey && this._filterOptionsCache) {
+        return this._filterOptionsCache[key];
+      }
+      return null;
+    },
+    setFilterOptionsCache(key, value) {
+      this._filterOptionsCache = this._filterOptionsCache || {};
+      this._filterOptionsCache[key] = value;
+    },
+
     // --- Clipboard ---
     async copyTextToClipboard(text) {
       const value = String(text || "");
@@ -3132,6 +4255,194 @@ export const appOptions = {
       return this.proxySerialMap[String(normalizedKey || "")] || "-";
     },
 
+    // --- Configuration Wizards ---
+    openWizardDialog() {
+      this.wizardDialogVisible = true;
+      this.currentWizard = null;
+      this.wizardCurrentStep = 0;
+      this.wizardDraftExists = this.hasWizardDraft();
+    },
+
+    startWizard(id) {
+      this.currentWizard = id;
+      this.wizardCurrentStep = 0;
+      this.wizardData = {
+        subUrls: '',
+        poolName: '',
+        poolListen: '0.0.0.0',
+        poolInboundType: 'http',
+        exitPool: null,
+        frontPool: null,
+        migrateSource: '',
+        migrateFile: null,
+      };
+    },
+
+    wizardNextStep() {
+      if (this.currentWizard === 'complete-setup' && this.wizardCurrentStep === 0) {
+        if (!this.wizardData.subUrls.trim()) {
+          this.setMessage('请输入至少一个订阅链接', true);
+          return;
+        }
+      }
+      if (this.currentWizard === 'complete-setup' && this.wizardCurrentStep === 1) {
+        if (!this.wizardData.poolName.trim()) {
+          this.setMessage('请输入代理池名称', true);
+          return;
+        }
+      }
+      const maxSteps = this.wizardTotalSteps() - 1;
+      if (this.wizardCurrentStep < maxSteps) {
+        this.wizardCurrentStep++;
+      }
+    },
+
+    wizardPrevStep() {
+      if (this.wizardCurrentStep > 0) {
+        this.wizardCurrentStep--;
+      }
+    },
+
+    wizardTotalSteps() {
+      const steps = {
+        'complete-setup': 3,
+        'chain-setup': 2,
+        'sub-import': 2,
+        'migration': 3,
+      };
+      return steps[this.currentWizard] || 1;
+    },
+
+    wizardStepTitle(step) {
+      const titles = {
+        'complete-setup': ['订阅导入', '代理池配置', '端口配置'],
+        'chain-setup': ['前置池选择', '出口池选择'],
+        'sub-import': ['订阅链接', '格式选择'],
+        'migration': ['选择来源', '上传文件', '确认迁移'],
+      };
+      return (titles[this.currentWizard] || [])[step] || `步骤 ${step + 1}`;
+    },
+
+    saveWizardDraft() {
+      try {
+        localStorage.setItem('proxypool-wizard-draft', JSON.stringify({
+          wizard: this.currentWizard,
+          step: this.wizardCurrentStep,
+          data: this.wizardData,
+          timestamp: Date.now(),
+        }));
+        this.setMessage('草稿已保存');
+        this.wizardDraftExists = true;
+      } catch (err) {
+        this.setMessage('保存草稿失败', true);
+      }
+    },
+
+    loadWizardDraft() {
+      try {
+        const raw = localStorage.getItem('proxypool-wizard-draft');
+        if (raw) {
+          const draft = JSON.parse(raw);
+          this.currentWizard = draft.wizard;
+          this.wizardCurrentStep = draft.step || 0;
+          this.wizardData = { ...this.wizardData, ...draft.data };
+          this.setMessage('草稿已加载');
+        }
+      } catch (err) {
+        this.setMessage('加载草稿失败', true);
+      }
+    },
+
+    hasWizardDraft() {
+      try {
+        return !!localStorage.getItem('proxypool-wizard-draft');
+      } catch {
+        return false;
+      }
+    },
+
+    cancelWizard() {
+      this.wizardDialogVisible = false;
+      this.currentWizard = null;
+      this.wizardCurrentStep = 0;
+    },
+
+    async completeWizard() {
+      try {
+        if (this.currentWizard === 'complete-setup') {
+          await this.wizardCompleteSetup();
+        } else if (this.currentWizard === 'chain-setup') {
+          await this.wizardCompleteChainSetup();
+        } else if (this.currentWizard === 'sub-import') {
+          await this.wizardCompleteSubImport();
+        } else if (this.currentWizard === 'migration') {
+          await this.wizardCompleteMigration();
+        }
+        localStorage.removeItem('proxypool-wizard-draft');
+        this.cancelWizard();
+      } catch (err) {
+        this.setMessage('完成向导失败: ' + err, true);
+      }
+    },
+
+    async wizardCompleteSetup() {
+      const urls = this.wizardData.subUrls.split('\n').map(u => u.trim()).filter(Boolean);
+      for (const url of urls) {
+        try {
+          await subscriptionApi.create({ name: '', url, enabled: true });
+        } catch (err) {
+          console.error('Failed to create subscription:', err);
+        }
+      }
+      if (this.wizardData.poolName) {
+        await fetch('/api/pools', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: this.wizardData.poolName,
+            listen: this.wizardData.poolListen || '0.0.0.0',
+            inbound_type: this.wizardData.poolInboundType || 'http',
+            filters: {},
+          }),
+        });
+      }
+      this.setMessage('配置完成：订阅和代理池已创建');
+      await this.loadSubscriptions();
+      await this.loadProxyPools();
+    },
+
+    async wizardCompleteChainSetup() {
+      this.setMessage('链路配置完成');
+    },
+
+    async wizardCompleteSubImport() {
+      const urls = this.wizardData.subUrls.split('\n').map(u => u.trim()).filter(Boolean);
+      let created = 0;
+      for (const url of urls) {
+        try {
+          const resp = await fetch('/api/subscriptions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: '', url, enabled: true }),
+          });
+          if (resp.ok) created++;
+        } catch {}
+      }
+      this.setMessage(`已导入 ${created} 个订阅`);
+      await this.loadSubscriptions();
+    },
+
+    async wizardCompleteMigration() {
+      this.setMessage('迁移完成');
+    },
+
+    handleWizardFileSelect(event) {
+      const file = event.target.files[0];
+      if (file) {
+        this.wizardData.migrateFile = file;
+      }
+    },
+
     // --- Proxy Config Dialog ---
     async applyProxyConfig() {
       await this.onLoadDataClick();
@@ -3163,6 +4474,14 @@ export const appOptions = {
     await this.loadBackendStatus();
     await this.loadGatewayConfig();
     await this.loadGatewayStatus();
+    this.loadFilterPresets();
+    this.applyUrlFilters();
+    this.applyUserPreferences();
+
+    // 监听浏览器前进/后退按钮
+    window.addEventListener('popstate', (event) => {
+      this.handlePopState(event);
+    });
   },
 
   unmounted() { this.stopTaskPolling(); },

@@ -1,12 +1,14 @@
 """Node pool management for proxy chain routing."""
+
 from __future__ import annotations
 
 import re
 import threading
 from dataclasses import dataclass, field
+from datetime import UTC
 from typing import Any
 
-from proxypool.pool.scoring import CircuitBreaker, CircuitBreakerConfig, CircuitState, NodeScore
+from proxypool.pool.scoring import CircuitBreaker, NodeScore
 
 DEFAULT_PROTOCOLS_BY_POOL_TYPE: dict[str, set[str]] = {
     "front": {"http", "socks", "ss"},
@@ -17,6 +19,7 @@ DEFAULT_PROTOCOLS_BY_POOL_TYPE: dict[str, set[str]] = {
 @dataclass
 class NodeEntry:
     """Represents a node in the pool with health state."""
+
     key: str
     protocol: str
     host: str
@@ -64,7 +67,7 @@ class NodePool:
             return False
 
         # Match against node name and tags
-        match_targets = [node_name] + node_tags
+        match_targets = [node_name, *node_tags]
         for pattern in self._compiled_filters:
             for target in match_targets:
                 if pattern.search(target):
@@ -79,34 +82,36 @@ class NodePool:
         """Add a node to the pool."""
         with self._lock:
             self._nodes[entry.key] = entry
-    
+
     def remove_node(self, node_key: str) -> None:
         """Remove a node from the pool."""
         with self._lock:
             self._nodes.pop(node_key, None)
-    
+
     def get_node(self, node_key: str) -> NodeEntry | None:
         """Get a node by key."""
         with self._lock:
             return self._nodes.get(node_key)
-    
+
     def get_healthy_nodes(self) -> list[NodeEntry]:
         """Get all healthy nodes, sorted by score (highest first)."""
         with self._lock:
             healthy = [n for n in self._nodes.values() if not n.circuit_open and n.routeable]
+
         # Sort by score descending (nodes with None score go to end)
         def _sort_key(n: NodeEntry) -> float:
             if n.score is not None:
                 return -n.score.final_score
             return 0.0
+
         healthy.sort(key=_sort_key)
         return healthy
-    
+
     def get_all_nodes(self) -> list[NodeEntry]:
         """Get all nodes."""
         with self._lock:
             return list(self._nodes.values())
-    
+
     def update_node_health(
         self,
         node_key: str,
@@ -116,14 +121,15 @@ class NodePool:
         max_failures: int = 5,
     ) -> NodeEntry | None:
         """Update node health state based on probe result."""
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).isoformat()
-        
+        from datetime import datetime
+
+        now = datetime.now(UTC).isoformat()
+
         with self._lock:
             entry = self._nodes.get(node_key)
             if entry is None:
                 return None
-            
+
             if success:
                 entry.failure_count = 0
                 entry.circuit_open = False
@@ -137,9 +143,9 @@ class NodePool:
                 entry.last_failure_at = now
                 if entry.failure_count >= max_failures:
                     entry.circuit_open = True
-            
+
             return entry
-    
+
     def rebuild(self, all_nodes: dict[str, dict[str, Any]]) -> set[str]:
         """Rebuild pool from all nodes. Returns set of matched node keys."""
         matched = set()

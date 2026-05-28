@@ -56,9 +56,7 @@ class TestProxyParser(unittest.TestCase):
         self.assertEqual(node.extra.get("security"), "tls")
 
     def test_parse_hysteria2(self) -> None:
-        node = parse_proxy_link(
-            "hysteria2://password@example.com:443?sni=example.com#hy2"
-        )
+        node = parse_proxy_link("hysteria2://password@example.com:443?sni=example.com#hy2")
         self.assertEqual(node.protocol, "hysteria2")
         self.assertEqual(node.host, "example.com")
         self.assertEqual(node.port, 443)
@@ -106,11 +104,13 @@ class TestProxyParser(unittest.TestCase):
             "net": "tcp",
         }
         vmess = "vmess://" + base64.b64encode(json.dumps(vmess_payload).encode()).decode()
-        content = "\n".join([
-            "invalid-line",
-            vmess,
-            "trojan://pwd@b.com:443#ok",
-        ])
+        content = "\n".join(
+            [
+                "invalid-line",
+                vmess,
+                "trojan://pwd@b.com:443#ok",
+            ]
+        )
         nodes, invalid = parse_source_content(content)
         self.assertEqual(len(nodes), 2)
         self.assertEqual(len(invalid), 1)

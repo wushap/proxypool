@@ -4,28 +4,28 @@ Rate Limiting Module - Provides API rate limiting using slowapi.
 This module configures rate limiting for the FastAPI application
 to prevent abuse and暴力破解 attacks.
 """
+
 from __future__ import annotations
 
-from fastapi import FastAPI
+from typing import TYPE_CHECKING
+
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 # Rate limit configurations
 RATE_LIMIT_CONFIG = {
     # Read operations - generous
     "read": "120/minute",
-
     # Write operations - strict
     "write": "20/minute",
-
     # Bulk operations - stricter
     "bulk": "5/minute",
-
     # Authentication failures - very strict (anti-brute-force)
     "auth_failure": "5/minute",
-
     # Dangerous operations - very strict
     "dangerous": "3/minute",
 }

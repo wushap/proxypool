@@ -1,26 +1,25 @@
 """Health management and circuit breaking for proxy chain nodes."""
+
 from __future__ import annotations
 
-import asyncio
 import logging
 import subprocess
-import time
 import threading
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from proxypool.pool.node_pool import NodeEntry, NodePool
 from proxypool.pool.scoring import (
-    CircuitBreaker,
     CircuitBreakerConfig,
     CircuitBreakerManager,
     CircuitState,
-    NodeScorerManager,
     NodeScore,
+    NodeScorerManager,
     ScoreWeights,
-    SlidingWindow,
     WindowManager,
 )
 from proxypool.storage.health_storage import HealthStorage
@@ -38,6 +37,7 @@ def _log_event(level: int, msg: str, **kwargs: Any) -> None:
 @dataclass
 class HealthConfig:
     """Configuration for health management."""
+
     max_consecutive_failures: int = 5
     probe_interval_sec: int = 60
     probe_timeout_sec: float = 10.0
@@ -87,7 +87,7 @@ class HealthManager:
         self._running = False
         self._probe_task: threading.Thread | None = None
         self._stop_event = threading.Event()
-    
+
     def start(self) -> None:
         """Start background health probing."""
         if self._running:
@@ -155,7 +155,7 @@ class HealthManager:
             logger.info("Health state restored from storage")
         except Exception as e:
             logger.error(f"Failed to restore health state: {e}")
-    
+
     def stop(self) -> None:
         """Stop background health probing."""
         self._running = False
@@ -163,7 +163,7 @@ class HealthManager:
         if self._probe_task:
             self._probe_task.join(timeout=5.0)
         logger.info("HealthManager stopped")
-    
+
     def _probe_loop(self) -> None:
         """Main probe loop running in background thread."""
         while not self._stop_event.is_set():
@@ -172,7 +172,7 @@ class HealthManager:
             except Exception as e:
                 logger.error(f"Probe loop error: {e}")
             self._stop_event.wait(timeout=self.config.probe_interval_sec)
-    
+
     def _probe_all_nodes(self) -> None:
         """Probe all nodes in both pools."""
         _log_event(logging.INFO, "Starting probe cycle")
@@ -187,8 +187,13 @@ class HealthManager:
         if front_healthy:
             self._probe_exit_nodes(exit_nodes, front_healthy)
 
-        _log_event(logging.INFO, "Probe cycle completed", front_count=len(front_nodes), exit_count=len(exit_nodes))
-    
+        _log_event(
+            logging.INFO,
+            "Probe cycle completed",
+            front_count=len(front_nodes),
+            exit_count=len(exit_nodes),
+        )
+
     def _probe_front_nodes(self, nodes: list[NodeEntry]) -> None:
         """Probe front nodes directly."""
         if not nodes:
@@ -197,10 +202,7 @@ class HealthManager:
         _log_event(logging.DEBUG, "Probing front nodes", count=len(nodes))
 
         with ThreadPoolExecutor(max_workers=self.config.probe_concurrency) as executor:
-            futures = {
-                executor.submit(self._probe_single_front, node): node
-                for node in nodes
-            }
+            futures = {executor.submit(self._probe_single_front, node): node for node in nodes}
             for future in as_completed(futures):
                 node = futures[future]
                 try:
@@ -220,14 +222,21 @@ class HealthManager:
                     )
                 except Exception as e:
                     logger.error(f"Front probe error for {node.key}: {e}")
-    
+
     def _probe_single_front(self, node: NodeEntry) -> tuple[bool, int | None]:
         """Probe a single front node using curl."""
         proxy_url = f"{node.protocol}://{node.host}:{node.port}"
         cmd = [
-            "curl", "-sS", "-o", "/dev/null", "-w", "%{time_total}",
-            "--max-time", str(int(self.config.probe_timeout_sec)),
-            "--proxy", proxy_url,
+            "curl",
+            "-sS",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{time_total}",
+            "--max-time",
+            str(int(self.config.probe_timeout_sec)),
+            "--proxy",
+            proxy_url,
         ]
 
         # Add proxy authentication if available
@@ -242,14 +251,16 @@ class HealthManager:
         cmd.append(self.config.latency_test_url)
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.config.probe_timeout_sec + 2)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=self.config.probe_timeout_sec + 2
+            )
             if result.returncode == 0:
                 latency_sec = float(result.stdout.strip())
                 return True, int(latency_sec * 1000)
             return False, None
         except Exception:
             return False, None
-    
+
     def _probe_exit_nodes(self, exit_nodes: list[NodeEntry], front_nodes: list[NodeEntry]) -> None:
         """Probe exit nodes through proxy chain."""
         if not exit_nodes or not front_nodes:
@@ -286,8 +297,10 @@ class HealthManager:
                     )
                 except Exception as e:
                     logger.error(f"Exit probe error for {exit_node.key}: {e}")
-    
-    def _probe_single_exit(self, front: NodeEntry, exit_node: NodeEntry) -> tuple[bool, str, int | None]:
+
+    def _probe_single_exit(
+        self, front: NodeEntry, exit_node: NodeEntry
+    ) -> tuple[bool, str, int | None]:
         """Probe exit node through proxy chain."""
         if self.probe_chain is not None:
             return self.probe_chain(front, exit_node)
@@ -298,15 +311,22 @@ class HealthManager:
         else:
             # Fallback: use direct proxy (for testing)
             proxy_url = f"{exit_node.protocol}://{exit_node.host}:{exit_node.port}"
-        
+
         cmd = [
-            "curl", "-sS", "-w", "\n%{time_total}",
-            "--max-time", str(int(self.config.probe_timeout_sec)),
-            "--proxy", proxy_url,
+            "curl",
+            "-sS",
+            "-w",
+            "\n%{time_total}",
+            "--max-time",
+            str(int(self.config.probe_timeout_sec)),
+            "--proxy",
+            proxy_url,
             self.config.egress_trace_url,
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.config.probe_timeout_sec + 2)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=self.config.probe_timeout_sec + 2
+            )
             if result.returncode == 0:
                 lines = result.stdout.strip().split("\n")
                 if len(lines) >= 2:
@@ -317,14 +337,14 @@ class HealthManager:
             return False, "", None
         except Exception:
             return False, "", None
-    
+
     def _parse_trace_ip(self, body: str) -> str:
         """Parse IP from cloudflare trace response."""
         for line in body.split("\n"):
             if line.startswith("ip="):
                 return line.split("=", 1)[1].strip()
         return ""
-    
+
     def _persist_health(
         self,
         node_key: str,
@@ -334,7 +354,7 @@ class HealthManager:
     ) -> None:
         """Persist health state to storage."""
         try:
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             self.storage.upsert_node_health(
                 node_key=node_key,
                 success=success,
@@ -345,7 +365,7 @@ class HealthManager:
             )
         except Exception as e:
             logger.error(f"Failed to persist health for {node_key}: {e}")
-    
+
     def record_request_result(self, front_key: str, exit_key: str, success: bool) -> None:
         """Record the result of a proxy request (passive probing)."""
         front = self.front_pool.get_node(front_key)
@@ -392,8 +412,8 @@ class HealthManager:
                 logging.INFO,
                 "Circuit breaker state changed",
                 node_key=node_key,
-                old_state=old_state.value if hasattr(old_state, 'value') else str(old_state),
-                new_state=new_state.value if hasattr(new_state, 'value') else str(new_state),
+                old_state=old_state.value if hasattr(old_state, "value") else str(old_state),
+                new_state=new_state.value if hasattr(new_state, "value") else str(new_state),
             )
 
         # 3. Update node pool (legacy state for backward compat)
@@ -421,7 +441,7 @@ class HealthManager:
                 "Node score updated",
                 node_key=node_key,
                 score=round(score.final_score, 4),
-                grade=score.grade.value if hasattr(score.grade, 'value') else score.grade,
+                grade=score.grade.value if hasattr(score.grade, "value") else score.grade,
                 success_rate=round(score.success_rate, 4),
             )
 
@@ -431,7 +451,9 @@ class HealthManager:
             node.score = score
             node.circuit_breaker = self.circuit_breaker_manager.get_breaker(node_key)
             # Sync circuit_open from circuit breaker for backward compat
-            node.circuit_open = self.circuit_breaker_manager.get_state(node_key) == CircuitState.OPEN
+            node.circuit_open = (
+                self.circuit_breaker_manager.get_state(node_key) == CircuitState.OPEN
+            )
 
         # 6. Persist to legacy storage
         self._persist_health(node_key, success, egress_ip=egress_ip, latency_ms=latency_ms)
@@ -454,12 +476,14 @@ class HealthManager:
                     self.health_storage.upsert_node_score(
                         node_key=node_key,
                         final_score=score.final_score,
-                        grade=score.grade.value if hasattr(score.grade, 'value') else score.grade,
+                        grade=score.grade.value if hasattr(score.grade, "value") else score.grade,
                         raw_score=score.raw_score,
                         confidence=score.confidence,
                         success_rate=score.success_rate,
                         avg_latency_ms=score.avg_latency_ms,
-                        stability_score=score.stability_score if hasattr(score, 'stability_score') else None,
+                        stability_score=score.stability_score
+                        if hasattr(score, "stability_score")
+                        else None,
                     )
 
                 # Persist circuit breaker state
@@ -467,7 +491,7 @@ class HealthManager:
                 state = self.circuit_breaker_manager.get_state(node_key)
                 self.health_storage.upsert_circuit_breaker(
                     node_key=node_key,
-                    state=state.value if hasattr(state, 'value') else state,
+                    state=state.value if hasattr(state, "value") else state,
                     failure_count=breaker.failure_count,
                     consecutive_successes=breaker._consecutive_successes,
                     last_failure_time=breaker._last_failure_time,

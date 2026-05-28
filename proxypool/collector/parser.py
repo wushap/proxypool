@@ -185,7 +185,9 @@ def _parse_ssr(link: str) -> ProxyNode:
 
     password = _safe_b64_decode_to_text(password_b64) or ""
     params = parse_qs(query, keep_blank_values=True)
-    remarks = _safe_b64_decode_to_text(_first(params.get("remarks"))) if params.get("remarks") else ""
+    remarks = (
+        _safe_b64_decode_to_text(_first(params.get("remarks"))) if params.get("remarks") else ""
+    )
 
     extra: dict[str, Any] = {
         "protocol": protocol,
@@ -193,7 +195,9 @@ def _parse_ssr(link: str) -> ProxyNode:
         "obfs": obfs,
         "password": password,
     }
-    return ProxyNode(protocol="ssr", host=server, port=port, raw_link=link, name=remarks, extra=extra)
+    return ProxyNode(
+        protocol="ssr", host=server, port=port, raw_link=link, name=remarks, extra=extra
+    )
 
 
 def _parse_url_like(link: str, scheme: str) -> ProxyNode:

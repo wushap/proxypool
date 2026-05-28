@@ -6,7 +6,6 @@ import shutil
 import socket
 import subprocess
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +18,9 @@ from proxypool.backend.mihomo_config import build_mihomo_chain_config
 class MihomoEgressBackend:
     backend_type = "mihomo"
 
-    def __init__(self, binary: str = "mihomo", runtime_dir: Path | str = Path("data/runtime/mihomo")) -> None:
+    def __init__(
+        self, binary: str = "mihomo", runtime_dir: Path | str = Path("data/runtime/mihomo")
+    ) -> None:
         self.binary = str(binary or "mihomo")
         self.runtime_dir = Path(runtime_dir)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -36,7 +37,9 @@ class MihomoEgressBackend:
         config = self.build_config(spec)
         config_file = self.runtime_dir / f"{spec.instance_id}.yaml"
         log_file = self.runtime_dir / f"{spec.instance_id}.log"
-        config_file.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        config_file.write_text(
+            yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
 
         log_handle = log_file.open("a", encoding="utf-8")
         env = dict(os.environ)
@@ -76,7 +79,9 @@ class MihomoEgressBackend:
                 return False
             return process.poll() is None
 
-    def health_check(self, instance_id: str, port: int = 0, timeout_sec: float = 1.0) -> dict[str, Any]:
+    def health_check(
+        self, instance_id: str, port: int = 0, timeout_sec: float = 1.0
+    ) -> dict[str, Any]:
         """Check health of a mihomo instance.
 
         Args:
@@ -125,6 +130,8 @@ class MihomoEgressBackend:
         """Async wrapper for stop()."""
         await asyncio.to_thread(self.stop, instance_id)
 
-    async def health_check_async(self, instance_id: str, port: int = 0, timeout_sec: float = 1.0) -> dict[str, Any]:
+    async def health_check_async(
+        self, instance_id: str, port: int = 0, timeout_sec: float = 1.0
+    ) -> dict[str, Any]:
         """Async wrapper for health_check()."""
         return await asyncio.to_thread(self.health_check, instance_id, port, timeout_sec)

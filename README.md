@@ -9,12 +9,16 @@
 ## Features
 
 - **Multi-protocol Support**: Trojan, VMess, SS, Hysteria2
-- **Health Checks**: Automatic proxy health monitoring
-- **Chain Routing**: Multi-hop proxy chains with session persistence
-- **WebUI**: Modern Vue 3.5 dashboard
-- **API**: RESTful API with OpenAPI documentation
-- **Docker**: Production-ready containerization
+- **Health Checks**: Automatic proxy health monitoring with configurable intervals
+- **Chain Routing**: Multi-hop proxy chains with session persistence and sticky routes
+- **WebUI**: Modern Vue 3.5 dashboard with real-time updates
+- **API**: RESTful API with OpenAPI documentation and rate limiting
+- **Docker**: Production-ready containerization with health checks
 - **Security**: SSRF protection, path traversal prevention, API key authentication
+- **Performance Monitoring**: Real-time metrics, bottleneck detection, and capacity planning
+- **Configuration Wizards**: Guided setup for pools, subscriptions, and backend
+- **Export/Import**: CSV and JSON export for proxies, pools, and configurations
+- **System Health Dashboard**: Health scoring, trend analysis, and alerting rules
 
 ## Quick Start
 
@@ -76,6 +80,17 @@ cd ../..
 python -m proxypool.main
 ```
 
+## Documentation
+
+Comprehensive documentation is available in the [docs/](docs/) directory:
+
+- **[Deployment Guide](docs/deployment.md)**: Docker, manual, and systemd deployment instructions
+- **[Troubleshooting Guide](docs/troubleshooting.md)**: Common issues and solutions
+- **[API Reference](docs/api.md)**: Complete API endpoint documentation
+- **[Contributing Guidelines](CONTRIBUTING.md)**: How to contribute to the project
+- **[Product Benchmark](docs/product-benchmark.md)**: Feature comparison with competitors
+- **[Interactive API Docs](http://localhost:8080/docs)**: Swagger UI (when running)
+
 ## Configuration
 
 ### Environment Variables
@@ -135,12 +150,20 @@ Once the server is running, access the interactive API documentation:
 | GET | `/api/health` | Health check |
 | GET | `/api/stats` | Pool statistics |
 | GET | `/api/proxies` | List proxies |
+| GET | `/api/proxies/stats` | Proxy statistics |
+| POST | `/api/pools` | Create proxy pool |
+| GET | `/api/pools` | List pools |
+| GET | `/api/pools/{id}/metrics` | Pool metrics |
 | POST | `/api/collector/import-urls` | Import from URLs |
 | POST | `/api/collector/import-files` | Import from files |
 | POST | `/api/tester/run` | Run health tests |
 | POST | `/api/tasks/tester/start` | Start async tester |
 | GET | `/api/subscription` | Export subscription |
 | POST | `/api/backend/start` | Start backend |
+| GET | `/api/system/health` | Detailed system health |
+| GET | `/api/system/metrics` | System performance metrics |
+| GET | `/api/config/export` | Export configuration |
+| POST | `/api/config/import` | Import configuration |
 
 ## Architecture
 
@@ -259,11 +282,62 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Contributing
 
+We welcome contributions! Please read our [Contributing Guidelines](CONTRIBUTING.md) for detailed information.
+
+### Quick Start
+
+### Development Workflow
+
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+3. Make your changes
+4. Run checks (`make check`)
+5. Commit your changes (`git commit -m 'Add amazing feature'`)
+6. Push to the branch (`git push origin feature/amazing-feature`)
+7. Open a Pull Request
+
+### Code Standards
+
+- **Python**: Follow PEP 8, use type hints, write docstrings
+- **JavaScript/Vue**: Follow ESLint rules, use Composition API
+- **Testing**: Write tests for new features, maintain >80% coverage
+- **Commits**: Use conventional commits (feat:, fix:, docs:, etc.)
+
+### Development Setup
+
+```bash
+# Install development dependencies
+make install
+
+# Run pre-commit hooks
+pre-commit install
+
+# Run full check suite before committing
+make check
+```
+
+### Testing
+
+```bash
+# Run all tests
+make test
+
+# Run with coverage
+make test-cov
+
+# Run specific test file
+pytest tests/test_api_pools.py -v
+
+# Run security tests
+make test-security
+```
+
+### Documentation
+
+- Update README.md for new features
+- Add docstrings to new functions
+- Update API documentation if adding endpoints
+- See [docs/](docs/) for detailed guides
 
 ## Support
 

@@ -8,7 +8,9 @@ from proxypool.storage.sqlite import SQLiteProxyStorage
 
 def test_create_and_list_proxy_pool(tmp_path: Path) -> None:
     storage = SQLiteProxyStorage(tmp_path / "test.db")
-    pool = storage.create_proxy_pool(name="test-pool", filters={"available": "true", "protocol": "trojan"})
+    pool = storage.create_proxy_pool(
+        name="test-pool", filters={"available": "true", "protocol": "trojan"}
+    )
     assert pool["name"] == "test-pool"
     assert pool["status"] == "stopped"
     assert pool["filters"]["available"] == "true"
@@ -29,9 +31,27 @@ def test_update_proxy_pool(tmp_path: Path) -> None:
 
 def test_proxy_pool_supports_multiple_geo_countries(tmp_path: Path) -> None:
     storage = SQLiteProxyStorage(tmp_path / "test.db")
-    us = ProxyNode(protocol="trojan", host="us.example.com", port=443, raw_link="trojan://us", extra={"password": "p"})
-    jp = ProxyNode(protocol="trojan", host="jp.example.com", port=443, raw_link="trojan://jp", extra={"password": "p"})
-    de = ProxyNode(protocol="trojan", host="de.example.com", port=443, raw_link="trojan://de", extra={"password": "p"})
+    us = ProxyNode(
+        protocol="trojan",
+        host="us.example.com",
+        port=443,
+        raw_link="trojan://us",
+        extra={"password": "p"},
+    )
+    jp = ProxyNode(
+        protocol="trojan",
+        host="jp.example.com",
+        port=443,
+        raw_link="trojan://jp",
+        extra={"password": "p"},
+    )
+    de = ProxyNode(
+        protocol="trojan",
+        host="de.example.com",
+        port=443,
+        raw_link="trojan://de",
+        extra={"password": "p"},
+    )
     storage.upsert_proxy(us)
     storage.upsert_proxy(jp)
     storage.upsert_proxy(de)
@@ -78,7 +98,13 @@ def test_pool_filters_with_latency_and_freshness(tmp_path: Path) -> None:
 
 def test_match_count_in_pool(tmp_path: Path) -> None:
     storage = SQLiteProxyStorage(tmp_path / "test.db")
-    proxy = ProxyNode(protocol="trojan", host="us.example.com", port=443, raw_link="trojan://us", extra={"password": "p"})
+    proxy = ProxyNode(
+        protocol="trojan",
+        host="us.example.com",
+        port=443,
+        raw_link="trojan://us",
+        extra={"password": "p"},
+    )
     storage.upsert_proxy(proxy)
     storage.update_test_result(proxy.normalized_key(), available=True, latency_ms=100)
 
@@ -88,8 +114,20 @@ def test_match_count_in_pool(tmp_path: Path) -> None:
 
 def test_list_proxies_filtered_with_new_params(tmp_path: Path) -> None:
     storage = SQLiteProxyStorage(tmp_path / "test.db")
-    p1 = ProxyNode(protocol="trojan", host="a.example.com", port=443, raw_link="trojan://a", extra={"password": "p"})
-    p2 = ProxyNode(protocol="trojan", host="b.example.com", port=443, raw_link="trojan://b", extra={"password": "p"})
+    p1 = ProxyNode(
+        protocol="trojan",
+        host="a.example.com",
+        port=443,
+        raw_link="trojan://a",
+        extra={"password": "p"},
+    )
+    p2 = ProxyNode(
+        protocol="trojan",
+        host="b.example.com",
+        port=443,
+        raw_link="trojan://b",
+        extra={"password": "p"},
+    )
     storage.upsert_proxy(p1)
     storage.upsert_proxy(p2)
     storage.update_test_result(p1.normalized_key(), available=True, latency_ms=50)
@@ -115,15 +153,39 @@ def test_list_proxies_filtered_with_new_params(tmp_path: Path) -> None:
 
 def test_list_proxies_filtered_by_route_mode(tmp_path: Path) -> None:
     storage = SQLiteProxyStorage(tmp_path / "test.db")
-    direct = ProxyNode(protocol="trojan", host="direct.example.com", port=443, raw_link="trojan://direct", extra={"password": "p"})
-    chained = ProxyNode(protocol="trojan", host="chained.example.com", port=443, raw_link="trojan://chained", extra={"password": "p"})
-    down = ProxyNode(protocol="trojan", host="down.example.com", port=443, raw_link="trojan://down", extra={"password": "p"})
+    direct = ProxyNode(
+        protocol="trojan",
+        host="direct.example.com",
+        port=443,
+        raw_link="trojan://direct",
+        extra={"password": "p"},
+    )
+    chained = ProxyNode(
+        protocol="trojan",
+        host="chained.example.com",
+        port=443,
+        raw_link="trojan://chained",
+        extra={"password": "p"},
+    )
+    down = ProxyNode(
+        protocol="trojan",
+        host="down.example.com",
+        port=443,
+        raw_link="trojan://down",
+        extra={"password": "p"},
+    )
     storage.upsert_proxy(direct)
     storage.upsert_proxy(chained)
     storage.upsert_proxy(down)
-    storage.update_test_result(direct.normalized_key(), available=True, latency_ms=50, fallback_front_keys=[])
-    storage.update_test_result(chained.normalized_key(), available=True, latency_ms=60, fallback_front_keys=["front-a"])
-    storage.update_test_result(down.normalized_key(), available=False, latency_ms=None, error="down")
+    storage.update_test_result(
+        direct.normalized_key(), available=True, latency_ms=50, fallback_front_keys=[]
+    )
+    storage.update_test_result(
+        chained.normalized_key(), available=True, latency_ms=60, fallback_front_keys=["front-a"]
+    )
+    storage.update_test_result(
+        down.normalized_key(), available=False, latency_ms=None, error="down"
+    )
 
     direct_rows = storage.list_proxies_filtered(limit=10, route_mode_filter="direct")
     chained_rows = storage.list_proxies_filtered(limit=10, route_mode_filter="chain")
@@ -136,14 +198,32 @@ def test_list_proxies_filtered_by_route_mode(tmp_path: Path) -> None:
 
 def test_proxy_pool_route_mode_filter_is_normalized_and_counted(tmp_path: Path) -> None:
     storage = SQLiteProxyStorage(tmp_path / "test.db")
-    direct = ProxyNode(protocol="trojan", host="direct.example.com", port=443, raw_link="trojan://direct", extra={"password": "p"})
-    chained = ProxyNode(protocol="trojan", host="chained.example.com", port=443, raw_link="trojan://chained", extra={"password": "p"})
+    direct = ProxyNode(
+        protocol="trojan",
+        host="direct.example.com",
+        port=443,
+        raw_link="trojan://direct",
+        extra={"password": "p"},
+    )
+    chained = ProxyNode(
+        protocol="trojan",
+        host="chained.example.com",
+        port=443,
+        raw_link="trojan://chained",
+        extra={"password": "p"},
+    )
     storage.upsert_proxy(direct)
     storage.upsert_proxy(chained)
-    storage.update_test_result(direct.normalized_key(), available=True, latency_ms=50, fallback_front_keys=[])
-    storage.update_test_result(chained.normalized_key(), available=True, latency_ms=60, fallback_front_keys=["front-a"])
+    storage.update_test_result(
+        direct.normalized_key(), available=True, latency_ms=50, fallback_front_keys=[]
+    )
+    storage.update_test_result(
+        chained.normalized_key(), available=True, latency_ms=60, fallback_front_keys=["front-a"]
+    )
 
-    pool = storage.create_proxy_pool(name="direct-only", filters={"route_mode_filter": "direct", "available": "true"})
+    pool = storage.create_proxy_pool(
+        name="direct-only", filters={"route_mode_filter": "direct", "available": "true"}
+    )
 
     assert pool["filters"]["route_mode_filter"] == "direct"
     assert "available" not in pool["filters"]
@@ -172,7 +252,9 @@ def test_http_proxy_endpoint_and_hops_round_trip(tmp_path: Path) -> None:
         connect_session_header_names=["X-ProxyPool-Session"],
     )
 
-    hops = storage.replace_http_proxy_endpoint_hops(int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])])
+    hops = storage.replace_http_proxy_endpoint_hops(
+        int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])]
+    )
     loaded = storage.get_http_proxy_endpoint(int(endpoint["id"]))
 
     assert [item["pool_id"] for item in hops] == [int(pool1["id"]), int(pool2["id"])]

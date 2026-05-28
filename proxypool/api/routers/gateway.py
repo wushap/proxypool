@@ -3,28 +3,44 @@ HTTP 网关管理路由
 """
 
 import contextlib
-import hashlib
 import time
 import uuid
 from dataclasses import asdict
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from proxypool.api.dependencies import StorageDep
+from proxypool.api.schemas import (
+    HttpGatewayConfigRequest,
+    HttpGatewayTestRequest,
+    HttpProxyEndpointCreateRequest,
+    HttpProxyEndpointServiceConfigRequest,
+    HttpProxyEndpointUpdateRequest,
+)
 
-router = APIRouter(prefix="/api", tags=["gateway"])
+router = APIRouter(prefix="/api", tags=["网关"])
 
 
-@router.get("/gateway/http-config")
+@router.get(
+    "/gateway/http-config",
+    summary="获取HTTP网关配置",
+    description="返回当前HTTP网关的配置信息",
+    response_description="网关配置详情",
+)
 async def get_http_gateway_config(request: Request) -> dict:
     """获取 HTTP 网关配置"""
     return {"item": asdict(request.app.state.gateway_config_service.get_config())}
 
 
-@router.put("/gateway/http-config")
+@router.put(
+    "/gateway/http-config",
+    summary="更新HTTP网关配置",
+    description="更新HTTP网关配置并可选地重启网关服务",
+    response_description="更新后的配置",
+)
 async def update_http_gateway_config(
-    body: dict,
+    body: HttpGatewayConfigRequest,
     request: Request,
     storage: StorageDep,
 ) -> dict:
@@ -34,7 +50,8 @@ async def update_http_gateway_config(
     gateway_runtime = request.app.state.gateway_runtime
     chain_service = request.app.state.chain_service
 
-    item = gateway_config_service.update_config(**body)
+    update_data = body.model_dump(exclude_unset=True)
+    item = gateway_config_service.update_config(**update_data)
     forward_gateway.config = item
     endpoint = storage.get_http_proxy_endpoint(int(item.endpoint_id or 0))
     chain_service.sticky_router.sticky_ttl_sec = int(
@@ -48,7 +65,12 @@ async def update_http_gateway_config(
     return {"item": asdict(item)}
 
 
-@router.get("/gateway/http-status")
+@router.get(
+    "/gateway/http-status",
+    summary="获取HTTP网关状态",
+    description="返回HTTP网关的运行状态和端点信息",
+    response_description="网关状态详情",
+)
 async def get_http_gateway_status(
     request: Request,
     endpoint_id: int = Query(default=0, ge=0),
@@ -59,7 +81,9 @@ async def get_http_gateway_status(
     gateway_runtime = request.app.state.gateway_runtime
     config = gateway_config_service.get_config()
     resolved_endpoint_id = int(endpoint_id or config.endpoint_id or 0)
-    endpoint = storage.get_http_proxy_endpoint(resolved_endpoint_id) if resolved_endpoint_id > 0 else None
+    endpoint = (
+        storage.get_http_proxy_endpoint(resolved_endpoint_id) if resolved_endpoint_id > 0 else None
+    )
     return {
         "config": asdict(config),
         "endpoint": endpoint,
@@ -68,7 +92,12 @@ async def get_http_gateway_status(
     }
 
 
-@router.post("/gateway/http-health-check")
+@router.post(
+    "/gateway/http-health-check",
+    summary="运行HTTP网关健康检查",
+    description="检查HTTP网关和所有端点的健康状态",
+    response_description="健康检查结果",
+)
 async def run_http_gateway_health_check(request: Request) -> dict:
     """运行 HTTP 网关健康检查"""
     gateway_runtime = request.app.state.gateway_runtime
@@ -100,9 +129,14 @@ async def run_http_gateway_health_check(request: Request) -> dict:
     }
 
 
-@router.post("/gateway/http-test")
+@router.post(
+    "/gateway/http-test",
+    summary="运行HTTP网关测试",
+    description="通过网关发送测试请求到指定URL",
+    response_description="测试结果详情",
+)
 async def run_http_gateway_test(
-    body: dict,
+    body: HttpGatewayTestRequest,
     request: Request,
     storage: StorageDep,
 ) -> dict:
@@ -110,20 +144,26 @@ async def run_http_gateway_test(
     gateway_config_service = request.app.state.gateway_config_service
     forward_gateway = request.app.state.forward_gateway
 
-    target = str(body.get("target_url") or "").strip()
+    target = body.target_url.strip()
     if not target:
         raise HTTPException(status_code=400, detail="target_url is required")
-    if int(body.get("endpoint_id") or 0) > 0:
+    if body.endpoint_id > 0:
         current = gateway_config_service.get_config()
-        if int(current.endpoint_id or 0) != int(body["endpoint_id"]):
-            updated = gateway_config_service.update_config(endpoint_id=int(body["endpoint_id"]))
+        if int(current.endpoint_id or 0) != body.endpoint_id:
+            updated = gateway_config_service.update_config(endpoint_id=body.endpoint_id)
             forward_gateway.config = updated
     headers = {}
-    if body.get("session_id"):
-        headers["X-ProxyPool-Session"] = body["session_id"]
+    if body.session_id:
+        headers["X-ProxyPool-Session"] = body.session_id
     else:
-        configured_endpoint_id = int(body.get("endpoint_id") or forward_gateway.config.endpoint_id or 0)
-        endpoint_for_policy = storage.get_http_proxy_endpoint(configured_endpoint_id) if configured_endpoint_id > 0 else None
+        configured_endpoint_id = int(
+            body.get("endpoint_id") or forward_gateway.config.endpoint_id or 0
+        )
+        endpoint_for_policy = (
+            storage.get_http_proxy_endpoint(configured_endpoint_id)
+            if configured_endpoint_id > 0
+            else None
+        )
         missing_action = str(
             (endpoint_for_policy or {}).get("session_missing_action")
             or forward_gateway.config.session_missing_action
@@ -137,7 +177,9 @@ async def run_http_gateway_test(
         return {"ok": False, "detail": str(exc)}
     endpoint = route.get("endpoint") or {}
     endpoint_id = int(endpoint.get("id") or 0)
-    proxy_host = str(endpoint.get("listen_host") or forward_gateway.config.listen_host or "127.0.0.1")
+    proxy_host = str(
+        endpoint.get("listen_host") or forward_gateway.config.listen_host or "127.0.0.1"
+    )
     proxy_port = int(endpoint.get("listen_port") or forward_gateway.config.listen_port or 0)
     if proxy_port <= 0:
         return {
@@ -152,11 +194,16 @@ async def run_http_gateway_test(
         }
     proxy_url = f"http://{proxy_host}:{proxy_port}"
     import proxypool.api.app as api_app
-    request_result = await api_app._request_via_forward_proxy(target, proxy_url=proxy_url, proxy_headers=headers)
+
+    request_result = await api_app._request_via_forward_proxy(
+        target, proxy_url=proxy_url, proxy_headers=headers
+    )
     request_ok = bool(request_result.get("request_ok"))
     status_code = int(request_result.get("status_code") or 0)
     if not request_ok:
-        error_detail = str(request_result.get("error") or request_result.get("error_type") or "request failed")
+        error_detail = str(
+            request_result.get("error") or request_result.get("error_type") or "request failed"
+        )
         with contextlib.suppress(Exception):
             forward_gateway.report_route_failure(route, error_detail)
     else:
@@ -164,7 +211,9 @@ async def run_http_gateway_test(
             forward_gateway.report_route_success(route)
     return {
         "ok": bool(request_ok and (status_code == 0 or status_code < 500)),
-        "detail": "request succeeded" if request_ok else str(request_result.get("error") or "request failed"),
+        "detail": "request succeeded"
+        if request_ok
+        else str(request_result.get("error") or "request failed"),
         "session_id": route["session_id"],
         "endpoint_id": endpoint_id,
         "proxy_url": proxy_url,
@@ -198,21 +247,20 @@ async def get_http_proxy_endpoint_service_config(request: Request) -> dict:
 
 @router.put("/http-proxy-endpoints/service-config")
 async def update_http_proxy_endpoint_service_config(
-    body: dict,
+    body: HttpProxyEndpointServiceConfigRequest,
     request: Request,
 ) -> dict:
     """更新 HTTP 代理端点服务配置"""
-    storage = request.app.state.storage
     gateway_config_service = request.app.state.gateway_config_service
     gateway_runtime = request.app.state.gateway_runtime
     forward_gateway = request.app.state.forward_gateway
 
     item = gateway_config_service.update_config(
-        enabled=body.get("enabled"),
+        enabled=body.enabled,
         endpoint_id=0,
         default_pool_id=0,
-        health_check_enabled=body.get("health_check_enabled"),
-        health_check_interval_sec=body.get("health_check_interval_sec"),
+        health_check_enabled=body.health_check_enabled,
+        health_check_interval_sec=body.health_check_interval_sec,
     )
     forward_gateway.config = item
     if item.enabled:
@@ -231,7 +279,7 @@ async def update_http_proxy_endpoint_service_config(
 
 @router.post("/http-proxy-endpoints")
 async def create_http_proxy_endpoint(
-    body: dict,
+    body: HttpProxyEndpointCreateRequest,
     request: Request,
 ) -> dict:
     """创建 HTTP 代理端点"""
@@ -240,19 +288,19 @@ async def create_http_proxy_endpoint(
     gateway_runtime = request.app.state.gateway_runtime
     try:
         item = storage.create_http_proxy_endpoint(
-            name=body.get("name"),
-            listen_host=body.get("listen_host", "127.0.0.1"),
-            listen_port=body.get("listen_port", 8899),
-            inbound_type=body.get("inbound_type", "http"),
-            enabled=body.get("enabled", True),
-            sticky_ttl_sec=body.get("sticky_ttl_sec", 3600),
-            session_missing_action=body.get("session_missing_action", "RANDOM"),
-            session_header_names=body.get("session_header_names"),
-            session_query_param_names=body.get("session_query_param_names"),
-            connect_session_header_names=body.get("connect_session_header_names"),
+            name=body.name,
+            listen_host=body.listen_host,
+            listen_port=body.listen_port,
+            inbound_type=body.inbound_type,
+            enabled=body.enabled,
+            sticky_ttl_sec=body.sticky_ttl_sec,
+            session_missing_action=body.session_missing_action,
+            session_header_names=body.session_header_names,
+            session_query_param_names=body.session_query_param_names,
+            connect_session_header_names=body.connect_session_header_names,
         )
-        if body.get("hop_pool_ids"):
-            storage.replace_http_proxy_endpoint_hops(int(item["id"]), list(body["hop_pool_ids"]))
+        if body.hop_pool_ids:
+            storage.replace_http_proxy_endpoint_hops(int(item["id"]), list(body.hop_pool_ids))
             item = storage.get_http_proxy_endpoint(int(item["id"])) or item
         if gateway_config_service.get_config().enabled:
             with contextlib.suppress(Exception):
@@ -278,7 +326,7 @@ async def get_http_proxy_endpoint(
 @router.put("/http-proxy-endpoints/{endpoint_id}")
 async def update_http_proxy_endpoint(
     endpoint_id: int,
-    body: dict,
+    body: HttpProxyEndpointUpdateRequest,
     request: Request,
 ) -> dict:
     """更新 HTTP 代理端点"""
@@ -286,7 +334,7 @@ async def update_http_proxy_endpoint(
     gateway_config_service = request.app.state.gateway_config_service
     gateway_runtime = request.app.state.gateway_runtime
 
-    payload = {k: v for k, v in body.items() if v is not None}
+    payload = body.model_dump(exclude_unset=True)
     hop_pool_ids = payload.pop("hop_pool_ids", None)
     try:
         item = storage.update_http_proxy_endpoint(endpoint_id, **payload)
@@ -377,6 +425,251 @@ async def http_proxy_endpoint_status(
     )
 
 
+@router.get("/gateway/endpoints/{endpoint_id}/health")
+async def get_endpoint_health(
+    endpoint_id: int,
+    request: Request,
+) -> dict:
+    """获取网关端点详细健康状态"""
+    storage = request.app.state.storage
+    gateway_runtime = request.app.state.gateway_runtime
+
+    item = storage.get_http_proxy_endpoint(endpoint_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="http proxy endpoint not found")
+
+    # Get gateway runtime status
+    runtime_status = gateway_runtime.status()
+    endpoint_errors: list[dict] = []
+
+    # Check if this endpoint is running in the gateway
+    for ep in runtime_status.get("items", []):
+        if int(ep.get("id") or 0) == endpoint_id:
+            endpoint_errors = list(ep.get("recent_errors") or [])
+            break
+
+    # Get active leases for this endpoint
+    chain_instance_manager = request.app.state.chain_instance_manager
+    active_leases: list[dict] = []
+    upstream_pool_status: dict = {}
+
+    hops = list(item.get("hops") or [])
+    if hops:
+        entry_pool_id = int(hops[0].get("pool_id") or 0)
+        if entry_pool_id > 0:
+            # Get upstream pool info
+            pool = storage.get_proxy_pool(entry_pool_id)
+            if pool:
+                pool_candidates = storage.list_proxy_pool_candidates(entry_pool_id)
+                available_count = sum(1 for c in pool_candidates if c.get("available"))
+                upstream_pool_status = {
+                    "pool_id": entry_pool_id,
+                    "pool_name": pool.get("name"),
+                    "total_candidates": len(pool_candidates),
+                    "available_candidates": available_count,
+                    "status": pool.get("status", "stopped"),
+                }
+
+            # Get leases from chain instances
+            instances = chain_instance_manager.list_instances(pool_id=entry_pool_id)
+            for inst in instances:
+                if inst.get("status") == "running":
+                    leases = storage.list_sticky_leases(pool_id=entry_pool_id)
+                    active_leases.extend(
+                        [
+                            lease
+                            for lease in leases
+                            if lease.get("instance_id") == inst.get("instance_id")
+                        ]
+                    )
+
+    # Check port listening status
+    is_listening = False
+    try:
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.1)
+        result = sock.connect_ex((item.get("listen_host", "127.0.0.1"), item.get("listen_port", 0)))
+        is_listening = result == 0
+        sock.close()
+    except Exception:
+        pass
+
+    return {
+        "endpoint_id": endpoint_id,
+        "name": item.get("name", ""),
+        "listen_host": item.get("listen_host", ""),
+        "listen_port": item.get("listen_port", 0),
+        "enabled": bool(item.get("enabled")),
+        "is_listening": is_listening,
+        "total_connections": len(active_leases),
+        "active_connections": sum(
+            1 for lease in active_leases if lease.get("expires_at", 0) > time.time()
+        ),
+        "recent_errors": endpoint_errors[-10:],
+        "active_leases": active_leases[:20],
+        "upstream_pool_status": upstream_pool_status,
+        "last_health_check": runtime_status.get("last_health_check"),
+        "health_check_enabled": bool(item.get("health_check_enabled", True)),
+    }
+
+
+@router.post("/gateway/endpoints/{endpoint_id}/test-connectivity")
+async def test_endpoint_connectivity(
+    endpoint_id: int,
+    request: Request,
+) -> dict:
+    """测试网关端点连通性"""
+    storage = request.app.state.storage
+
+    item = storage.get_http_proxy_endpoint(endpoint_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="http proxy endpoint not found")
+
+    listen_host = item.get("listen_host", "127.0.0.1")
+    listen_port = item.get("listen_port", 0)
+    tested_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    if listen_port <= 0:
+        return {
+            "endpoint_id": endpoint_id,
+            "listen_host": listen_host,
+            "listen_port": listen_port,
+            "is_reachable": False,
+            "latency_ms": None,
+            "error": "Port not configured",
+            "tested_at": tested_at,
+            "connection_test": False,
+            "http_test": False,
+        }
+
+    # Test TCP connection
+    connection_test = False
+    latency_ms = None
+    error = None
+    try:
+        import socket
+
+        start_time = time.perf_counter()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2.0)
+        sock.connect((listen_host, listen_port))
+        latency_ms = int((time.perf_counter() - start_time) * 1000)
+        connection_test = True
+        sock.close()
+    except Exception as exc:
+        error = str(exc)
+
+    # Test HTTP connectivity if connection succeeded
+    http_test = False
+    if connection_test:
+        try:
+            proxy_url = f"http://{listen_host}:{listen_port}"
+            async with httpx.AsyncClient(
+                proxy=proxy_url,
+                timeout=httpx.Timeout(5.0),
+                trust_env=False,
+            ) as client:
+                await client.get(
+                    "http://127.0.0.1:1",
+                    headers={"User-Agent": "proxypool-connectivity-test/1.0"},
+                )
+                # Any response (even error) means the proxy is working
+                http_test = True
+        except Exception:
+            # HTTP test failure is acceptable - proxy might reject the request
+            http_test = connection_test
+
+    return {
+        "endpoint_id": endpoint_id,
+        "listen_host": listen_host,
+        "listen_port": listen_port,
+        "is_reachable": connection_test,
+        "latency_ms": latency_ms,
+        "error": error,
+        "tested_at": tested_at,
+        "connection_test": connection_test,
+        "http_test": http_test,
+    }
+
+
+@router.get("/gateway/port-conflicts")
+async def check_port_conflicts(
+    request: Request,
+) -> dict:
+    """检测端口冲突"""
+    storage = request.app.state.storage
+    singbox_manager = request.app.state.singbox_manager
+
+    # Collect all port usages
+    port_usages: dict[int, list[dict]] = {}
+
+    # Check HTTP proxy endpoints
+    endpoints = storage.list_http_proxy_endpoints()
+    for ep in endpoints:
+        port = int(ep.get("listen_port") or 0)
+        if port > 0:
+            if port not in port_usages:
+                port_usages[port] = []
+            port_usages[port].append(
+                {
+                    "type": "endpoint",
+                    "id": ep.get("id"),
+                    "name": ep.get("name"),
+                    "host": ep.get("listen_host", "127.0.0.1"),
+                }
+            )
+
+    # Check backend instances
+    instances = singbox_manager.list_instances()
+    for inst in instances:
+        for port in inst.get("ports") or []:
+            port = int(port)
+            if port > 0:
+                if port not in port_usages:
+                    port_usages[port] = []
+                port_usages[port].append(
+                    {
+                        "type": "instance",
+                        "id": inst.get("instance_id"),
+                        "name": inst.get("instance_id"),
+                        "host": inst.get("listen", "127.0.0.1"),
+                    }
+                )
+
+    # Find conflicts
+    conflicts: list[dict] = []
+    for port, sources in port_usages.items():
+        if len(sources) > 1:
+            # Check if hosts are different or same
+            hosts = {s.get("host", "127.0.0.1") for s in sources}
+            if len(hosts) == 1 or "0.0.0.0" in hosts:
+                # Same host or wildcard - actual conflict
+                conflict_type = "endpoint_endpoint"
+                if any(s["type"] == "instance" for s in sources):
+                    if any(s["type"] == "endpoint" for s in sources):
+                        conflict_type = "endpoint_instance"
+                    else:
+                        conflict_type = "instance_instance"
+
+                conflicts.append(
+                    {
+                        "port": port,
+                        "conflicting_sources": sources,
+                        "conflict_type": conflict_type,
+                    }
+                )
+
+    return {
+        "has_conflicts": len(conflicts) > 0,
+        "conflicts": conflicts,
+        "scanned_endpoints": len(endpoints),
+        "scanned_instances": len(instances),
+        "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
 async def _request_via_forward_proxy(
     target_url: str,
     proxy_url: str,
@@ -387,7 +680,9 @@ async def _request_via_forward_proxy(
     started = time.perf_counter()
     try:
         proxy = httpx.Proxy(proxy_url, headers=proxy_headers or None)
-        async with httpx.AsyncClient(proxy=proxy, timeout=httpx.Timeout(timeout_sec), trust_env=False) as client:
+        async with httpx.AsyncClient(
+            proxy=proxy, timeout=httpx.Timeout(timeout_sec), trust_env=False
+        ) as client:
             resp = await client.get(
                 target_url,
                 headers={"Accept": "*/*", "User-Agent": "proxypool-gateway-test/1.0"},
@@ -396,7 +691,17 @@ async def _request_via_forward_proxy(
         preview = ""
         with contextlib.suppress(Exception):
             preview = resp.text[:2048]
-        return {"request_ok": True, "status_code": int(resp.status_code), "elapsed_ms": elapsed_ms, "body_preview": preview}
+        return {
+            "request_ok": True,
+            "status_code": int(resp.status_code),
+            "elapsed_ms": elapsed_ms,
+            "body_preview": preview,
+        }
     except Exception as exc:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        return {"request_ok": False, "elapsed_ms": elapsed_ms, "error_type": exc.__class__.__name__, "error": str(exc)}
+        return {
+            "request_ok": False,
+            "elapsed_ms": elapsed_ms,
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+        }

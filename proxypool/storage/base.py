@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import abc
 from pathlib import Path
-from typing import Any
 
 
 class BaseStorage(abc.ABC):
@@ -48,19 +47,23 @@ class BaseStorage(abc.ABC):
 
 class StorageError(Exception):
     """存储异常基类"""
+
     pass
 
 
 class NotFoundError(StorageError):
     """资源未找到"""
+
     pass
 
 
 class ConflictError(StorageError):
     """资源冲突"""
+
     pass
 
 
 class ValidationError(StorageError):
     """数据验证错误"""
+
     pass

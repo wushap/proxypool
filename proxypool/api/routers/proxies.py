@@ -1,23 +1,39 @@
 """
 代理节点管理路由
 
-提供代理节点的查询、导入、测试、删除等端点。
+提供代理节点的查询、导入、测试、删除、导出等端点。
 """
 
 import asyncio
 import base64
+import csv
+import io
+import logging
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from proxypool.api.schemas import ImportFilesRequest, ImportUrlsRequest, ImportSourcesRequest
+from proxypool.api.schemas import (
+    ImportFilesRequest,
+    ImportSourcesRequest,
+    ImportUrlsRequest,
+    ProxyBatchTestRequest,
+)
 from proxypool.security.api_helpers import validate_file_path_or_raise
 
-router = APIRouter(prefix="/api", tags=["proxies"])
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api", tags=["代理节点"])
 
 
-@router.get("/proxies")
+@router.get(
+    "/proxies",
+    summary="获取代理节点列表",
+    description="支持多种过滤条件和排序方式的代理节点查询",
+    response_description="代理节点列表",
+)
 async def list_proxies(
     request: Request,
     limit: int = Query(default=100, ge=1, le=5000),
@@ -29,13 +45,18 @@ async def list_proxies(
     geo_country: str | None = Query(default=None),
     geo_location: str | None = Query(default=None),
     openai_filter: str | None = Query(default=None, pattern="^(unlocked|blocked|unchecked)$"),
-    ip_purity_filter: str | None = Query(default=None, pattern="^(checked|unchecked|residential|non_residential|unknown)$"),
+    ip_purity_filter: str | None = Query(
+        default=None, pattern="^(checked|unchecked|residential|non_residential|unknown)$"
+    ),
     fallback_front_filter: str | None = Query(default=None, pattern="^(has|none)$"),
     speed_min_mbps: float | None = Query(default=None, ge=0),
     sort_by: str = Query(default="latency"),
     sort_order: str = Query(default="asc"),
 ) -> dict:
-    """获取代理节点列表"""
+    """获取代理节点列表。
+
+    支持多种过滤条件和排序方式。
+    """
     storage = request.app.state.storage
     items = storage.list_proxies_filtered(
         limit=limit,
@@ -59,7 +80,12 @@ async def list_proxies(
     }
 
 
-@router.get("/subscription")
+@router.get(
+    "/subscription",
+    summary="获取订阅链接",
+    description="返回代理节点的订阅链接，支持Base64编码",
+    response_description="订阅链接文本",
+)
 async def subscription(
     request: Request,
     protocol: str | None = Query(default=None),
@@ -80,7 +106,12 @@ async def subscription(
     return PlainTextResponse(content=text)
 
 
-@router.post("/collector/import-files")
+@router.post(
+    "/collector/import-files",
+    summary="从文件导入代理",
+    description="从本地文件或上传的文件中导入代理节点",
+    response_description="导入结果",
+)
 async def import_files(
     body: ImportFilesRequest,
     request: Request,
@@ -153,7 +184,9 @@ async def import_sources(
             validated_path = validate_file_path_or_raise(source)
             validated_sources.append(str(validated_path))
 
-    report = await asyncio.to_thread(collector.collect_from_sources, validated_sources, body.timeout_sec)
+    report = await asyncio.to_thread(
+        collector.collect_from_sources, validated_sources, body.timeout_sec
+    )
     return _collect_report_to_dict(report)
 
 
@@ -200,7 +233,9 @@ async def delete_selected_proxies(
 ) -> dict:
     """删除选中的代理"""
     storage = request.app.state.storage
-    keys = [str(key or "").strip() for key in body.get("normalized_keys", []) if str(key or "").strip()]
+    keys = [
+        str(key or "").strip() for key in body.get("normalized_keys", []) if str(key or "").strip()
+    ]
     if not keys:
         raise HTTPException(status_code=400, detail="normalized_keys is empty")
     deleted = storage.delete_proxies_by_keys(keys)
@@ -230,6 +265,7 @@ async def enrich_ip_purity(
 def _collect_report_to_dict(report) -> dict:
     """将收集报告转换为字典"""
     from dataclasses import asdict
+
     return {
         "total_sources": report.total_sources,
         "total_parsed": report.total_parsed,
@@ -252,4 +288,158 @@ def _read_sources_file(path: Path) -> list[str]:
         if not text or text.startswith("#"):
             continue
         sources.append(text)
-    return sources
+
+
+@router.post("/proxies/batch-test")
+async def batch_test_proxies(
+    body: ProxyBatchTestRequest,
+    request: Request,
+) -> dict:
+    """批量测试代理节点"""
+    storage = request.app.state.storage
+    tester = request.app.state.tester
+
+    total = len(body.normalized_keys)
+    completed = 0
+    success = 0
+    failed = 0
+    results: list[dict] = []
+
+    for key in body.normalized_keys:
+        try:
+            # Get proxy info
+            proxy = storage.get_proxy_by_key(key)
+            if proxy is None:
+                results.append(
+                    {
+                        "normalized_key": key,
+                        "success": False,
+                        "error": "proxy not found",
+                    }
+                )
+                failed += 1
+                completed += 1
+                continue
+
+            # Test the proxy
+            report = await tester.run_one(
+                normalized_key=key,
+                fallback_front_proxy_keys=[],
+                fallback_front_max_attempts=0,
+            )
+
+            result_ok = report.available if hasattr(report, "available") else False
+            latency_ms = report.latency_ms if hasattr(report, "latency_ms") else None
+
+            results.append(
+                {
+                    "normalized_key": key,
+                    "success": result_ok,
+                    "latency_ms": latency_ms,
+                }
+            )
+
+            if result_ok:
+                success += 1
+            else:
+                failed += 1
+
+            completed += 1
+        except Exception as exc:
+            results.append(
+                {
+                    "normalized_key": key,
+                    "success": False,
+                    "error": str(exc),
+                }
+            )
+            failed += 1
+            completed += 1
+
+    return {
+        "total": total,
+        "completed": completed,
+        "success": success,
+        "failed": failed,
+        "results": results,
+    }
+
+
+@router.get("/proxies/export")
+async def export_proxies_csv(
+    request: Request,
+    protocol: str | None = Query(default=None),
+    available: bool | None = Query(default=None),
+    source: str | None = Query(default=None),
+) -> PlainTextResponse:
+    """导出代理列表为CSV格式。
+
+    返回包含代理信息的CSV文件，支持UTF-8 BOM以兼容Excel中文字符显示。
+    """
+    storage = request.app.state.storage
+
+    # Get all proxies (with optional filters)
+    items = storage.list_proxies_filtered(
+        limit=10000,
+        offset=0,
+        protocol=protocol,
+        available=available,
+        source_keyword=source,
+        sort_by="latency",
+        sort_order="asc",
+    )
+
+    # Create CSV with UTF-8 BOM for Excel compatibility
+    output = io.StringIO()
+    output.write("﻿")  # UTF-8 BOM
+
+    writer = csv.writer(output)
+
+    # Write headers
+    writer.writerow(
+        [
+            "地址",
+            "协议",
+            "延迟(ms)",
+            "评分",
+            "状态",
+            "国家",
+            "城市",
+            "来源",
+            "最后检查时间",
+            "OpenAI解锁",
+        ]
+    )
+
+    # Write data rows
+    for item in items:
+        writer.writerow(
+            [
+                f"{item.get('host', '')}:{item.get('port', '')}",
+                item.get("protocol", ""),
+                item.get("latency_ms", ""),
+                item.get("score", ""),
+                "可用" if item.get("available") else "不可用",
+                item.get("country", ""),
+                item.get("city", ""),
+                item.get("source", ""),
+                item.get("last_checked_at", ""),
+                "是"
+                if item.get("openai_unlocked")
+                else "否"
+                if item.get("openai_unlocked") is not None
+                else "未知",
+            ]
+        )
+
+    # Generate filename with date
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"proxies-export-{date_str}.csv"
+
+    return PlainTextResponse(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+        },
+    )

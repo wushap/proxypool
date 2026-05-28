@@ -4,6 +4,7 @@ Security Helper Functions for API Routes.
 This module provides helper functions for integrating security checks
 into FastAPI route handlers.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +13,6 @@ from fastapi import HTTPException
 
 from proxypool.security.file_validator import PathTraversalError, validate_file_path
 from proxypool.security.url_validator import (
-    SSRFProtectionError,
     is_safe_url,
 )
 

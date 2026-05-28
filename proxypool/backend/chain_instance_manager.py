@@ -109,7 +109,9 @@ class ChainInstanceManager:
         if self._is_instance_live(item):
             return item
         if not self._is_instance_port_available(item):
-            item = self._update_instance_port(item, self._allocate_port(exclude_instance_id=str(item.get("instance_id") or "")))
+            item = self._update_instance_port(
+                item, self._allocate_port(exclude_instance_id=str(item.get("instance_id") or ""))
+            )
         return self.start_instance(instance_id)
 
     def build_instance_id(
@@ -119,7 +121,9 @@ class ChainInstanceManager:
         inbound_type: str,
         endpoint_id: int = 0,
     ) -> str:
-        resolved_hops = [str(item or "").strip() for item in hop_node_keys if str(item or "").strip()]
+        resolved_hops = [
+            str(item or "").strip() for item in hop_node_keys if str(item or "").strip()
+        ]
         if not resolved_hops:
             raise ValueError("hop_node_keys is empty")
         route_part = "-".join(key[:10] for key in resolved_hops[:4])
@@ -134,7 +138,9 @@ class ChainInstanceManager:
             if int(item.get("port") or 0) > 0
             and str(item.get("instance_id") or "") != str(exclude_instance_id or "")
             and str(item.get("status") or "") == "running"
-            and self._is_tcp_open(str(item.get("listen") or listen), int(item.get("port") or 0), timeout_sec=0.05)
+            and self._is_tcp_open(
+                str(item.get("listen") or listen), int(item.get("port") or 0), timeout_sec=0.05
+            )
         }
         for port in range(int(port_range["start"]), int(port_range["end"]) + 1):
             if port not in used_ports and self._is_bind_available(listen, port):
@@ -164,7 +170,9 @@ class ChainInstanceManager:
             route_signature=str(item.get("route_signature") or ""),
         )
         if not self._is_bind_available(spec.listen, spec.port):
-            item = self._update_instance_port(item, self._allocate_port(exclude_instance_id=str(item["instance_id"])))
+            item = self._update_instance_port(
+                item, self._allocate_port(exclude_instance_id=str(item["instance_id"]))
+            )
             spec = ChainInstanceSpec(
                 instance_id=str(item["instance_id"]),
                 pool_id=int(item["pool_id"]),
@@ -304,7 +312,9 @@ class ChainInstanceManager:
             front_node_key=next_front,
             exit_node_key=next_exit,
             hop_node_keys=next_hops,
-            route_signature=str(route_signature or item.get("route_signature") or ">".join(next_hops)),
+            route_signature=str(
+                route_signature or item.get("route_signature") or ">".join(next_hops)
+            ),
             listen=str(item["listen"]),
             port=int(item["port"]),
             inbound_type=str(item["inbound_type"]),
@@ -465,8 +475,12 @@ class ChainInstanceManager:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         return lines[-1] if lines else text.strip()
 
-    def _resolve_hop_keys(self, front_node_key: str, exit_node_key: str, hop_node_keys: list[str] | None) -> list[str]:
-        resolved = [str(item or "").strip() for item in list(hop_node_keys or []) if str(item or "").strip()]
+    def _resolve_hop_keys(
+        self, front_node_key: str, exit_node_key: str, hop_node_keys: list[str] | None
+    ) -> list[str]:
+        resolved = [
+            str(item or "").strip() for item in list(hop_node_keys or []) if str(item or "").strip()
+        ]
         if resolved:
             return resolved
         front = str(front_node_key or "").strip()

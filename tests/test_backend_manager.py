@@ -1,8 +1,8 @@
+import socket
 import tempfile
 import unittest
-import socket
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import patch
 
 from proxypool.backend.singbox_manager import SingBoxBackendManager, SingBoxRoute
 from proxypool.models import ProxyNode
@@ -49,7 +49,9 @@ class TestSingBoxBackendManager(unittest.TestCase):
             storage.upsert_proxy(n4)
 
             routes = [
-                SingBoxRoute(inbound_port=1081, proxy_key=n1.normalized_key(), inbound_type="socks"),
+                SingBoxRoute(
+                    inbound_port=1081, proxy_key=n1.normalized_key(), inbound_type="socks"
+                ),
                 SingBoxRoute(
                     inbound_port=1082,
                     inbound_type="http",
@@ -121,7 +123,9 @@ class TestSingBoxBackendManager(unittest.TestCase):
                     log_file=base / "runtime" / "singbox.log",
                     backend_engine="singbox",
                 )
-                manager.set_routes([SingBoxRoute(inbound_port=port, proxy_key=node.normalized_key())])
+                manager.set_routes(
+                    [SingBoxRoute(inbound_port=port, proxy_key=node.normalized_key())]
+                )
                 with self.assertRaises(RuntimeError) as ctx:
                     manager.start()
                 self.assertIn("already in use", str(ctx.exception))
@@ -275,7 +279,9 @@ class TestSingBoxBackendManager(unittest.TestCase):
             )
 
             manager.set_routes([SingBoxRoute(inbound_port=1081, exit_proxy_key="default-key")])
-            manager.set_instance_routes("alpha", [SingBoxRoute(inbound_port=2081, exit_proxy_key="alpha-key")])
+            manager.set_instance_routes(
+                "alpha", [SingBoxRoute(inbound_port=2081, exit_proxy_key="alpha-key")]
+            )
 
             self.assertEqual(manager.get_routes()[0].inbound_port, 1081)
             alpha_routes = manager.get_instance_routes("alpha")
@@ -340,8 +346,20 @@ class TestSingBoxBackendManager(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             storage = SQLiteProxyStorage(base / "proxies.db")
-            old = ProxyNode(protocol="trojan", host="old.example.com", port=443, raw_link="trojan://old", extra={"password": "p"})
-            new = ProxyNode(protocol="trojan", host="new.example.com", port=443, raw_link="trojan://new", extra={"password": "p"})
+            old = ProxyNode(
+                protocol="trojan",
+                host="old.example.com",
+                port=443,
+                raw_link="trojan://old",
+                extra={"password": "p"},
+            )
+            new = ProxyNode(
+                protocol="trojan",
+                host="new.example.com",
+                port=443,
+                raw_link="trojan://new",
+                extra={"password": "p"},
+            )
             storage.upsert_proxy(old)
             storage.upsert_proxy(new)
             manager = SingBoxBackendManager(
@@ -353,7 +371,9 @@ class TestSingBoxBackendManager(unittest.TestCase):
                 log_file=base / "runtime" / "singbox.log",
                 backend_engine="singbox",
             )
-            manager.set_routes([SingBoxRoute(inbound_port=1081, exit_proxy_key=old.normalized_key())])
+            manager.set_routes(
+                [SingBoxRoute(inbound_port=1081, exit_proxy_key=old.normalized_key())]
+            )
 
             changed = manager.replace_failed_exit_proxy(old.normalized_key(), new.normalized_key())
 
@@ -387,7 +407,9 @@ class TestSingBoxBackendManager(unittest.TestCase):
                 auto_restart_max=2,
             )
             manager.set_routes([SingBoxRoute(inbound_port=1081, proxy_key=node.normalized_key())])
-            with patch.object(manager, "start", side_effect=RuntimeError("boot failed")) as mocked_start:
+            with patch.object(
+                manager, "start", side_effect=RuntimeError("boot failed")
+            ) as mocked_start:
                 r1 = manager.health_check(auto_restart=True)
                 r2 = manager.health_check(auto_restart=True)
                 r3 = manager.health_check(auto_restart=True)

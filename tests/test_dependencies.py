@@ -1,20 +1,19 @@
 """
 Tests for FastAPI dependencies.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 from proxypool.api.dependencies import (
+    get_collector,
+    get_pool_service,
     get_settings,
     get_storage,
-    get_collector,
-    get_tester,
-    get_pool_service,
     get_task_manager,
+    get_tester,
 )
 
 

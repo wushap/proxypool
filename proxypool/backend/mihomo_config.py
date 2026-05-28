@@ -40,7 +40,9 @@ def build_mihomo_chain_config(spec: ChainInstanceSpec) -> dict[str, Any]:
     }
 
 
-def _build_mihomo_proxy(proxy: dict[str, Any], name: str, dialer_proxy: str | None = None) -> dict[str, Any]:
+def _build_mihomo_proxy(
+    proxy: dict[str, Any], name: str, dialer_proxy: str | None = None
+) -> dict[str, Any]:
     protocol = str(proxy.get("protocol") or "").strip().lower()
     host = str(proxy.get("host") or "").strip()
     port = int(proxy.get("port") or 0)
@@ -111,7 +113,9 @@ def _build_mihomo_proxy(proxy: dict[str, Any], name: str, dialer_proxy: str | No
         item["uuid"] = uuid
         alter_id = int(extra.get("alterId") or extra.get("alter_id") or 0)
         item["alterId"] = alter_id
-        item["cipher"] = str(extra.get("cipher") or extra.get("security") or "auto").strip() or "auto"
+        item["cipher"] = (
+            str(extra.get("cipher") or extra.get("security") or "auto").strip() or "auto"
+        )
         _apply_common_tls(item, extra)
         _apply_network_opts(item, extra)
         return item
@@ -146,7 +150,9 @@ def _apply_common_tls(item: dict[str, Any], extra: dict[str, Any]) -> None:
     security = str(extra.get("security") or extra.get("tls") or "").strip().lower()
     sni = str(extra.get("sni") or extra.get("peer") or extra.get("servername") or "").strip()
     fingerprint = str(extra.get("fp") or extra.get("client_fingerprint") or "").strip()
-    insecure = _is_truthy(extra.get("allowInsecure") or extra.get("allow_insecure") or extra.get("insecure"))
+    insecure = _is_truthy(
+        extra.get("allowInsecure") or extra.get("allow_insecure") or extra.get("insecure")
+    )
 
     if not (security == "tls" or sni or fingerprint or insecure):
         return
@@ -161,7 +167,9 @@ def _apply_common_tls(item: dict[str, Any], extra: dict[str, Any]) -> None:
 
 
 def _apply_network_opts(item: dict[str, Any], extra: dict[str, Any]) -> None:
-    network = str(extra.get("type") or extra.get("network") or extra.get("net") or "").strip().lower()
+    network = (
+        str(extra.get("type") or extra.get("network") or extra.get("net") or "").strip().lower()
+    )
     if not network or network in {"tcp", "none"}:
         return
 

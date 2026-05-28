@@ -7,30 +7,29 @@ This module provides:
 - Dangerous port detection (SSH, Redis, MongoDB, etc.)
 - URL format validation
 """
+
 from __future__ import annotations
 
 import ipaddress
 import socket
-from typing import Optional
 from urllib.parse import urlparse
-
 
 # Private IP address ranges
 PRIVATE_IP_RANGES = [
-    ipaddress.ip_network("10.0.0.0/8"),      # Class A private
-    ipaddress.ip_network("172.16.0.0/12"),    # Class B private
-    ipaddress.ip_network("192.168.0.0/16"),   # Class C private
-    ipaddress.ip_network("127.0.0.0/8"),      # Loopback
-    ipaddress.ip_network("169.254.0.0/16"),   # Link-local (AWS/GCP metadata)
-    ipaddress.ip_network("::1/128"),           # IPv6 loopback
-    ipaddress.ip_network("fc00::/7"),         # IPv6 private
+    ipaddress.ip_network("10.0.0.0/8"),  # Class A private
+    ipaddress.ip_network("172.16.0.0/12"),  # Class B private
+    ipaddress.ip_network("192.168.0.0/16"),  # Class C private
+    ipaddress.ip_network("127.0.0.0/8"),  # Loopback
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local (AWS/GCP metadata)
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),  # IPv6 private
 ]
 
 # Cloud metadata endpoints
 METADATA_ENDPOINTS = {
-    "169.254.169.254",      # AWS/GCP/Azure metadata
+    "169.254.169.254",  # AWS/GCP/Azure metadata
     "metadata.google.internal",  # GCP metadata
-    "169.254.170.2",        # AWS ECS container metadata
+    "169.254.170.2",  # AWS ECS container metadata
 }
 
 # Dangerous ports (well-known services that should not be accessed)
@@ -39,26 +38,31 @@ DANGEROUS_PORTS = {22, 23, 445, 3389, 5900, 6379, 11211, 27017}
 
 class SSRFProtectionError(Exception):
     """Base exception for SSRF protection errors."""
+
     pass
 
 
 class PrivateIPError(SSRFProtectionError):
     """Attempted access to private/internal IP address."""
+
     pass
 
 
 class MetadataEndpointError(SSRFProtectionError):
     """Attempted access to cloud metadata endpoint."""
+
     pass
 
 
 class DangerousPortError(SSRFProtectionError):
     """Attempted access to dangerous port."""
+
     pass
 
 
 class URLValidationError(SSRFProtectionError):
     """URL format validation error."""
+
     pass
 
 
@@ -117,17 +121,13 @@ def validate_url(
 
         # Check metadata endpoints (before private IP check)
         if not allow_metadata and hostname in METADATA_ENDPOINTS:
-            raise MetadataEndpointError(
-                f"Access to metadata endpoint '{hostname}' is forbidden"
-            )
+            raise MetadataEndpointError(f"Access to metadata endpoint '{hostname}' is forbidden")
 
         # Check private IP ranges
         if not allow_private_ips:
             for network in PRIVATE_IP_RANGES:
                 if ip_obj in network:
-                    raise PrivateIPError(
-                        f"IP {ip} ({hostname}) is in private network {network}"
-                    )
+                    raise PrivateIPError(f"IP {ip} ({hostname}) is in private network {network}")
     except (socket.gaierror, socket.herror) as e:
         raise URLValidationError(f"DNS resolution failed for '{hostname}': {e}")
     except (PrivateIPError, MetadataEndpointError):
@@ -143,7 +143,7 @@ def validate_url(
     return parsed
 
 
-def is_safe_url(url: str) -> tuple[bool, Optional[str]]:
+def is_safe_url(url: str) -> tuple[bool, str | None]:
     """
     Check if URL is safe (non-throwing version).
 

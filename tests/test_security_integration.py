@@ -1,6 +1,7 @@
 """
 Security Integration Tests - Validates security checks in API schemas and routes.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -141,9 +142,7 @@ class TestSSRFProtectionInSchemas:
             AutoTaskConfigRequest(speed_test_url="http://example.com:6379/")
 
     def test_auto_task_config_allows_public_url(self):
-        req = AutoTaskConfigRequest(
-            speed_test_url="https://speed.cloudflare.com/__down?bytes=1000"
-        )
+        req = AutoTaskConfigRequest(speed_test_url="https://speed.cloudflare.com/__down?bytes=1000")
         assert "cloudflare" in req.speed_test_url
 
 
@@ -152,6 +151,7 @@ class TestPathTraversalInSchemas:
 
     def test_import_files_accepts_valid_paths(self):
         from proxypool.api.schemas import ImportFilesRequest
+
         req = ImportFilesRequest(paths=["/data/proxies.txt", "configs/sources.txt"])
         assert len(req.paths) == 2
 

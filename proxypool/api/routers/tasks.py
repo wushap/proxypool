@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-router = APIRouter(prefix="/api", tags=["tasks"])
+router = APIRouter(prefix="/api", tags=["任务"])
 
 
 @router.get("/tasks")
@@ -35,8 +35,12 @@ async def update_auto_task_config(body: dict, request: Request) -> dict:
     """更新自动任务配置"""
     app_state = request.app.state
     url = str(body.get("speed_test_url") or "").strip()
-    if body.get("speed_test_enabled") and not (url.startswith("http://") or url.startswith("https://")):
-        raise HTTPException(status_code=400, detail="speed_test_url must start with http:// or https://")
+    if body.get("speed_test_enabled") and not (
+        url.startswith("http://") or url.startswith("https://")
+    ):
+        raise HTTPException(
+            status_code=400, detail="speed_test_url must start with http:// or https://"
+        )
     app_state.auto_task_config = body
     return {
         "item": dict(app_state.auto_task_config),

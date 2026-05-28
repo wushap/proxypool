@@ -7,6 +7,7 @@ This module provides:
 - Symlink detection
 - Safe file reading with size limits
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,11 +15,13 @@ from pathlib import Path
 
 class PathTraversalError(Exception):
     """Path traversal attack detected."""
+
     pass
 
 
 class PathValidationError(Exception):
     """Path validation error."""
+
     pass
 
 
@@ -64,9 +67,7 @@ def validate_file_path(
     traversal_patterns = ["..", "~", "$", "`"]
     for pattern in traversal_patterns:
         if pattern in path_str:
-            raise PathTraversalError(
-                f"Path contains traversal character '{pattern}': {path_str}"
-            )
+            raise PathTraversalError(f"Path contains traversal character '{pattern}': {path_str}")
 
     # 3. Validate path is within allowed directories (skip if empty list = no restriction)
     if allowed_directories:
@@ -127,9 +128,7 @@ def safe_read_file(
     # Check file size
     file_size = abs_path.stat().st_size
     if file_size > max_size_bytes:
-        raise ValueError(
-            f"File too large: {file_size} bytes (max: {max_size_bytes})"
-        )
+        raise ValueError(f"File too large: {file_size} bytes (max: {max_size_bytes})")
 
     return abs_path.read_text(encoding="utf-8", errors="ignore")
 

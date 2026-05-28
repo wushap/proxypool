@@ -3,14 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import socket
 import shutil
+import socket
 import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -78,11 +78,16 @@ class SingBoxBackendManager:
         if auto_restart and self.is_running():
             self.restart()
 
-    def set_instance_routes(self, instance_id: str, routes: list[SingBoxRoute], auto_restart: bool = False) -> None:
+    def set_instance_routes(
+        self, instance_id: str, routes: list[SingBoxRoute], auto_restart: bool = False
+    ) -> None:
         safe_id = _safe_instance_id(instance_id)
         routes_file = self._instance_routes_file(safe_id)
         self._write_routes_file(routes_file, routes)
-        existing = {str(item.get("instance_id") or ""): item for item in self.storage.list_backend_instances()}
+        existing = {
+            str(item.get("instance_id") or ""): item
+            for item in self.storage.list_backend_instances()
+        }
         item = existing.get(safe_id, {})
         status = str(item.get("status") or "stopped")
         was_running = status == "running" or self._is_instance_process_running(safe_id)
@@ -103,7 +108,10 @@ class SingBoxBackendManager:
 
     def create_instance(self, instance_id: str) -> dict[str, Any]:
         safe_id = _safe_instance_id(instance_id)
-        existing = {str(item.get("instance_id") or ""): item for item in self.storage.list_backend_instances()}
+        existing = {
+            str(item.get("instance_id") or ""): item
+            for item in self.storage.list_backend_instances()
+        }
         item = existing.get(safe_id)
         routes = self.get_instance_routes(safe_id)
         if item is not None:
@@ -138,7 +146,9 @@ class SingBoxBackendManager:
         )
         return created
 
-    def replace_failed_exit_proxy(self, old_key: str, new_key: str, auto_restart: bool = False) -> int:
+    def replace_failed_exit_proxy(
+        self, old_key: str, new_key: str, auto_restart: bool = False
+    ) -> int:
         old = str(old_key or "").strip()
         new = str(new_key or "").strip()
         if not old or not new or old == new:
@@ -266,7 +276,9 @@ class SingBoxBackendManager:
     def start(self) -> None:
         self.start_instance("default")
 
-    def start_instance(self, instance_id: str = "default", routes: list[SingBoxRoute] | None = None) -> None:
+    def start_instance(
+        self, instance_id: str = "default", routes: list[SingBoxRoute] | None = None
+    ) -> None:
         safe_id = _safe_instance_id(instance_id)
         with self._lock:
             self._pid_state = 0
@@ -320,7 +332,9 @@ class SingBoxBackendManager:
                     ports=[route.inbound_port for route in use_routes],
                     status="running",
                 )
-                self._record_process_event(action="start", pid=self._pid_state, result="success", detail="started")
+                self._record_process_event(
+                    action="start", pid=self._pid_state, result="success", detail="started"
+                )
             except Exception as exc:
                 process = self._processes.get(safe_id)
                 if process and process.poll() is None:
@@ -340,8 +354,15 @@ class SingBoxBackendManager:
                     config_file=str(runtime_config_file or self.runtime_config_file),
                     routes_file=str(self._instance_routes_file(safe_id)),
                     log_file=str(self._instance_log_file(safe_id)),
-                    listen=_routes_listen_summary(routes if routes is not None else self.get_instance_routes(safe_id)),
-                    ports=[route.inbound_port for route in (routes if routes is not None else self.get_instance_routes(safe_id))],
+                    listen=_routes_listen_summary(
+                        routes if routes is not None else self.get_instance_routes(safe_id)
+                    ),
+                    ports=[
+                        route.inbound_port
+                        for route in (
+                            routes if routes is not None else self.get_instance_routes(safe_id)
+                        )
+                    ],
                     status="failed",
                     last_error=str(exc),
                 )
@@ -360,7 +381,9 @@ class SingBoxBackendManager:
                     self._process = None
                 self._pid_state = -1
                 self.storage.update_backend_instance_status(safe_id, "stopped", pid=-1)
-                self._record_process_event(action="stop", pid=-1, result="noop", detail="already stopped")
+                self._record_process_event(
+                    action="stop", pid=-1, result="noop", detail="already stopped"
+                )
                 return
             if process.poll() is not None:
                 pid = int(process.pid)
@@ -369,7 +392,9 @@ class SingBoxBackendManager:
                     self._process = None
                 self._pid_state = -1
                 self.storage.update_backend_instance_status(safe_id, "exited", pid=pid)
-                self._record_process_event(action="stop", pid=pid, result="success", detail="already exited")
+                self._record_process_event(
+                    action="stop", pid=pid, result="success", detail="already exited"
+                )
                 return
             pid = int(process.pid)
             process.terminate()
@@ -395,7 +420,9 @@ class SingBoxBackendManager:
             action="delete_instance",
             pid=-1,
             result=result,
-            detail=f"deleted instance {safe_id}" if deleted > 0 else f"instance not found: {safe_id}",
+            detail=f"deleted instance {safe_id}"
+            if deleted > 0
+            else f"instance not found: {safe_id}",
         )
         return deleted > 0
 
@@ -427,12 +454,18 @@ class SingBoxBackendManager:
             "binary": self.binary,
             "test_url": self.test_url,
             "running": running,
-            "pid": self._pid_state if not running else int(self._process.pid) if self._process else self._pid_state,
+            "pid": self._pid_state
+            if not running
+            else int(self._process.pid)
+            if self._process
+            else self._pid_state,
             "auto_restart_max": self.auto_restart_max,
             "auto_restart_attempts": self._auto_restart_attempts,
             "routes_count": len(routes),
             "routes": [asdict(route) for route in routes],
-            "runtime_config_file": str(self._current_runtime_config_file or self.runtime_config_file),
+            "runtime_config_file": str(
+                self._current_runtime_config_file or self.runtime_config_file
+            ),
             "log_file": str(self.log_file),
             "instances": self.list_instances(),
         }
@@ -440,8 +473,12 @@ class SingBoxBackendManager:
     def list_instances(self) -> list[dict[str, Any]]:
         instances = self.storage.list_backend_instances()
         for item in instances:
-            if str(item.get("status") or "") == "running" and not _is_process_alive(int(item.get("pid") or -1)):
-                self.storage.update_backend_instance_status(str(item.get("instance_id") or ""), "exited", pid=int(item.get("pid") or -1))
+            if str(item.get("status") or "") == "running" and not _is_process_alive(
+                int(item.get("pid") or -1)
+            ):
+                self.storage.update_backend_instance_status(
+                    str(item.get("instance_id") or ""), "exited", pid=int(item.get("pid") or -1)
+                )
         return self.storage.list_backend_instances()
 
     def health_check(self, timeout_sec: float = 1.5, auto_restart: bool = False) -> dict[str, Any]:
@@ -475,7 +512,13 @@ class SingBoxBackendManager:
         if needs_restart:
             if auto_restart:
                 return self._try_auto_restart(reason=down_reason, routes=routes, pid=pid)
-            return {"running": False, "ok": False, "reason": down_reason, "pid": -1, "restart_attempted": False}
+            return {
+                "running": False,
+                "ok": False,
+                "reason": down_reason,
+                "pid": -1,
+                "restart_attempted": False,
+            }
 
         ready = self._wait_inbound_ports_ready(routes, timeout_sec=max(0.3, timeout_sec))
         if not ready:
@@ -488,7 +531,9 @@ class SingBoxBackendManager:
                 )
             self._last_health_ok = False
             if auto_restart:
-                return self._try_auto_restart(reason="inbound ports not reachable", routes=routes, pid=pid)
+                return self._try_auto_restart(
+                    reason="inbound ports not reachable", routes=routes, pid=pid
+                )
             return {
                 "running": True,
                 "ok": False,
@@ -531,14 +576,16 @@ class SingBoxBackendManager:
                         "available": False,
                         "latency_ms": None,
                         "error": f"latency check exception: {exc}",
-                        "checked_at": datetime.now(timezone.utc).isoformat(),
+                        "checked_at": datetime.now(UTC).isoformat(),
                     }
                 results.append(item)
 
         return sorted(results, key=lambda x: int(x.get("route_index", 0)))
 
-    def measure_route_latency(self, route: SingBoxRoute, timeout_sec: float = 10.0, route_index: int = -1) -> dict[str, Any]:
-        now = datetime.now(timezone.utc).isoformat()
+    def measure_route_latency(
+        self, route: SingBoxRoute, timeout_sec: float = 10.0, route_index: int = -1
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC).isoformat()
         base = asdict(route)
         inbound_type = str(route.inbound_type or "").lower()
         if inbound_type not in {"socks", "http"}:
@@ -613,7 +660,7 @@ class SingBoxBackendManager:
         }
 
     def _new_runtime_config_file(self, instance_id: str = "default") -> Path:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
         base_name = self.runtime_config_file.stem or "singbox"
         suffix = _safe_instance_id(instance_id)
         return self.runtime_config_file.with_name(f"{base_name}-{suffix}-{stamp}.json")
@@ -622,13 +669,17 @@ class SingBoxBackendManager:
         safe_id = _safe_instance_id(instance_id)
         if safe_id == "default":
             return self.log_file
-        return self.log_file.with_name(f"{self.log_file.stem}-{safe_id}{self.log_file.suffix or '.log'}")
+        return self.log_file.with_name(
+            f"{self.log_file.stem}-{safe_id}{self.log_file.suffix or '.log'}"
+        )
 
     def _instance_routes_file(self, instance_id: str) -> Path:
         safe_id = _safe_instance_id(instance_id)
         if safe_id == "default":
             return self.routes_file
-        return self.routes_file.with_name(f"{self.routes_file.stem}-{safe_id}{self.routes_file.suffix or '.json'}")
+        return self.routes_file.with_name(
+            f"{self.routes_file.stem}-{safe_id}{self.routes_file.suffix or '.json'}"
+        )
 
     def _record_process_event(self, action: str, pid: int, result: str, detail: str = "") -> None:
         try:
@@ -668,7 +719,9 @@ class SingBoxBackendManager:
             time.sleep(0.1)
         return False
 
-    def _try_auto_restart(self, reason: str, routes: list[SingBoxRoute], pid: int = -1) -> dict[str, Any]:
+    def _try_auto_restart(
+        self, reason: str, routes: list[SingBoxRoute], pid: int = -1
+    ) -> dict[str, Any]:
         if not routes:
             return {
                 "running": False,
@@ -749,7 +802,9 @@ class SingBoxBackendManager:
         """Async wrapper for start()."""
         await asyncio.to_thread(self.start)
 
-    async def start_instance_async(self, instance_id: str = "default", routes: list[SingBoxRoute] | None = None) -> None:
+    async def start_instance_async(
+        self, instance_id: str = "default", routes: list[SingBoxRoute] | None = None
+    ) -> None:
         """Async wrapper for start_instance()."""
         await asyncio.to_thread(self.start_instance, instance_id, routes)
 
@@ -765,15 +820,21 @@ class SingBoxBackendManager:
         """Async wrapper for restart()."""
         await asyncio.to_thread(self.restart)
 
-    async def health_check_async(self, timeout_sec: float = 1.5, auto_restart: bool = False) -> dict[str, Any]:
+    async def health_check_async(
+        self, timeout_sec: float = 1.5, auto_restart: bool = False
+    ) -> dict[str, Any]:
         """Async wrapper for health_check()."""
         return await asyncio.to_thread(self.health_check, timeout_sec, auto_restart)
 
-    async def measure_route_latency_async(self, route: SingBoxRoute, timeout_sec: float = 10.0, route_index: int = -1) -> dict[str, Any]:
+    async def measure_route_latency_async(
+        self, route: SingBoxRoute, timeout_sec: float = 10.0, route_index: int = -1
+    ) -> dict[str, Any]:
         """Async wrapper for measure_route_latency()."""
         return await asyncio.to_thread(self.measure_route_latency, route, timeout_sec, route_index)
 
-    async def measure_all_routes_latency_async(self, timeout_sec: float = 10.0) -> list[dict[str, Any]]:
+    async def measure_all_routes_latency_async(
+        self, timeout_sec: float = 10.0
+    ) -> list[dict[str, Any]]:
         """Async wrapper for measure_all_routes_latency()."""
         return await asyncio.to_thread(self.measure_all_routes_latency, timeout_sec)
 

@@ -1,12 +1,13 @@
 """
 Pytest shared configuration and fixtures.
 """
+
 from __future__ import annotations
 
 import asyncio
 import socket
+from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
-from typing import AsyncGenerator, Generator
 
 import httpx
 import pytest
@@ -15,7 +16,6 @@ from proxypool.api.app import create_app
 from proxypool.models import ProxyNode
 from proxypool.settings import AppSettings
 from proxypool.storage.sqlite import SQLiteProxyStorage
-
 
 # ============================================================
 # Base Fixtures
@@ -210,10 +210,12 @@ def sample_proxies() -> list[ProxyNode]:
 @pytest.fixture
 def pick_free_port():
     """Function to get a free port."""
+
     def _pick() -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
             return int(sock.getsockname()[1])
+
     return _pick
 
 
@@ -290,12 +292,14 @@ class FakeChainService:
         session_id: str = "",
         hop_node_keys: list[str] | None = None,
     ) -> None:
-        self.failures.append({
-            "endpoint_id": endpoint_id,
-            "pool_id": pool_id,
-            "session_id": session_id,
-            "hop_node_keys": list(hop_node_keys or []),
-        })
+        self.failures.append(
+            {
+                "endpoint_id": endpoint_id,
+                "pool_id": pool_id,
+                "session_id": session_id,
+                "hop_node_keys": list(hop_node_keys or []),
+            }
+        )
 
 
 class FakeInstanceManager:

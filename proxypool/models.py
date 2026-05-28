@@ -10,6 +10,7 @@ from typing import Any
 
 class ProxyProtocol(str, Enum):
     """代理协议枚举"""
+
     HTTP = "http"
     HTTPS = "https"
     SOCKS4 = "socks4"
@@ -26,6 +27,7 @@ class ProxyProtocol(str, Enum):
 
 class NodeStatus(str, Enum):
     """节点状态枚举"""
+
     UNKNOWN = "unknown"
     AVAILABLE = "available"
     UNAVAILABLE = "unavailable"
@@ -91,10 +93,7 @@ class ProxyNode:
     def normalized_key(self) -> str:
         """生成节点唯一标识"""
         identity = (
-            self.extra.get("uuid")
-            or self.extra.get("password")
-            or self.extra.get("username")
-            or ""
+            self.extra.get("uuid") or self.extra.get("password") or self.extra.get("username") or ""
         )
         base = f"{self.protocol}|{self.host}|{self.port}|{identity}"
         return sha1(base.encode("utf-8")).hexdigest()
@@ -127,7 +126,9 @@ class ProxyNode:
             "ip_purity_level": self.ip_purity_level,
             "openai_unlocked": self.openai_unlocked,
             "openai_status": self.openai_status,
-            "openai_checked_at": self.openai_checked_at.isoformat() if self.openai_checked_at else None,
+            "openai_checked_at": self.openai_checked_at.isoformat()
+            if self.openai_checked_at
+            else None,
             "fallback_front_keys": self.fallback_front_keys,
             "last_checked_at": self.last_checked_at.isoformat() if self.last_checked_at else None,
             "last_seen_at": self.last_seen_at.isoformat(),
@@ -142,8 +143,10 @@ class ProxyNode:
 
 # ---- 检查结果模型 ----
 
+
 class CheckType(str, Enum):
     """检查类型"""
+
     ACTIVE = "active"
     PASSIVE = "passive"
     SPEED = "speed"
@@ -155,6 +158,7 @@ class CheckType(str, Enum):
 @dataclass(slots=True)
 class CheckResult:
     """检查结果"""
+
     check_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     node_key: str = ""
     check_type: str = CheckType.ACTIVE
@@ -188,7 +192,9 @@ class CheckResult:
         return {
             "check_id": self.check_id,
             "node_key": self.node_key,
-            "check_type": self.check_type if isinstance(self.check_type, str) else self.check_type.value,
+            "check_type": self.check_type
+            if isinstance(self.check_type, str)
+            else self.check_type.value,
             "timestamp": self.timestamp.isoformat(),
             "success": self.success,
             "latency_ms": self.latency_ms,
@@ -202,8 +208,10 @@ class CheckResult:
 
 # ---- 事件日志模型 ----
 
+
 class EventType(str, Enum):
     """事件类型"""
+
     NODE_DISCOVERED = "node.discovered"
     NODE_AVAILABLE = "node.available"
     NODE_UNAVAILABLE = "node.unavailable"
@@ -224,6 +232,7 @@ class EventType(str, Enum):
 
 class EventSeverity(str, Enum):
     """事件严重程度"""
+
     DEBUG = "debug"
     INFO = "info"
     WARNING = "warning"
@@ -234,6 +243,7 @@ class EventSeverity(str, Enum):
 @dataclass(slots=True)
 class EventLog:
     """事件日志"""
+
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     event_type: str = EventType.NODE_DISCOVERED
     severity: str = EventSeverity.INFO
@@ -255,7 +265,9 @@ class EventLog:
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
-            "event_type": self.event_type if isinstance(self.event_type, str) else self.event_type.value,
+            "event_type": self.event_type
+            if isinstance(self.event_type, str)
+            else self.event_type.value,
             "severity": self.severity if isinstance(self.severity, str) else self.severity.value,
             "timestamp": self.timestamp.isoformat(),
             "node_key": self.node_key,

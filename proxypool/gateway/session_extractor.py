@@ -15,8 +15,12 @@ class SessionExtractor:
         query_names: list[str] | None = None,
         rules: list[dict[str, Any]] | None = None,
     ) -> tuple[str, str, bool]:
-        normalized_headers = {str(key).lower(): self._first_value(value) for key, value in dict(headers).items()}
-        normalized_query = {str(key): self._first_value(value) for key, value in dict(query_params).items()}
+        normalized_headers = {
+            str(key).lower(): self._first_value(value) for key, value in dict(headers).items()
+        }
+        normalized_query = {
+            str(key): self._first_value(value) for key, value in dict(query_params).items()
+        }
 
         for name in header_names or []:
             value = normalized_headers.get(str(name).lower(), "").strip()

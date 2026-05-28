@@ -1,16 +1,14 @@
 """Tests for proxy chain service functionality."""
-import json
-import pytest
-import tempfile
-from pathlib import Path
+
 from unittest.mock import Mock
 
+import pytest
+
 from proxypool.models import ProxyNode
-from proxypool.storage.sqlite import SQLiteProxyStorage
-from proxypool.pool.node_pool import NodePool, NodeEntry
-from proxypool.pool.sticky_router import StickyRouter, Lease
 from proxypool.pool.chain_service import ProxyChainService
-from proxypool.pool.health_manager import HealthConfig
+from proxypool.pool.node_pool import NodeEntry, NodePool
+from proxypool.pool.sticky_router import StickyRouter
+from proxypool.storage.sqlite import SQLiteProxyStorage
 
 
 @pytest.fixture
@@ -95,8 +93,22 @@ class TestNodePool:
     def test_rebuild_pool(self):
         pool = NodePool("test", "front", ["front-.*"])
         nodes = {
-            "key1": {"name": "front-1", "tags": [], "protocol": "http", "host": "1.2.3.4", "port": 80, "raw_link": ""},
-            "key2": {"name": "exit-1", "tags": [], "protocol": "http", "host": "5.6.7.8", "port": 80, "raw_link": ""},
+            "key1": {
+                "name": "front-1",
+                "tags": [],
+                "protocol": "http",
+                "host": "1.2.3.4",
+                "port": 80,
+                "raw_link": "",
+            },
+            "key2": {
+                "name": "exit-1",
+                "tags": [],
+                "protocol": "http",
+                "host": "5.6.7.8",
+                "port": 80,
+                "raw_link": "",
+            },
         }
         matched = pool.rebuild(nodes)
         assert "key1" in matched
@@ -116,7 +128,9 @@ class TestNodePool:
         pool.add_node(entry)
 
         # Record success
-        result = pool.update_node_health("test-key", success=True, egress_ip="1.2.3.4", latency_ms=100)
+        result = pool.update_node_health(
+            "test-key", success=True, egress_ip="1.2.3.4", latency_ms=100
+        )
         assert result is not None
         assert result.failure_count == 0
         assert result.circuit_open is False
@@ -124,24 +138,33 @@ class TestNodePool:
         assert result.latency_ms == 100
 
         # Record failures
-        for i in range(5):
+        for _i in range(5):
             result = pool.update_node_health("test-key", success=False, max_failures=5)
-        
+
         assert result is not None
         assert result.failure_count == 5
         assert result.circuit_open is True
 
     def test_get_healthy_nodes(self):
         pool = NodePool("test", "front", [])
-        
+
         # Add healthy node
-        healthy = NodeEntry(key="healthy", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True)
+        healthy = NodeEntry(
+            key="healthy", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True
+        )
         pool.add_node(healthy)
-        
+
         # Add unhealthy node
-        unhealthy = NodeEntry(key="unhealthy", protocol="http", host="5.6.7.8", port=80, raw_link="", circuit_open=True)
+        unhealthy = NodeEntry(
+            key="unhealthy",
+            protocol="http",
+            host="5.6.7.8",
+            port=80,
+            raw_link="",
+            circuit_open=True,
+        )
         pool.add_node(unhealthy)
-        
+
         healthy_nodes = pool.get_healthy_nodes()
         assert len(healthy_nodes) == 1
         assert healthy_nodes[0].key == "healthy"
@@ -149,8 +172,12 @@ class TestNodePool:
     def test_get_healthy_nodes_excludes_non_routeable_nodes(self):
         pool = NodePool("test", "front", [])
 
-        routeable = NodeEntry(key="routeable", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True)
-        unchecked = NodeEntry(key="unchecked", protocol="http", host="5.6.7.8", port=80, raw_link="", routeable=False)
+        routeable = NodeEntry(
+            key="routeable", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True
+        )
+        unchecked = NodeEntry(
+            key="unchecked", protocol="http", host="5.6.7.8", port=80, raw_link="", routeable=False
+        )
         pool.add_node(routeable)
         pool.add_node(unchecked)
 
@@ -164,13 +191,34 @@ class TestStickyRouter:
     def test_route_without_sticky(self):
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
-        
-        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", latency_ms=100, routeable=True))
-        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", latency_ms=100, egress_ip="10.0.0.1", routeable=True))
-        
+
+        front_pool.add_node(
+            NodeEntry(
+                key="f1",
+                protocol="http",
+                host="1.2.3.4",
+                port=80,
+                raw_link="",
+                latency_ms=100,
+                routeable=True,
+            )
+        )
+        exit_pool.add_node(
+            NodeEntry(
+                key="e1",
+                protocol="socks",
+                host="10.0.0.1",
+                port=1080,
+                raw_link="",
+                latency_ms=100,
+                egress_ip="10.0.0.1",
+                routeable=True,
+            )
+        )
+
         router = StickyRouter(front_pool, exit_pool)
         result = router.route("", 0)
-        
+
         assert result is not None
         assert result.front_node.key == "f1"
         assert result.exit_node.key == "e1"
@@ -179,17 +227,38 @@ class TestStickyRouter:
     def test_route_with_sticky(self):
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
-        
-        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", latency_ms=100, routeable=True))
-        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", latency_ms=100, egress_ip="10.0.0.1", routeable=True))
-        
+
+        front_pool.add_node(
+            NodeEntry(
+                key="f1",
+                protocol="http",
+                host="1.2.3.4",
+                port=80,
+                raw_link="",
+                latency_ms=100,
+                routeable=True,
+            )
+        )
+        exit_pool.add_node(
+            NodeEntry(
+                key="e1",
+                protocol="socks",
+                host="10.0.0.1",
+                port=1080,
+                raw_link="",
+                latency_ms=100,
+                egress_ip="10.0.0.1",
+                routeable=True,
+            )
+        )
+
         router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
-        
+
         # First request creates lease
         result1 = router.route("sess-1", 1)
         assert result1 is not None
         assert result1.lease_created is True
-        
+
         # Second request reuses lease
         result2 = router.route("sess-1", 1)
         assert result2 is not None
@@ -198,43 +267,71 @@ class TestStickyRouter:
     def test_p2c_algorithm(self):
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
-        
+
         # Add multiple nodes with different latencies
         for i in range(10):
-            front_pool.add_node(NodeEntry(
-                key=f"f{i}", protocol="http", host=f"1.2.3.{i}", port=80, raw_link="",
-                latency_ms=100 + i * 10, routeable=True,
-            ))
-            exit_pool.add_node(NodeEntry(
-                key=f"e{i}", protocol="socks", host=f"10.0.0.{i}", port=1080, raw_link="",
-                latency_ms=100 + i * 10, routeable=True,
-                egress_ip=f"10.0.0.{i}",
-            ))
-        
+            front_pool.add_node(
+                NodeEntry(
+                    key=f"f{i}",
+                    protocol="http",
+                    host=f"1.2.3.{i}",
+                    port=80,
+                    raw_link="",
+                    latency_ms=100 + i * 10,
+                    routeable=True,
+                )
+            )
+            exit_pool.add_node(
+                NodeEntry(
+                    key=f"e{i}",
+                    protocol="socks",
+                    host=f"10.0.0.{i}",
+                    port=1080,
+                    raw_link="",
+                    latency_ms=100 + i * 10,
+                    routeable=True,
+                    egress_ip=f"10.0.0.{i}",
+                )
+            )
+
         router = StickyRouter(front_pool, exit_pool)
-        
+
         # Route multiple times - should see some distribution
         selected_exits = set()
         for _ in range(100):
             result = router.route("", 0)
             if result:
                 selected_exits.add(result.exit_node.key)
-        
+
         # Should have selected more than 1 unique exit node (probabilistic)
         assert len(selected_exits) > 1
 
     def test_cleanup_expired_leases(self):
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
-        
-        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True))
-        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", egress_ip="10.0.0.1", routeable=True))
-        
+
+        front_pool.add_node(
+            NodeEntry(
+                key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True
+            )
+        )
+        exit_pool.add_node(
+            NodeEntry(
+                key="e1",
+                protocol="socks",
+                host="10.0.0.1",
+                port=1080,
+                raw_link="",
+                egress_ip="10.0.0.1",
+                routeable=True,
+            )
+        )
+
         router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=0)  # Immediate expiry
-        
+
         # Create a lease
         router.route("sess-1", 1)
-        
+
         # Cleanup should remove it
         removed = router.cleanup_expired_leases()
         assert removed >= 0  # May or may not be removed depending on timing
@@ -242,8 +339,22 @@ class TestStickyRouter:
     def test_get_leases_returns_session_id(self):
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
-        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True))
-        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="10.0.0.1", port=1080, raw_link="", egress_ip="10.0.0.1", routeable=True))
+        front_pool.add_node(
+            NodeEntry(
+                key="f1", protocol="http", host="1.2.3.4", port=80, raw_link="", routeable=True
+            )
+        )
+        exit_pool.add_node(
+            NodeEntry(
+                key="e1",
+                protocol="socks",
+                host="10.0.0.1",
+                port=1080,
+                raw_link="",
+                egress_ip="10.0.0.1",
+                routeable=True,
+            )
+        )
         router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
 
         router.route("sess-abc", 3)
@@ -254,8 +365,29 @@ class TestStickyRouter:
     def test_reuses_bound_instance_id_when_alive(self):
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
-        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.1.1.1", port=80, raw_link="", latency_ms=10, routeable=True))
-        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="2.2.2.2", port=1080, raw_link="", latency_ms=10, egress_ip="3.3.3.3", routeable=True))
+        front_pool.add_node(
+            NodeEntry(
+                key="f1",
+                protocol="http",
+                host="1.1.1.1",
+                port=80,
+                raw_link="",
+                latency_ms=10,
+                routeable=True,
+            )
+        )
+        exit_pool.add_node(
+            NodeEntry(
+                key="e1",
+                protocol="socks",
+                host="2.2.2.2",
+                port=1080,
+                raw_link="",
+                latency_ms=10,
+                egress_ip="3.3.3.3",
+                routeable=True,
+            )
+        )
         router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
 
         first = router.route("sess-1", 1)
@@ -271,15 +403,47 @@ class TestStickyRouter:
     def test_rotates_to_same_ip_when_original_exit_is_gone(self):
         front_pool = NodePool("front", "front", [])
         exit_pool = NodePool("exit", "exit", [])
-        front_pool.add_node(NodeEntry(key="f1", protocol="http", host="1.1.1.1", port=80, raw_link="", latency_ms=10, routeable=True))
-        exit_pool.add_node(NodeEntry(key="e1", protocol="socks", host="2.2.2.2", port=1080, raw_link="", latency_ms=10, egress_ip="9.9.9.9", routeable=True))
+        front_pool.add_node(
+            NodeEntry(
+                key="f1",
+                protocol="http",
+                host="1.1.1.1",
+                port=80,
+                raw_link="",
+                latency_ms=10,
+                routeable=True,
+            )
+        )
+        exit_pool.add_node(
+            NodeEntry(
+                key="e1",
+                protocol="socks",
+                host="2.2.2.2",
+                port=1080,
+                raw_link="",
+                latency_ms=10,
+                egress_ip="9.9.9.9",
+                routeable=True,
+            )
+        )
         router = StickyRouter(front_pool, exit_pool, sticky_ttl_sec=3600)
 
         first = router.route("sess-1", 1)
         assert first is not None
 
         exit_pool.remove_node("e1")
-        exit_pool.add_node(NodeEntry(key="e2", protocol="socks", host="2.2.2.3", port=1080, raw_link="", latency_ms=5, egress_ip="9.9.9.9", routeable=True))
+        exit_pool.add_node(
+            NodeEntry(
+                key="e2",
+                protocol="socks",
+                host="2.2.2.3",
+                port=1080,
+                raw_link="",
+                latency_ms=5,
+                egress_ip="9.9.9.9",
+                routeable=True,
+            )
+        )
 
         second = router.route("sess-1", 1)
 
@@ -297,41 +461,43 @@ class TestStorage:
         assert pool["name"] == "front"
         assert pool["pool_type"] == "front"
         assert pool["regex_filters"] == ["front-.*"]
-        
+
         # List pools
         pools = storage.list_proxy_pools_v2()
         assert len(pools) == 1
-        
+
         # Update pool
         pool = storage.upsert_proxy_pool_v2("front", "front", ["front-.*", "entry-.*"])
         assert pool["regex_filters"] == ["front-.*", "entry-.*"]
-        
+
         # Delete pool
         deleted = storage.delete_proxy_pool_v2("front")
         assert deleted == 1
-        
+
         pools = storage.list_proxy_pools_v2()
         assert len(pools) == 0
 
     def test_node_health_operations(self, storage):
         # Create health record
-        health = storage.upsert_node_health("node1", success=True, egress_ip="1.2.3.4", latency_ms=100)
+        health = storage.upsert_node_health(
+            "node1", success=True, egress_ip="1.2.3.4", latency_ms=100
+        )
         assert health["node_key"] == "node1"
         assert health["failure_count"] == 0
         assert health["egress_ip"] == "1.2.3.4"
-        
+
         # Record failure
         health = storage.upsert_node_health("node1", success=False, max_failures=3)
         assert health["failure_count"] == 1
-        
+
         # Get health
         health = storage.get_node_health("node1")
         assert health is not None
-        
+
         # List health
         health_list = storage.list_node_health()
         assert len(health_list) >= 1
-        
+
         # Delete health
         deleted = storage.delete_node_health("node1")
         assert deleted == 1
@@ -350,21 +516,23 @@ class TestStorage:
         )
         assert lease["session_id"] == "user1"
         assert lease["instance_id"] == "inst-1"
-        
+
         # Get lease
         lease = storage.get_sticky_lease("user1", 1)
         assert lease is not None
-        
+
         # List leases
         leases = storage.list_sticky_leases()
         assert len(leases) >= 1
-        
+
         # Delete lease
         deleted = storage.delete_sticky_lease("user1", 1)
         assert deleted == 1
 
     def test_proxy_pool_chain_config_round_trip(self, storage):
-        pool = storage.create_proxy_pool(name="pool-a", filters={}, listen="0.0.0.0", inbound_type="http")
+        pool = storage.create_proxy_pool(
+            name="pool-a", filters={}, listen="0.0.0.0", inbound_type="http"
+        )
         updated = storage.update_proxy_pool(
             int(pool["id"]),
             chain_enabled=True,
@@ -430,7 +598,7 @@ class TestProxyChainService:
     def test_service_initialization(self, storage):
         service = ProxyChainService(storage)
         service.initialize()
-        
+
         status = service.get_pool_status()
         assert "front_pool" in status
         assert "exit_pool" in status
@@ -438,11 +606,11 @@ class TestProxyChainService:
     def test_pool_config_update(self, storage):
         service = ProxyChainService(storage)
         service.initialize()
-        
+
         # Update front pool config
         result = service.update_pool_config("front", ["front-.*"])
         assert result["front_pool"]["regex_filters"] == ["front-.*"]
-        
+
         # Verify persisted
         pool = storage.get_proxy_pool_v2("front")
         assert pool is not None
@@ -513,7 +681,9 @@ class TestProxyChainService:
         assert len(front_keys) == 2
         assert len(exit_keys) == 3
         assert all(item["protocol"] in {"http", "socks"} for item in status["front_pool"]["nodes"])
-        assert all(item["protocol"] in {"http", "socks", "vless"} for item in status["exit_pool"]["nodes"])
+        assert all(
+            item["protocol"] in {"http", "socks", "vless"} for item in status["exit_pool"]["nodes"]
+        )
 
     def test_route_request_prefers_distinct_front_and_exit_nodes_when_pools_overlap(self, storage):
         front = ProxyNode(
@@ -545,8 +715,24 @@ class TestProxyChainService:
     def test_route_request_returns_none_when_nodes_are_unchecked(self, storage):
         storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
         storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
-        storage.upsert_proxy(ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"))
-        storage.upsert_proxy(ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080"))
+        storage.upsert_proxy(
+            ProxyNode(
+                protocol="http",
+                host="1.1.1.1",
+                port=80,
+                name="front-a",
+                raw_link="http://1.1.1.1:80",
+            )
+        )
+        storage.upsert_proxy(
+            ProxyNode(
+                protocol="socks",
+                host="2.2.2.2",
+                port=1080,
+                name="exit-a",
+                raw_link="socks://2.2.2.2:1080",
+            )
+        )
 
         service = ProxyChainService(storage)
 
@@ -576,14 +762,25 @@ class TestProxyChainService:
 
         service.start()
 
-        assert service.health_manager.build_chain_proxy_url == service.chain_builder.build_chain_proxy_url
+        assert (
+            service.health_manager.build_chain_proxy_url
+            == service.chain_builder.build_chain_proxy_url
+        )
         service.health_manager.start.assert_called_once_with()
 
     def test_route_request_persists_session_lease(self, storage):
         storage.upsert_proxy_pool_v2("front", "front", ["front-.*"])
         storage.upsert_proxy_pool_v2("exit", "exit", ["exit-.*"])
-        front = ProxyNode(protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80")
-        exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-a", raw_link="socks://2.2.2.2:1080")
+        front = ProxyNode(
+            protocol="http", host="1.1.1.1", port=80, name="front-a", raw_link="http://1.1.1.1:80"
+        )
+        exit_node = ProxyNode(
+            protocol="socks",
+            host="2.2.2.2",
+            port=1080,
+            name="exit-a",
+            raw_link="socks://2.2.2.2:1080",
+        )
         storage.upsert_proxy(front)
         storage.upsert_proxy(exit_node)
         storage.update_test_result(front.normalized_key(), available=True, latency_ms=10)
@@ -598,9 +795,23 @@ class TestProxyChainService:
         assert lease["session_id"] == "sess-1"
 
     def test_route_request_supports_endpoint_multi_hop(self, storage):
-        hop1 = ProxyNode(protocol="http", host="1.1.1.1", port=8080, name="hop-1", raw_link="http://1.1.1.1:8080")
-        hop2 = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="hop-2", raw_link="socks://2.2.2.2:1080")
-        hop3 = ProxyNode(protocol="trojan", host="3.3.3.3", port=443, name="hop-3", raw_link="trojan://3.3.3.3:443")
+        hop1 = ProxyNode(
+            protocol="http", host="1.1.1.1", port=8080, name="hop-1", raw_link="http://1.1.1.1:8080"
+        )
+        hop2 = ProxyNode(
+            protocol="socks",
+            host="2.2.2.2",
+            port=1080,
+            name="hop-2",
+            raw_link="socks://2.2.2.2:1080",
+        )
+        hop3 = ProxyNode(
+            protocol="trojan",
+            host="3.3.3.3",
+            port=443,
+            name="hop-3",
+            raw_link="trojan://3.3.3.3:443",
+        )
         storage.upsert_proxy(hop1)
         storage.upsert_proxy(hop2)
         storage.upsert_proxy(hop3)
@@ -612,10 +823,14 @@ class TestProxyChainService:
         pool2 = storage.create_proxy_pool(name="pool-2", filters={"protocol": "socks"})
         pool3 = storage.create_proxy_pool(name="pool-3", filters={"protocol": "trojan"})
         endpoint = storage.create_http_proxy_endpoint(name="ep-1", listen_port=18899)
-        storage.replace_http_proxy_endpoint_hops(int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"]), int(pool3["id"])])
+        storage.replace_http_proxy_endpoint_hops(
+            int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"]), int(pool3["id"])]
+        )
 
         service = ProxyChainService(storage)
-        result = service.route_request("sess-ep-1", int(pool1["id"]), int(endpoint["id"]), "api.example.com")
+        result = service.route_request(
+            "sess-ep-1", int(pool1["id"]), int(endpoint["id"]), "api.example.com"
+        )
 
         assert result is not None
         assert result["endpoint_id"] == int(endpoint["id"])
@@ -624,12 +839,32 @@ class TestProxyChainService:
             hop2.normalized_key(),
             hop3.normalized_key(),
         ]
-        assert result["route_signature"] == f"pool-{pool1['id']}>pool-{pool2['id']}>pool-{pool3['id']}"
+        assert (
+            result["route_signature"] == f"pool-{pool1['id']}>pool-{pool2['id']}>pool-{pool3['id']}"
+        )
 
     def test_endpoint_route_failure_clears_lease_and_avoids_failed_route(self, storage):
-        front_bad = ProxyNode(protocol="http", host="1.1.1.1", port=8080, name="front-bad", raw_link="http://1.1.1.1:8080")
-        front_good = ProxyNode(protocol="http", host="1.1.1.2", port=8080, name="front-good", raw_link="http://1.1.1.2:8080")
-        exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-only", raw_link="socks://2.2.2.2:1080")
+        front_bad = ProxyNode(
+            protocol="http",
+            host="1.1.1.1",
+            port=8080,
+            name="front-bad",
+            raw_link="http://1.1.1.1:8080",
+        )
+        front_good = ProxyNode(
+            protocol="http",
+            host="1.1.1.2",
+            port=8080,
+            name="front-good",
+            raw_link="http://1.1.1.2:8080",
+        )
+        exit_node = ProxyNode(
+            protocol="socks",
+            host="2.2.2.2",
+            port=1080,
+            name="exit-only",
+            raw_link="socks://2.2.2.2:1080",
+        )
         for node in [front_bad, front_good, exit_node]:
             storage.upsert_proxy(node)
             storage.update_test_result(node.normalized_key(), available=True, latency_ms=10)
@@ -637,7 +872,9 @@ class TestProxyChainService:
         pool1 = storage.create_proxy_pool(name="pool-front", filters={"protocol": "http"})
         pool2 = storage.create_proxy_pool(name="pool-exit", filters={"protocol": "socks"})
         endpoint = storage.create_http_proxy_endpoint(name="ep-1", listen_port=18899)
-        storage.replace_http_proxy_endpoint_hops(int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])])
+        storage.replace_http_proxy_endpoint_hops(
+            int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])]
+        )
 
         service = ProxyChainService(storage)
         failed_hops = [front_bad.normalized_key(), exit_node.normalized_key()]
@@ -665,10 +902,34 @@ class TestProxyChainService:
         assert result["hop_node_keys"] == [front_good.normalized_key(), exit_node.normalized_key()]
 
     def test_endpoint_route_searches_past_failed_low_latency_combinations(self, storage):
-        front_bad = ProxyNode(protocol="http", host="1.1.1.1", port=8080, name="front-11", raw_link="http://1.1.1.1:8080")
-        front_good = ProxyNode(protocol="http", host="1.1.1.2", port=8080, name="front-good", raw_link="http://1.1.1.2:8080")
-        exit_bad = ProxyNode(protocol="socks", host="2.2.2.1", port=1080, name="exit-bad", raw_link="socks://2.2.2.1:1080")
-        exit_good = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-good", raw_link="socks://2.2.2.2:1080")
+        front_bad = ProxyNode(
+            protocol="http",
+            host="1.1.1.1",
+            port=8080,
+            name="front-11",
+            raw_link="http://1.1.1.1:8080",
+        )
+        front_good = ProxyNode(
+            protocol="http",
+            host="1.1.1.2",
+            port=8080,
+            name="front-good",
+            raw_link="http://1.1.1.2:8080",
+        )
+        exit_bad = ProxyNode(
+            protocol="socks",
+            host="2.2.2.1",
+            port=1080,
+            name="exit-bad",
+            raw_link="socks://2.2.2.1:1080",
+        )
+        exit_good = ProxyNode(
+            protocol="socks",
+            host="2.2.2.2",
+            port=1080,
+            name="exit-good",
+            raw_link="socks://2.2.2.2:1080",
+        )
         for latency, node in enumerate([front_bad, exit_bad, front_good, exit_good], start=1):
             storage.upsert_proxy(node)
             storage.update_test_result(node.normalized_key(), available=True, latency_ms=latency)
@@ -676,7 +937,9 @@ class TestProxyChainService:
         pool1 = storage.create_proxy_pool(name="pool-front", filters={"protocol": "http"})
         pool2 = storage.create_proxy_pool(name="pool-exit", filters={"protocol": "socks"})
         endpoint = storage.create_http_proxy_endpoint(name="ep-1", listen_port=18899)
-        storage.replace_http_proxy_endpoint_hops(int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])])
+        storage.replace_http_proxy_endpoint_hops(
+            int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])]
+        )
 
         service = ProxyChainService(storage)
         for failed_hops in [
@@ -695,9 +958,27 @@ class TestProxyChainService:
         assert result["hop_node_keys"] == [front_good.normalized_key(), exit_bad.normalized_key()]
 
     def test_endpoint_route_success_prefers_known_healthy_route(self, storage, monkeypatch):
-        front_bad = ProxyNode(protocol="http", host="1.1.1.1", port=8080, name="front-bad", raw_link="http://1.1.1.1:8080")
-        front_good = ProxyNode(protocol="http", host="1.1.1.2", port=8080, name="front-good", raw_link="http://1.1.1.2:8080")
-        exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, name="exit-only", raw_link="socks://2.2.2.2:1080")
+        front_bad = ProxyNode(
+            protocol="http",
+            host="1.1.1.1",
+            port=8080,
+            name="front-bad",
+            raw_link="http://1.1.1.1:8080",
+        )
+        front_good = ProxyNode(
+            protocol="http",
+            host="1.1.1.2",
+            port=8080,
+            name="front-good",
+            raw_link="http://1.1.1.2:8080",
+        )
+        exit_node = ProxyNode(
+            protocol="socks",
+            host="2.2.2.2",
+            port=1080,
+            name="exit-only",
+            raw_link="socks://2.2.2.2:1080",
+        )
         for node in [front_bad, front_good, exit_node]:
             storage.upsert_proxy(node)
             storage.update_test_result(node.normalized_key(), available=True, latency_ms=10)
@@ -705,14 +986,19 @@ class TestProxyChainService:
         pool1 = storage.create_proxy_pool(name="pool-front", filters={"protocol": "http"})
         pool2 = storage.create_proxy_pool(name="pool-exit", filters={"protocol": "socks"})
         endpoint = storage.create_http_proxy_endpoint(name="ep-1", listen_port=18899)
-        storage.replace_http_proxy_endpoint_hops(int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])])
+        storage.replace_http_proxy_endpoint_hops(
+            int(endpoint["id"]), [int(pool1["id"]), int(pool2["id"])]
+        )
 
         service = ProxyChainService(storage)
         service.report_endpoint_route_success(
             endpoint_id=int(endpoint["id"]),
             hop_node_keys=[front_good.normalized_key(), exit_node.normalized_key()],
         )
-        assert service._is_endpoint_node_failed(int(endpoint["id"]), front_good.normalized_key()) is False
+        assert (
+            service._is_endpoint_node_failed(int(endpoint["id"]), front_good.normalized_key())
+            is False
+        )
 
         def pick_bad_first(pool_id, exclude_keys, target_domain):
             del target_domain

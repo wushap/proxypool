@@ -27,7 +27,7 @@ def test_webui_should_poll_task_list_not_single_task_endpoint() -> None:
 def test_webui_should_render_multi_task_panel() -> None:
     html = _read_webui()
     assert "任务中心" in html
-    assert "v-for=\"task in taskItems\"" in html
+    assert 'v-for="task in taskItems"' in html
     assert "删除记录" in html
     assert "taskMessageText(task)" in html
 

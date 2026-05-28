@@ -11,7 +11,9 @@ from dataclasses import asdict
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-router = APIRouter(prefix="/api", tags=["subscriptions"])
+from proxypool.api.schemas import SubscriptionBatchRefreshRequest
+
+router = APIRouter(prefix="/api", tags=["订阅"])
 
 
 @router.get("/subscriptions")
@@ -107,6 +109,88 @@ async def delete_unavailable_subscriptions(
     return {"deleted": deleted}
 
 
+@router.post("/subscriptions/batch-refresh")
+async def batch_refresh_subscriptions(
+    body: SubscriptionBatchRefreshRequest,
+    request: Request,
+) -> dict:
+    """批量刷新订阅"""
+    storage = request.app.state.storage
+    collector = request.app.state.collector
+
+    total = len(body.subscription_ids)
+    success = 0
+    failed = 0
+    results: list[dict] = []
+
+    for sub_id in body.subscription_ids:
+        try:
+            # Get subscription
+            sub = storage.get_subscription(sub_id)
+            if sub is None:
+                results.append(
+                    {
+                        "subscription_id": sub_id,
+                        "success": False,
+                        "error": "subscription not found",
+                    }
+                )
+                failed += 1
+                continue
+
+            # Refresh subscription
+            if sub.get("url"):
+                try:
+                    await collector.refresh_subscription(
+                        sub_id=sub_id,
+                        timeout_sec=body.timeout_sec,
+                    )
+                    success += 1
+                    results.append(
+                        {
+                            "subscription_id": sub_id,
+                            "name": sub.get("name"),
+                            "success": True,
+                        }
+                    )
+                except Exception as exc:
+                    failed += 1
+                    results.append(
+                        {
+                            "subscription_id": sub_id,
+                            "name": sub.get("name"),
+                            "success": False,
+                            "error": str(exc),
+                        }
+                    )
+            else:
+                failed += 1
+                results.append(
+                    {
+                        "subscription_id": sub_id,
+                        "name": sub.get("name"),
+                        "success": False,
+                        "error": "subscription URL is empty",
+                    }
+                )
+        except Exception as exc:
+            failed += 1
+            results.append(
+                {
+                    "subscription_id": sub_id,
+                    "success": False,
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "total": total,
+        "success": success,
+        "failed": failed,
+        "results": results,
+    }
+
+
 @router.get("/published-subscriptions")
 async def list_published_subscriptions(
     request: Request,
@@ -191,7 +275,9 @@ async def published_subscription(
         raise HTTPException(status_code=404, detail="published subscription disabled")
     output_format = str(item.get("format") or "raw").strip().lower()
     if output_format == "clash":
-        text = _published_subscription_clash_yaml(storage.get_published_subscription_proxies(subscription_id, limit=limit))
+        text = _published_subscription_clash_yaml(
+            storage.get_published_subscription_proxies(subscription_id, limit=limit)
+        )
     else:
         links = storage.get_published_subscription_links(subscription_id, limit=limit)
         text = "\n".join(links)
@@ -348,6 +434,7 @@ def _subscription_status_from_report(report) -> tuple[str, str]:
 def _published_subscription_clash_yaml(proxies: list[dict]) -> str:
     """生成 Clash YAML 格式的订阅"""
     import yaml
+
     from proxypool.backend.mihomo_config import _build_mihomo_proxy
 
     proxy_items: list[dict] = []
@@ -437,11 +524,13 @@ def refresh_enabled_subscriptions_sync(
         )
 
         if progress_cb:
-            progress_cb({
-                "total": len(subscriptions),
-                "completed": idx + 1,
-                "success": len([i for i in items if i["status"] == "success"]),
-                "failed": len([i for i in items if i["status"] == "failed"]),
-            })
+            progress_cb(
+                {
+                    "total": len(subscriptions),
+                    "completed": idx + 1,
+                    "success": len([i for i in items if i["status"] == "success"]),
+                    "failed": len([i for i in items if i["status"] == "failed"]),
+                }
+            )
 
     return {"count": len(items), "items": items}

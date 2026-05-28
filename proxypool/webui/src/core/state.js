@@ -16,7 +16,7 @@ import { cloneProxyColumnConfigs } from './utils'
 export function createInitialState() {
   return reactive({
     // 导航状态
-    activePage: "tasks",
+    activePage: "dashboard",
     proxyPoolTab: "pools",
 
     // 数据状态

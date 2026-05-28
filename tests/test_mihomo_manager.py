@@ -36,7 +36,10 @@ def test_build_mihomo_chain_config_uses_dialer_proxy(tmp_path: Path):
 
     assert config["listeners"][0]["type"] == "http"
     assert config["listeners"][0]["port"] == 19090
-    assert any(item.get("name") == "exit" and item.get("dialer-proxy") == "front" for item in config["proxies"])
+    assert any(
+        item.get("name") == "exit" and item.get("dialer-proxy") == "front"
+        for item in config["proxies"]
+    )
 
 
 def test_build_mihomo_chain_config_supports_vless_ws_and_trojan_ws(tmp_path: Path):
@@ -107,7 +110,9 @@ def test_build_mihomo_chain_config_supports_vless_ws_and_trojan_ws(tmp_path: Pat
     trojan_config = build_mihomo_chain_config(trojan_spec)
 
     vless_proxy = next(item for item in vless_config["proxies"] if item.get("name") == "exit-vless")
-    trojan_proxy = next(item for item in trojan_config["proxies"] if item.get("name") == "exit-trojan")
+    trojan_proxy = next(
+        item for item in trojan_config["proxies"] if item.get("name") == "exit-trojan"
+    )
     assert vless_proxy["type"] == "vless"
     assert vless_proxy["uuid"] == "12345678-1234-1234-1234-123456789012"
     assert vless_proxy["network"] == "ws"

@@ -1,6 +1,7 @@
 """
 Tests for BaseStorage and storage exceptions.
 """
+
 from __future__ import annotations
 
 import tempfile
@@ -8,7 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from proxypool.storage.base import BaseStorage, StorageError, NotFoundError, ConflictError, ValidationError
+from proxypool.storage.base import (
+    BaseStorage,
+    ConflictError,
+    NotFoundError,
+    StorageError,
+    ValidationError,
+)
 
 
 class TestStorageExceptions:

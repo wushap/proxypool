@@ -38,7 +38,7 @@ async def test_stop_task_endpoint_can_cancel_running_tester_task(tmp_path, monke
 
     async def fake_run_batch(**kwargs):
         stop_cb = kwargs.get("stop_cb")
-        for i in range(120):
+        for _i in range(120):
             if callable(stop_cb) and stop_cb():
                 raise TaskCancelled("cancel requested")
             await asyncio.sleep(0.01)
@@ -47,7 +47,9 @@ async def test_stop_task_endpoint_can_cancel_running_tester_task(tmp_path, monke
     monkeypatch.setattr(app.state.tester, "run_batch", fake_run_batch)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        start_resp = await client.post("/api/tasks/tester/start", json={"limit": 1, "concurrency": 1})
+        start_resp = await client.post(
+            "/api/tasks/tester/start", json={"limit": 1, "concurrency": 1}
+        )
         assert start_resp.status_code == 200
         task_id = start_resp.json()["task_id"]
 
@@ -73,7 +75,9 @@ async def test_delete_task_endpoint_can_delete_finished_task(tmp_path) -> None:
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        start_resp = await client.post("/api/tasks/tester/start", json={"limit": 0, "concurrency": 1})
+        start_resp = await client.post(
+            "/api/tasks/tester/start", json={"limit": 0, "concurrency": 1}
+        )
         assert start_resp.status_code == 200
         task_id = start_resp.json()["task_id"]
 
@@ -97,7 +101,9 @@ async def test_delete_task_endpoint_can_delete_finished_task(tmp_path) -> None:
 async def test_speed_test_task_runs_serial_speed_probe(tmp_path, monkeypatch) -> None:
     app = create_app(_make_settings(tmp_path))
     storage = app.state.storage
-    node = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="node-a")
+    node = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="node-a"
+    )
     storage.upsert_proxy(node)
     storage.update_test_result(node.normalized_key(), available=True, latency_ms=10)
     calls: list[str] = []
@@ -152,12 +158,20 @@ async def test_speed_test_task_runs_serial_speed_probe(tmp_path, monkeypatch) ->
 async def test_speed_test_only_direct_filters_out_chained_nodes(tmp_path, monkeypatch) -> None:
     app = create_app(_make_settings(tmp_path))
     storage = app.state.storage
-    direct = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="direct")
-    chained = ProxyNode(protocol="http", host="2.2.2.2", port=8080, raw_link="http://2.2.2.2:8080", name="chained")
+    direct = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="direct"
+    )
+    chained = ProxyNode(
+        protocol="http", host="2.2.2.2", port=8080, raw_link="http://2.2.2.2:8080", name="chained"
+    )
     storage.upsert_proxy(direct)
     storage.upsert_proxy(chained)
-    storage.update_test_result(direct.normalized_key(), available=True, latency_ms=10, fallback_front_keys=[])
-    storage.update_test_result(chained.normalized_key(), available=True, latency_ms=20, fallback_front_keys=["front-a"])
+    storage.update_test_result(
+        direct.normalized_key(), available=True, latency_ms=10, fallback_front_keys=[]
+    )
+    storage.update_test_result(
+        chained.normalized_key(), available=True, latency_ms=20, fallback_front_keys=["front-a"]
+    )
     tested_keys: list[str] = []
 
     async def fake_speed_test_async(node, url, timeout_sec=30.0):
@@ -199,15 +213,25 @@ async def test_speed_test_only_direct_filters_out_chained_nodes(tmp_path, monkey
 
 
 @pytest.mark.anyio
-async def test_speed_test_legacy_only_available_defaults_to_direct_nodes(tmp_path, monkeypatch) -> None:
+async def test_speed_test_legacy_only_available_defaults_to_direct_nodes(
+    tmp_path, monkeypatch
+) -> None:
     app = create_app(_make_settings(tmp_path))
     storage = app.state.storage
-    direct = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="direct")
-    chained = ProxyNode(protocol="http", host="2.2.2.2", port=8080, raw_link="http://2.2.2.2:8080", name="chained")
+    direct = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="direct"
+    )
+    chained = ProxyNode(
+        protocol="http", host="2.2.2.2", port=8080, raw_link="http://2.2.2.2:8080", name="chained"
+    )
     storage.upsert_proxy(direct)
     storage.upsert_proxy(chained)
-    storage.update_test_result(direct.normalized_key(), available=True, latency_ms=10, fallback_front_keys=[])
-    storage.update_test_result(chained.normalized_key(), available=True, latency_ms=20, fallback_front_keys=["front-a"])
+    storage.update_test_result(
+        direct.normalized_key(), available=True, latency_ms=10, fallback_front_keys=[]
+    )
+    storage.update_test_result(
+        chained.normalized_key(), available=True, latency_ms=20, fallback_front_keys=["front-a"]
+    )
     tested_keys: list[str] = []
 
     async def fake_speed_test_async(node, url, timeout_sec=30.0):
@@ -281,8 +305,12 @@ async def test_auto_task_config_round_trip(tmp_path) -> None:
 async def test_delete_selected_proxies_endpoint(tmp_path) -> None:
     app = create_app(_make_settings(tmp_path))
     storage = app.state.storage
-    node_a = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="node-a")
-    node_b = ProxyNode(protocol="http", host="2.2.2.2", port=8080, raw_link="http://2.2.2.2:8080", name="node-b")
+    node_a = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="node-a"
+    )
+    node_b = ProxyNode(
+        protocol="http", host="2.2.2.2", port=8080, raw_link="http://2.2.2.2:8080", name="node-b"
+    )
     storage.upsert_proxy(node_a)
     storage.upsert_proxy(node_b)
     transport = httpx.ASGITransport(app=app)

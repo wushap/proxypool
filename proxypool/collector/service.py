@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from proxypool.collector.fetcher import FetchError, fetch_text, fetch_text_via_proxy_node
 from proxypool.collector.parser import parse_source_content
-from proxypool.security.file_validator import validate_file_path, PathTraversalError
+from proxypool.security.file_validator import PathTraversalError, validate_file_path
 from proxypool.storage.sqlite import SQLiteProxyStorage
 
 
@@ -42,7 +42,9 @@ class CollectorService:
         self.singbox_binary = singbox_binary
         self.max_proxy_count = max_proxy_count
 
-    def collect_from_text_items(self, items: list[tuple[str, str]], timeout_sec: float = 12.0) -> CollectReport:
+    def collect_from_text_items(
+        self, items: list[tuple[str, str]], timeout_sec: float = 12.0
+    ) -> CollectReport:
         report = CollectReport(total_sources=0)
         for filename, text in items:
             safe_name = str(filename or "upload.txt")
@@ -200,7 +202,9 @@ class CollectorService:
         _merge_collect_report(report, source_report)
 
         if source_refs:
-            nested = self._collect_subscription_refs(source_refs, source_name=source_name, timeout_sec=timeout_sec)
+            nested = self._collect_subscription_refs(
+                source_refs, source_name=source_name, timeout_sec=timeout_sec
+            )
             _merge_collect_reports(report, nested)
 
         return report
@@ -214,7 +218,9 @@ class CollectorService:
         report = CollectReport(total_sources=0)
         for idx, ref in enumerate(refs, start=1):
             if str(ref).startswith(("http://", "https://")):
-                subscription = self._ensure_subscription_for_url(ref, source_name=source_name, index=idx)
+                subscription = self._ensure_subscription_for_url(
+                    ref, source_name=source_name, index=idx
+                )
                 sub_report = self.collect_from_subscription(
                     subscription_id=int(subscription["id"]),
                     subscription_name=str(subscription.get("name") or ""),
@@ -255,7 +261,9 @@ class CollectorService:
                 return retry
             raise
 
-    def _collect_one_text_source(self, text: str, source: str, source_name: str) -> SourceCollectReport:
+    def _collect_one_text_source(
+        self, text: str, source: str, source_name: str
+    ) -> SourceCollectReport:
         source_report = SourceCollectReport(source=source)
 
         nodes, invalid = parse_source_content(text, source_name=source_name)

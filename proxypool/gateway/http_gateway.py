@@ -59,11 +59,25 @@ class UnifiedHttpGateway:
             query_params=query_params,
             target_host=target_host,
             target_path=target_path,
-            header_names=list((endpoint or {}).get("session_header_names") or list(pool.get("session_header_names") or [])),
-            query_names=list((endpoint or {}).get("session_query_param_names") or list(pool.get("session_query_param_names") or [])),
+            header_names=list(
+                (endpoint or {}).get("session_header_names")
+                or list(pool.get("session_header_names") or [])
+            ),
+            query_names=list(
+                (endpoint or {}).get("session_query_param_names")
+                or list(pool.get("session_query_param_names") or [])
+            ),
             rules=self.storage.list_pool_session_rules(int(pool["id"])),
         )
-        if extraction_failed and str((endpoint or {}).get("session_missing_action") or pool.get("session_missing_action") or "RANDOM").upper() == "REJECT":
+        if (
+            extraction_failed
+            and str(
+                (endpoint or {}).get("session_missing_action")
+                or pool.get("session_missing_action")
+                or "RANDOM"
+            ).upper()
+            == "REJECT"
+        ):
             raise GatewayError(status_code=400, detail="session_id is required")
 
         self.chain_service.initialize()
@@ -137,7 +151,9 @@ class UnifiedHttpGateway:
                 return endpoint
         return None
 
-    def _ensure_route_instance(self, pool_id: int, endpoint_id: int, route: dict[str, Any]) -> dict[str, Any]:
+    def _ensure_route_instance(
+        self, pool_id: int, endpoint_id: int, route: dict[str, Any]
+    ) -> dict[str, Any]:
         front_key = str(route.get("front_node", {}).get("key") or "").strip()
         exit_key = str(route.get("exit_node", {}).get("key") or "").strip()
         if not front_key or not exit_key:
@@ -155,7 +171,9 @@ class UnifiedHttpGateway:
         except RuntimeError as exc:
             raise GatewayError(status_code=503, detail=str(exc)) from exc
 
-    def _bind_lease_instance_id(self, session_id: str, pool_id: int, endpoint_id: int, instance_id: str) -> None:
+    def _bind_lease_instance_id(
+        self, session_id: str, pool_id: int, endpoint_id: int, instance_id: str
+    ) -> None:
         self.chain_service.bind_instance_to_session(
             session_id=session_id,
             pool_id=pool_id,
@@ -179,7 +197,9 @@ class UnifiedHttpGateway:
             return f"{safe_scheme}://{target_host}{path}?{query_string}"
         return f"{safe_scheme}://{target_host}{path}"
 
-    def _build_forward_headers(self, headers: Mapping[str, Any], pool: Mapping[str, Any]) -> dict[str, str]:
+    def _build_forward_headers(
+        self, headers: Mapping[str, Any], pool: Mapping[str, Any]
+    ) -> dict[str, str]:
         stripped = {str(name).lower() for name in list(pool.get("session_header_names") or [])}
         forward_headers: dict[str, str] = {}
         for key, value in dict(headers).items():

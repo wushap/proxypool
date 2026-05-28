@@ -1,6 +1,7 @@
 """
 SSRF Security Tests - Validates Server-Side Request Forgery protection.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -9,7 +10,6 @@ from proxypool.security.url_validator import (
     DangerousPortError,
     MetadataEndpointError,
     PrivateIPError,
-    SSRFProtectionError,
     URLValidationError,
     is_safe_url,
     validate_url,

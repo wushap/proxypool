@@ -1,6 +1,7 @@
 """
 Path Traversal Security Tests - Validates path traversal protection.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +10,6 @@ import pytest
 
 from proxypool.security.file_validator import (
     PathTraversalError,
-    PathValidationError,
     safe_list_directory,
     safe_read_file,
     validate_file_path,
@@ -50,9 +50,7 @@ class TestPathTraversalProtection:
         (tmp_path / "allowed" / "link").symlink_to(tmp_path / "secret")
 
         with pytest.raises(PathTraversalError, match="symlink"):
-            validate_file_path(
-                tmp_path / "allowed" / "link", allowed, allow_symlinks=False
-            )
+            validate_file_path(tmp_path / "allowed" / "link", allowed, allow_symlinks=False)
 
     def test_safe_read_file_within_allowed(self, tmp_path: Path):
         allowed = [tmp_path / "data"]

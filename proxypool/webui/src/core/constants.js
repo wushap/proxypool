@@ -47,6 +47,7 @@ export const DEFAULT_PROXY_COLUMN_CONFIGS = {
   bandwidth:      { label: "带宽 Mbps",  visible: true },
   success_rate:   { label: "成功率",     visible: true },
   fail_count:     { label: "失败次数",   visible: true },
+  last_error:     { label: "错误信息",   visible: false },
   status:         { label: "状态",       visible: true },
   checked_at:     { label: "最后检测",   visible: true },
   geo:            { label: "IP位置",     visible: true },
@@ -60,7 +61,7 @@ export const DEFAULT_PROXY_COLUMN_CONFIGS = {
 // 代理列顺序默认值
 export const DEFAULT_PROXY_COLUMN_ORDER = [
   "serial", "protocol", "address", "latency", "bandwidth", "success_rate", "fail_count",
-  "status", "checked_at", "geo", "purity", "unlock", "fallback_front", "source", "action",
+  "last_error", "status", "checked_at", "geo", "purity", "unlock", "fallback_front", "source", "action",
 ]
 
 // 代理筛选默认值

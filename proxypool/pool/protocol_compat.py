@@ -1,14 +1,30 @@
 """Protocol compatibility checking for proxy backends."""
+
 from __future__ import annotations
 
 from typing import Any
 
 # Protocol support matrix
 SINGBOX_PROTOCOLS: set[str] = {
-    "vmess", "trojan", "ss", "vless", "hysteria2", "snell", "http", "https", "socks5",
+    "vmess",
+    "trojan",
+    "ss",
+    "vless",
+    "hysteria2",
+    "snell",
+    "http",
+    "https",
+    "socks5",
 }
 MIHOMO_PROTOCOLS: set[str] = {
-    "vmess", "trojan", "ss", "vless", "hysteria2", "http", "https", "socks5",
+    "vmess",
+    "trojan",
+    "ss",
+    "vless",
+    "hysteria2",
+    "http",
+    "https",
+    "socks5",
 }
 # Protocols supported by at least one backend
 ALL_SUPPORTED_PROTOCOLS: set[str] = SINGBOX_PROTOCOLS | MIHOMO_PROTOCOLS
@@ -74,7 +90,4 @@ def filter_compatible_nodes(
 ) -> list[dict[str, Any]]:
     """Return only nodes whose protocol is supported by the backend."""
     supported = get_supported_protocols(backend_type)
-    return [
-        n for n in nodes
-        if str(n.get("protocol") or "").lower() in supported
-    ]
+    return [n for n in nodes if str(n.get("protocol") or "").lower() in supported]

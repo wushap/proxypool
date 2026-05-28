@@ -33,52 +33,103 @@ class ApiClient {
   }
 
   /**
-   * 发送请求
+   * 延迟执行
+   * @param {number} ms - 毫秒数
+   * @returns {Promise<void>}
+   */
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms))
+  }
+
+  /**
+   * 发送请求（带自动重试）
    * @param {string} url - 请求URL（相对于BASE_URL）
    * @param {object} options - 请求选项
+   * @param {number} maxRetries - 最大重试次数（默认3次）
+   * @param {number} timeout - 请求超时时间（毫秒，默认30秒）
    * @returns {Promise<object>} 响应数据
    */
-  async request(url, options = {}) {
+  async request(url, options = {}, maxRetries = 3, timeout = 30000) {
     const fullUrl = `${this.baseUrl}${url}`
+    let lastError
 
-    // 执行请求拦截器
-    let config = { url: fullUrl, ...options }
-    for (const interceptor of this.interceptors.request) {
-      config = await interceptor(config)
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      // 执行请求拦截器
+      let config = { url: fullUrl, ...options }
+      for (const interceptor of this.interceptors.request) {
+        config = await interceptor(config)
+      }
+
+      try {
+        // 创建超时控制器
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), timeout)
+
+        const response = await fetch(config.url, {
+          headers: {
+            'Content-Type': 'application/json',
+            ...config.headers,
+          },
+          ...config,
+          signal: controller.signal,
+        })
+
+        clearTimeout(timeoutId)
+
+        let data
+        const contentType = response.headers.get('content-type')
+        if (contentType && contentType.includes('application/json')) {
+          data = await response.json()
+        } else {
+          data = await response.text()
+        }
+
+        // 执行响应拦截器
+        for (const interceptor of this.interceptors.response) {
+          data = await interceptor(data, response)
+        }
+
+        if (!response.ok) {
+          const error = this.createApiError(data, response.status)
+          throw error
+        }
+
+        // 请求成功，触发在线状态更新
+        if (typeof window !== 'undefined' && window.dispatchEvent) {
+          window.dispatchEvent(new CustomEvent('api:request-success'))
+        }
+
+        return data
+      } catch (error) {
+        lastError = error
+
+        // 处理超时错误
+        if (error.name === 'AbortError') {
+          const timeoutError = new Error(`请求超时 (${timeout/1000}秒)，请检查网络或稍后重试`)
+          timeoutError.isApiError = true
+          timeoutError.status = 0
+          timeoutError.isTimeout = true
+          throw timeoutError
+        }
+
+        // 如果是 API 错误（非网络错误），不重试
+        if (error.isApiError) {
+          throw error
+        }
+
+        // 如果还有重试次数，等待后重试（指数退避）
+        if (attempt < maxRetries) {
+          const waitTime = Math.pow(2, attempt) * 1000 // 1s, 2s, 4s
+          await this.delay(waitTime)
+        }
+      }
     }
 
-    try {
-      const response = await fetch(config.url, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...config.headers,
-        },
-        ...config,
-      })
-
-      let data
-      const contentType = response.headers.get('content-type')
-      if (contentType && contentType.includes('application/json')) {
-        data = await response.json()
-      } else {
-        data = await response.text()
-      }
-
-      // 执行响应拦截器
-      for (const interceptor of this.interceptors.response) {
-        data = await interceptor(data, response)
-      }
-
-      if (!response.ok) {
-        const error = this.createApiError(data, response.status)
-        throw error
-      }
-
-      return data
-    } catch (error) {
-      if (error.isApiError) throw error
-      throw new Error(`网络请求失败: ${error.message}`)
+    // 所有重试都失败了
+    if (typeof window !== 'undefined' && window.dispatchEvent) {
+      window.dispatchEvent(new CustomEvent('api:request-failure'))
     }
+    throw new Error(`网络请求失败: ${lastError?.message || '未知错误'}`)
   }
 
   /**

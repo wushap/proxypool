@@ -51,7 +51,9 @@ async def test_refresh_subscription_uses_to_thread(tmp_path: Path, monkeypatch) 
                 by_source=[SourceCollectReport(source="slow", parsed=1, inserted=1)],
             )
 
-        monkeypatch.setattr(app.state.collector, "collect_from_subscription", fast_collect_from_subscription)
+        monkeypatch.setattr(
+            app.state.collector, "collect_from_subscription", fast_collect_from_subscription
+        )
         called = {"value": False}
 
         async def fake_to_thread(func, /, *args, **kwargs):
@@ -89,7 +91,9 @@ async def test_refresh_enabled_subscriptions_uses_to_thread(tmp_path: Path, monk
                 by_source=[SourceCollectReport(source="slow", parsed=1, inserted=1)],
             )
 
-        monkeypatch.setattr(app.state.collector, "collect_from_subscription", fast_collect_from_subscription)
+        monkeypatch.setattr(
+            app.state.collector, "collect_from_subscription", fast_collect_from_subscription
+        )
         called = {"value": False}
 
         async def fake_to_thread(func, /, *args, **kwargs):
@@ -106,7 +110,9 @@ async def test_refresh_enabled_subscriptions_uses_to_thread(tmp_path: Path, monk
 
 
 @pytest.mark.anyio
-async def test_start_refresh_enabled_subscriptions_task_returns_task_id(tmp_path: Path, monkeypatch) -> None:
+async def test_start_refresh_enabled_subscriptions_task_returns_task_id(
+    tmp_path: Path, monkeypatch
+) -> None:
     settings = _make_settings(tmp_path)
     app = create_app(settings)
     transport = httpx.ASGITransport(app=app)
@@ -129,7 +135,9 @@ async def test_start_refresh_enabled_subscriptions_task_returns_task_id(tmp_path
                 by_source=[SourceCollectReport(source="task", parsed=1, inserted=1)],
             )
 
-        monkeypatch.setattr(app.state.collector, "collect_from_subscription", slow_collect_from_subscription)
+        monkeypatch.setattr(
+            app.state.collector, "collect_from_subscription", slow_collect_from_subscription
+        )
 
         start_resp = await client.post("/api/tasks/subscriptions-refresh/start?timeout_sec=1")
         assert start_resp.status_code == 200
@@ -140,7 +148,9 @@ async def test_start_refresh_enabled_subscriptions_task_returns_task_id(tmp_path
 
 
 @pytest.mark.anyio
-async def test_refresh_enabled_subscriptions_task_tracks_progress(tmp_path: Path, monkeypatch) -> None:
+async def test_refresh_enabled_subscriptions_task_tracks_progress(
+    tmp_path: Path, monkeypatch
+) -> None:
     settings = _make_settings(tmp_path)
     app = create_app(settings)
     transport = httpx.ASGITransport(app=app)
@@ -149,7 +159,11 @@ async def test_refresh_enabled_subscriptions_task_tracks_progress(tmp_path: Path
         for idx in range(2):
             create_resp = await client.post(
                 "/api/subscriptions",
-                json={"name": f"task-sub-{idx}", "url": f"https://example.com/sub/{idx}", "enabled": True},
+                json={
+                    "name": f"task-sub-{idx}",
+                    "url": f"https://example.com/sub/{idx}",
+                    "enabled": True,
+                },
             )
             assert create_resp.status_code == 200
 
@@ -162,7 +176,9 @@ async def test_refresh_enabled_subscriptions_task_tracks_progress(tmp_path: Path
                 by_source=[SourceCollectReport(source=f"task-{sub_id}", parsed=1, inserted=1)],
             )
 
-        monkeypatch.setattr(app.state.collector, "collect_from_subscription", fast_collect_from_subscription)
+        monkeypatch.setattr(
+            app.state.collector, "collect_from_subscription", fast_collect_from_subscription
+        )
 
         start_resp = await client.post("/api/tasks/subscriptions-refresh/start?timeout_sec=1")
         assert start_resp.status_code == 200

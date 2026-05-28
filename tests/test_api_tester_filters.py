@@ -53,4 +53,3 @@ async def test_tester_run_passes_unavailable_and_min_age_filters(tmp_path, monke
         assert resp.status_code == 200
         assert captured.get("only_unavailable") is True
         assert int(captured.get("min_last_checked_age_hours") or 0) == 24
-

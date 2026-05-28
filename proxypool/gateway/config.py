@@ -36,8 +36,14 @@ class HttpGatewayConfig:
         if action not in {"RANDOM", "REJECT"}:
             raise ValueError("session_missing_action must be RANDOM or REJECT")
         self.session_missing_action = action
-        self.http_session_header_names = _normalize_names(self.http_session_header_names, ["X-ProxyPool-Session"])
+        self.http_session_header_names = _normalize_names(
+            self.http_session_header_names, ["X-ProxyPool-Session"]
+        )
         self.http_session_query_names = _normalize_names(self.http_session_query_names, ["session"])
-        self.connect_session_header_names = _normalize_names(self.connect_session_header_names, ["X-ProxyPool-Session"])
+        self.connect_session_header_names = _normalize_names(
+            self.connect_session_header_names, ["X-ProxyPool-Session"]
+        )
         self.health_check_enabled = bool(self.health_check_enabled)
-        self.health_check_interval_sec = max(5, min(3600, int(self.health_check_interval_sec or 30)))
+        self.health_check_interval_sec = max(
+            5, min(3600, int(self.health_check_interval_sec or 30))
+        )

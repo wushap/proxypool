@@ -1,9 +1,8 @@
 """
 Authentication Security Tests - Validates API authentication.
 """
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from proxypool.api.security import (
     is_api_key_required,

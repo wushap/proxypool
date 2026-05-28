@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from proxypool.storage.sqlite import SQLiteProxyStorage
 from proxypool.tasks.manager import TaskCancelled
@@ -55,9 +55,13 @@ class TesterService:
         fallback_nodes: list[dict] = []
         fallback_limit = max(0, int(fallback_front_max_attempts or 0))
         if fallback_limit > 0:
-            fallback_nodes = self.storage.get_proxies_by_keys(_clean_proxy_keys(fallback_front_proxy_keys))[:fallback_limit]
+            fallback_nodes = self.storage.get_proxies_by_keys(
+                _clean_proxy_keys(fallback_front_proxy_keys)
+            )[:fallback_limit]
 
-        result, fallback_success_keys = await self._probe_node_once(node=node, fallback_nodes=fallback_nodes)
+        result, fallback_success_keys = await self._probe_node_once(
+            node=node, fallback_nodes=fallback_nodes
+        )
         self.storage.update_test_result(
             normalized_key=result.normalized_key,
             available=result.available,
@@ -117,7 +121,9 @@ class TesterService:
         fallback_nodes: list[dict] = []
         fallback_limit = max(0, int(fallback_front_max_attempts or 0))
         if fallback_limit > 0:
-            fallback_nodes = self.storage.get_proxies_by_keys(_clean_proxy_keys(fallback_front_proxy_keys))[:fallback_limit]
+            fallback_nodes = self.storage.get_proxies_by_keys(
+                _clean_proxy_keys(fallback_front_proxy_keys)
+            )[:fallback_limit]
 
         def _handle_result(result: ProbeResult, fallback_success_keys: list[str]) -> None:
             report.tested += 1
@@ -158,11 +164,7 @@ class TesterService:
                     try:
                         result = await async_probe(node)
                         fallback_success_keys: list[str] = []
-                        if (
-                            not result.available
-                            and fallback_nodes
-                            and callable(async_chain_probe)
-                        ):
+                        if not result.available and fallback_nodes and callable(async_chain_probe):
                             chain_results: list[ProbeResult] = []
                             for front in fallback_nodes:
                                 front_key = str(front.get("normalized_key") or "")
@@ -233,25 +235,25 @@ class TesterService:
         old = str(old_key or "").strip()
         if not old:
             return
-        candidates = self.storage.list_proxies_filtered(limit=20, available=True, sort_by="latency", sort_order="asc")
+        candidates = self.storage.list_proxies_filtered(
+            limit=20, available=True, sort_by="latency", sort_order="asc"
+        )
         for candidate in candidates:
             new_key = str(candidate.get("normalized_key") or "").strip()
             if new_key and new_key != old:
                 self.replace_failed_proxy_cb(old, new_key)
                 return
 
-    async def _probe_node_once(self, node: dict, fallback_nodes: list[dict] | None = None) -> tuple[ProbeResult, list[str]]:
+    async def _probe_node_once(
+        self, node: dict, fallback_nodes: list[dict] | None = None
+    ) -> tuple[ProbeResult, list[str]]:
         async_probe = getattr(self.prober, "probe_async", None)
         async_chain_probe = getattr(self.prober, "probe_with_front_proxy_async", None)
         fallback_success_keys: list[str] = []
         try:
             if callable(async_probe):
                 result = await async_probe(node)
-                if (
-                    not result.available
-                    and fallback_nodes
-                    and callable(async_chain_probe)
-                ):
+                if not result.available and fallback_nodes and callable(async_chain_probe):
                     chain_results: list[ProbeResult] = []
                     for front in fallback_nodes:
                         front_key = str(front.get("normalized_key") or "")
@@ -344,7 +346,9 @@ class TesterService:
                             return result
                         if callable(async_chain_probe):
                             raw_fallback_keys = node.get("fallback_front_keys")
-                            fallback_keys = _clean_proxy_keys(raw_fallback_keys if isinstance(raw_fallback_keys, list) else [])
+                            fallback_keys = _clean_proxy_keys(
+                                raw_fallback_keys if isinstance(raw_fallback_keys, list) else []
+                            )
                             if fallback_keys:
                                 front_nodes = self.storage.get_proxies_by_keys(fallback_keys)
                                 chain_results: list[ProbeResult] = []
@@ -354,7 +358,10 @@ class TesterService:
                                     if not front_key or front_key == node_key:
                                         continue
                                     chain_result = await async_chain_probe(node, front)
-                                    if chain_result.openai_unlocked is not None or chain_result.available:
+                                    if (
+                                        chain_result.openai_unlocked is not None
+                                        or chain_result.available
+                                    ):
                                         chain_results.append(chain_result)
                                 if chain_results:
                                     return _select_openai_result(chain_results)
@@ -442,7 +449,9 @@ def _select_preferred_success(results: list[ProbeResult]) -> ProbeResult:
 
 def _select_openai_result(results: list[ProbeResult]) -> ProbeResult:
     if not results:
-        return ProbeResult(normalized_key="", available=False, openai_unlocked=None, openai_status="no result")
+        return ProbeResult(
+            normalized_key="", available=False, openai_unlocked=None, openai_status="no result"
+        )
     for item in results:
         if item.openai_unlocked is not None:
             return item

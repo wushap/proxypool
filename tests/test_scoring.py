@@ -1,9 +1,9 @@
 """
 Tests for Scoring module: SlidingWindow, NodeScorer, and CircuitBreaker.
 """
+
 from __future__ import annotations
 
-import math
 import time
 import unittest
 from unittest.mock import patch
@@ -13,7 +13,6 @@ from proxypool.pool.scoring import (
     CircuitBreakerConfig,
     CircuitBreakerManager,
     CircuitState,
-    NodeScore,
     NodeScorer,
     NodeScorerManager,
     ScoreGrade,
@@ -102,7 +101,7 @@ class TestSlidingWindow(unittest.TestCase):
         self.assertEqual(window.size, 1)
 
         # Mock time to simulate aging
-        with patch('time.time', return_value=time.time() + 10):
+        with patch("time.time", return_value=time.time() + 10):
             window.record(success=True, latency_ms=100)
             self.assertEqual(window.size, 1)  # Old sample cleaned up
 
@@ -164,22 +163,12 @@ class TestScoreWeights(unittest.TestCase):
 
     def test_custom_weights(self):
         """Test custom weights validation."""
-        weights = ScoreWeights(
-            success_rate=0.5,
-            latency=0.3,
-            purity=0.1,
-            stability=0.1
-        )
+        weights = ScoreWeights(success_rate=0.5, latency=0.3, purity=0.1, stability=0.1)
         self.assertTrue(weights.validate())
 
     def test_invalid_weights(self):
         """Test invalid weights fail validation."""
-        weights = ScoreWeights(
-            success_rate=0.5,
-            latency=0.5,
-            purity=0.5,
-            stability=0.5
-        )
+        weights = ScoreWeights(success_rate=0.5, latency=0.5, purity=0.5, stability=0.5)
         self.assertFalse(weights.validate())
 
 
@@ -275,10 +264,7 @@ class TestCircuitBreaker(unittest.TestCase):
 
     def test_transition_to_half_open(self):
         """Test transition to HALF_OPEN after backoff."""
-        config = CircuitBreakerConfig(
-            failure_threshold=2,
-            initial_backoff_sec=0.1
-        )
+        config = CircuitBreakerConfig(failure_threshold=2, initial_backoff_sec=0.1)
         cb = CircuitBreaker(config)
 
         cb.record_failure()
@@ -298,7 +284,7 @@ class TestCircuitBreaker(unittest.TestCase):
             failure_threshold=2,
             half_open_max_probes=3,
             recovery_threshold=2,
-            initial_backoff_sec=0.1
+            initial_backoff_sec=0.1,
         )
         cb = CircuitBreaker(config)
 
@@ -319,10 +305,7 @@ class TestCircuitBreaker(unittest.TestCase):
 
     def test_failure_in_half_open_reopens(self):
         """Test failure in HALF_OPEN transitions back to OPEN."""
-        config = CircuitBreakerConfig(
-            failure_threshold=2,
-            initial_backoff_sec=0.1
-        )
+        config = CircuitBreakerConfig(failure_threshold=2, initial_backoff_sec=0.1)
         cb = CircuitBreaker(config)
 
         cb.record_failure()

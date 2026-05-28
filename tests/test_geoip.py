@@ -26,7 +26,9 @@ class TestGeoIPService(unittest.TestCase):
 
             calls: list[str] = []
 
-            def proxy_fetcher(proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None) -> dict:
+            def proxy_fetcher(
+                proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None
+            ) -> dict:
                 calls.append(url)
                 if "ip-api.com/json/" in url:
                     return {"status": "fail", "message": "limit reached"}
@@ -66,7 +68,9 @@ class TestGeoIPService(unittest.TestCase):
 
             calls: list[str] = []
 
-            def proxy_fetcher(proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None) -> dict:
+            def proxy_fetcher(
+                proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None
+            ) -> dict:
                 calls.append(url)
                 self.assertEqual(proxy_row.get("host"), "a.example.com")
                 if "ip-api.com/json/" in url:
@@ -88,9 +92,15 @@ class TestGeoIPService(unittest.TestCase):
 
             service = GeoIPService(
                 storage=storage,
-                resolver=lambda host: (_ for _ in ()).throw(AssertionError("resolver should not be used")),
-                geo_lookup=lambda ip: (_ for _ in ()).throw(AssertionError("geo_lookup should not be used")),
-                purity_lookup=lambda ip: (_ for _ in ()).throw(AssertionError("purity_lookup should not be used")),
+                resolver=lambda host: (_ for _ in ()).throw(
+                    AssertionError("resolver should not be used")
+                ),
+                geo_lookup=lambda ip: (_ for _ in ()).throw(
+                    AssertionError("geo_lookup should not be used")
+                ),
+                purity_lookup=lambda ip: (_ for _ in ()).throw(
+                    AssertionError("purity_lookup should not be used")
+                ),
                 proxy_json_fetcher=proxy_fetcher,
             )
 
@@ -122,7 +132,9 @@ class TestGeoIPService(unittest.TestCase):
             proxy_calls: list[str] = []
             resolver_calls: list[str] = []
 
-            def proxy_fetcher(proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None) -> dict:
+            def proxy_fetcher(
+                proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None
+            ) -> dict:
                 proxy_calls.append(url)
                 raise RuntimeError("proxy geo fetch failed")
 
@@ -166,11 +178,18 @@ class TestGeoIPService(unittest.TestCase):
 
             calls: list[str] = []
 
-            def proxy_fetcher(proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None) -> dict:
+            def proxy_fetcher(
+                proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None
+            ) -> dict:
                 calls.append(url)
                 self.assertEqual(proxy_row.get("host"), "b.example.com")
                 if "ip-api.com/json/" in url:
-                    return {"status": "success", "country": "US", "city": "Seattle", "query": "198.51.100.12"}
+                    return {
+                        "status": "success",
+                        "country": "US",
+                        "city": "Seattle",
+                        "query": "198.51.100.12",
+                    }
                 if "ipinfo.check.place" in url and "db=ip2location" in url:
                     return {"usage_type": "DCH"}
                 if "ipinfo.check.place" in url and "db=iplark" in url:
@@ -183,9 +202,15 @@ class TestGeoIPService(unittest.TestCase):
 
             service = GeoIPService(
                 storage=storage,
-                resolver=lambda host: (_ for _ in ()).throw(AssertionError("resolver should not be used")),
-                geo_lookup=lambda ip: (_ for _ in ()).throw(AssertionError("geo_lookup should not be used")),
-                purity_lookup=lambda ip: (_ for _ in ()).throw(AssertionError("purity_lookup should not be used")),
+                resolver=lambda host: (_ for _ in ()).throw(
+                    AssertionError("resolver should not be used")
+                ),
+                geo_lookup=lambda ip: (_ for _ in ()).throw(
+                    AssertionError("geo_lookup should not be used")
+                ),
+                purity_lookup=lambda ip: (_ for _ in ()).throw(
+                    AssertionError("purity_lookup should not be used")
+                ),
                 proxy_json_fetcher=proxy_fetcher,
             )
             report = service.enrich_ip_purity_batch(limit=1, concurrency=1, only_unchecked=False)
@@ -198,7 +223,9 @@ class TestGeoIPService(unittest.TestCase):
             self.assertTrue(any("ip-api.com/json/" in u for u in calls))
             self.assertTrue(any("db=ip2location" in u for u in calls))
 
-    def test_enrich_ip_purity_batch_falls_back_to_direct_lookup_when_proxy_lookup_fails(self) -> None:
+    def test_enrich_ip_purity_batch_falls_back_to_direct_lookup_when_proxy_lookup_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
@@ -215,7 +242,9 @@ class TestGeoIPService(unittest.TestCase):
             proxy_calls: list[str] = []
             resolver_calls: list[str] = []
 
-            def proxy_fetcher(proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None) -> dict:
+            def proxy_fetcher(
+                proxy_row: dict, url: str, timeout_sec: float, front_proxy: dict | None = None
+            ) -> dict:
                 proxy_calls.append(url)
                 raise RuntimeError("proxy purity fetch failed")
 
@@ -248,8 +277,20 @@ class TestGeoIPService(unittest.TestCase):
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
 
-            n1 = ProxyNode(protocol="vless", host="a.example.com", port=443, raw_link="vless://a", extra={"uuid": "1"})
-            n2 = ProxyNode(protocol="trojan", host="b.example.com", port=443, raw_link="trojan://b", extra={"password": "x"})
+            n1 = ProxyNode(
+                protocol="vless",
+                host="a.example.com",
+                port=443,
+                raw_link="vless://a",
+                extra={"uuid": "1"},
+            )
+            n2 = ProxyNode(
+                protocol="trojan",
+                host="b.example.com",
+                port=443,
+                raw_link="trojan://b",
+                extra={"password": "x"},
+            )
             storage.upsert_proxy(n1)
             storage.upsert_proxy(n2)
             storage.update_test_result(n1.normalized_key(), available=True, latency_ms=11)
@@ -280,7 +321,9 @@ class TestGeoIPService(unittest.TestCase):
             self.assertEqual(rows_by_ip["1.1.1.1"]["country"], "Australia")
             self.assertEqual(rows_by_ip["8.8.8.8"]["city"], "Mountain View")
             self.assertEqual(rows_by_ip["1.1.1.1"]["ip_purity_level"], "Elevated")
-            self.assertAlmostEqual(float(rows_by_ip["1.1.1.1"]["ip_purity_score"] or 0), 1.56, places=2)
+            self.assertAlmostEqual(
+                float(rows_by_ip["1.1.1.1"]["ip_purity_score"] or 0), 1.56, places=2
+            )
 
     def test_weighted_purity_score(self) -> None:
         score, level = _weighted_purity_score(
@@ -304,8 +347,20 @@ class TestGeoIPService(unittest.TestCase):
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
 
-            n1 = ProxyNode(protocol="trojan", host="a.example.com", port=443, raw_link="trojan://a", extra={"password": "x"})
-            n2 = ProxyNode(protocol="trojan", host="b.example.com", port=443, raw_link="trojan://b", extra={"password": "y"})
+            n1 = ProxyNode(
+                protocol="trojan",
+                host="a.example.com",
+                port=443,
+                raw_link="trojan://a",
+                extra={"password": "x"},
+            )
+            n2 = ProxyNode(
+                protocol="trojan",
+                host="b.example.com",
+                port=443,
+                raw_link="trojan://b",
+                extra={"password": "y"},
+            )
             storage.upsert_proxy(n1)
             storage.upsert_proxy(n2)
             storage.update_test_result(n1.normalized_key(), available=True, latency_ms=11)
@@ -325,8 +380,12 @@ class TestGeoIPService(unittest.TestCase):
 
             rows = storage.list_proxies_filtered(limit=10)
             by_host = {str(row["host"]): row for row in rows}
-            self.assertAlmostEqual(float(by_host["a.example.com"]["ip_purity_score"] or 0), 12.0, places=2)
-            self.assertAlmostEqual(float(by_host["b.example.com"]["ip_purity_score"] or 0), 34.0, places=2)
+            self.assertAlmostEqual(
+                float(by_host["a.example.com"]["ip_purity_score"] or 0), 12.0, places=2
+            )
+            self.assertAlmostEqual(
+                float(by_host["b.example.com"]["ip_purity_score"] or 0), 34.0, places=2
+            )
 
     def test_enrich_batch_supports_parallel_workers(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -334,12 +393,12 @@ class TestGeoIPService(unittest.TestCase):
             storage = SQLiteProxyStorage(db)
             for i in range(12):
                 node = ProxyNode(
-                        protocol="trojan",
-                        host=f"h-{i}.example.com",
-                        port=443,
-                        raw_link=f"trojan://{i}",
-                        extra={"password": "p"},
-                    )
+                    protocol="trojan",
+                    host=f"h-{i}.example.com",
+                    port=443,
+                    raw_link=f"trojan://{i}",
+                    extra={"password": "p"},
+                )
                 storage.upsert_proxy(node)
                 storage.update_test_result(node.normalized_key(), available=True, latency_ms=20)
 
@@ -411,8 +470,20 @@ class TestGeoIPService(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
-            n1 = ProxyNode(protocol="trojan", host="ok.example.com", port=443, raw_link="trojan://ok", extra={"password": "p"})
-            n2 = ProxyNode(protocol="trojan", host="down.example.com", port=443, raw_link="trojan://down", extra={"password": "p"})
+            n1 = ProxyNode(
+                protocol="trojan",
+                host="ok.example.com",
+                port=443,
+                raw_link="trojan://ok",
+                extra={"password": "p"},
+            )
+            n2 = ProxyNode(
+                protocol="trojan",
+                host="down.example.com",
+                port=443,
+                raw_link="trojan://down",
+                extra={"password": "p"},
+            )
             storage.upsert_proxy(n1)
             storage.upsert_proxy(n2)
             storage.update_test_result(n1.normalized_key(), available=True, latency_ms=12)

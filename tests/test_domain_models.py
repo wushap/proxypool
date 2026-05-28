@@ -1,21 +1,20 @@
 """
 Tests for domain models: ProxyNode, NodeScore, CheckResult, EventLog.
 """
+
 from __future__ import annotations
 
 import pytest
-from datetime import datetime, timedelta
 
 from proxypool.models import (
-    ProxyNode,
-    NodeStatus,
     CheckResult,
     CheckType,
     EventLog,
-    EventType,
     EventSeverity,
+    EventType,
+    NodeStatus,
+    ProxyNode,
 )
-from proxypool.pool.scoring import NodeScore, ScoreWeights
 
 
 class TestProxyNode:

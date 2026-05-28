@@ -7,6 +7,40 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
+    <!-- Preload critical API endpoints -->
+    <link rel="prefetch" href="/api/stats" />
+    <link rel="prefetch" href="/api/proxies?limit=50" />
+    <!-- Preload lazy-loaded components -->
+    <link rel="modulepreload" href="/src/views/ProxiesPage.vue" />
+    <link rel="modulepreload" href="/src/views/ProxyPoolsPage.vue" />
+    <link rel="modulepreload" href="/src/views/SubscriptionsPage.vue" />
+    <!-- Critical CSS inlining for above-the-fold content -->
+    <style>
+      :root {
+        --bg: #f5f5f6;
+        --panel: #ffffff;
+        --ink: #17171b;
+        --muted: #6b6d76;
+        --accent: #4b5058;
+        --line: #d4d5d8;
+        --success: #16a34a;
+        --danger: #dc2626;
+        --warning: #ca8a04;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--ink); }
+      #app { min-height: 100vh; }
+      .loading-spinner { display: flex; justify-content: center; align-items: center; min-height: 200px; }
+      .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s ease; border: 1px solid transparent; }
+      .btn-primary { background: var(--accent); color: white; }
+      .btn-primary:hover { background: var(--accent-strong); }
+      .btn-secondary { background: white; border-color: var(--line); color: var(--ink); }
+      .btn-secondary:hover { background: var(--bg); }
+      .card { background: var(--panel); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 16px; }
+      .card-body { padding: 20px; }
+      .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+      .section-title { font-size: 18px; font-weight: 600; }
+    </style>
   </head>
   <body>
     <div id="app"></div>

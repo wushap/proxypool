@@ -39,4 +39,3 @@ def test_task_manager_supports_parallel_tasks() -> None:
     assert b["status"] == "success"
     assert float(a.get("progress") or 0) >= 100
     assert float(b.get("progress") or 0) >= 100
-

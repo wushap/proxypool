@@ -4,8 +4,9 @@ import inspect
 import threading
 import traceback
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 
 class TaskCancelled(RuntimeError):
@@ -55,7 +56,11 @@ class TaskManager:
                 next_status = str(kwargs.get("status") or "")
                 if current_status in _TERMINAL_STATUSES and not kwargs:
                     return
-                if current_status in _TERMINAL_STATUSES and next_status and next_status not in _TERMINAL_STATUSES:
+                if (
+                    current_status in _TERMINAL_STATUSES
+                    and next_status
+                    and next_status not in _TERMINAL_STATUSES
+                ):
                     return
                 if current_status in _TERMINAL_STATUSES and not next_status:
                     return
@@ -63,7 +68,9 @@ class TaskManager:
                     task[key] = value
                 total = int(task.get("total") or 0)
                 completed = int(task.get("completed") or 0)
-                task["progress"] = 100.0 if total <= 0 else round(min(1.0, completed / total) * 100.0, 2)
+                task["progress"] = (
+                    100.0 if total <= 0 else round(min(1.0, completed / total) * 100.0, 2)
+                )
                 task["updated_at"] = _utc_now()
 
         def _should_stop() -> bool:
@@ -81,14 +88,18 @@ class TaskManager:
                 return
             _update(status="running", message="running")
             try:
-                if supports_should_stop:
-                    result = runner(_update, _should_stop)
-                else:
-                    result = runner(_update)
+                result = runner(_update, _should_stop) if supports_should_stop else runner(_update)
                 if _should_stop():
-                    _update(status="cancelled", message="cancelled", result=result, finished_at=_utc_now())
+                    _update(
+                        status="cancelled",
+                        message="cancelled",
+                        result=result,
+                        finished_at=_utc_now(),
+                    )
                 else:
-                    _update(status="success", message="success", result=result, finished_at=_utc_now())
+                    _update(
+                        status="success", message="success", result=result, finished_at=_utc_now()
+                    )
             except TaskCancelled as exc:
                 _update(
                     status="cancelled",
@@ -174,7 +185,7 @@ class TaskManager:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _runner_supports_should_stop(runner: Callable[..., Any]) -> bool:
@@ -183,5 +194,7 @@ def _runner_supports_should_stop(runner: Callable[..., Any]) -> bool:
     except Exception:
         return False
     params = list(sig.parameters.values())
-    has_varargs = any(p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD) for p in params)
+    has_varargs = any(
+        p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD) for p in params
+    )
     return has_varargs or len(params) >= 2

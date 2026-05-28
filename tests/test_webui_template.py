@@ -1,5 +1,5 @@
-from pathlib import Path
 import re
+from pathlib import Path
 
 WEBUI_DIR = Path("proxypool/webui")
 
@@ -83,7 +83,7 @@ def test_webui_should_skip_blank_route_defaults_when_applying() -> None:
 
 def test_webui_should_render_single_proxy_test_action() -> None:
     content = _read_webui()
-    assert "label: \"操作\"" in content
+    assert 'label: "操作"' in content
     assert "onTestSingleProxy" in content
     assert "/api/tester/run-one" in content
 
@@ -97,7 +97,7 @@ def test_webui_should_copy_proxy_links_from_proxy_table() -> None:
     assert "/api/proxies/delete-selected" in content
     assert "proxyRawLink" in content
     assert "fallbackCopyTextToClipboard" in content
-    assert "document.execCommand(\"copy\")" in content
+    assert 'document.execCommand("copy")' in content
     # Text may be shortened
     assert ("复制" in content) or ("copy" in content.lower())
 
@@ -239,7 +239,9 @@ def test_webui_should_support_http_proxy_endpoint_management() -> None:
     assert "/api/http-proxy-endpoints" in content
 
 
-def test_webui_unified_multi_hop_page_should_include_pool_chain_chain_service_and_backend_config() -> None:
+def test_webui_unified_multi_hop_page_should_include_pool_chain_chain_service_and_backend_config() -> (
+    None
+):
     content = _read_webui()
     assert "proxyPoolTab" in content
     assert "HTTP 代理端点" in content
@@ -295,7 +297,7 @@ def test_webui_should_clear_selected_pool_chain_state_when_pool_disappears() -> 
     assert "resetSelectedPoolForChainState" in content
     assert "this.selectPoolForChain(null);" in content
     assert "selectedPoolIdForChain: 0" in content
-    assert "selectedPoolNameForChain: \"\"" in content
+    assert 'selectedPoolNameForChain: ""' in content
     assert "this.poolSessionRules = [];" in content
     assert "this.poolRouteTestResult = null;" in content
 
@@ -328,9 +330,14 @@ def test_webui_should_surface_backend_instances_default_listen_and_replacement()
 def test_webui_proxy_pool_form_should_use_route_mode_filter() -> None:
     content = _read_webui()
     assert "proxyPoolForm.filters.route_mode_filter" in content
-    assert "直连</option>" in content
-    assert "链式</option>" in content
-    assert "不可连接</option>" in content
+    # Card selector pattern instead of old <select> dropdown
+    assert "pool-type-selector" in content
+    assert "pool-type-option" in content
+    assert "普通代理池" in content
+    assert "链式代理池" in content
+    assert "特殊用途池" in content
+    assert "selectedPoolType" in content
+    assert "selectPoolType" in content
     assert "proxyPoolForm.filters.available" not in content
 
 
@@ -380,8 +387,10 @@ def test_webui_should_support_proxy_column_sorting() -> None:
 
 
 def test_webui_should_have_enhanced_stats_api() -> None:
-    from proxypool.storage.sqlite import SQLiteProxyStorage
     import inspect
+
+    from proxypool.storage.sqlite import SQLiteProxyStorage
+
     src = inspect.getsource(SQLiteProxyStorage.get_stats)
     assert "by_country" in src
     assert "openai_unlocked" in src
@@ -413,8 +422,10 @@ def test_webui_should_have_bulk_subscription_import() -> None:
 
 
 def test_api_security_should_use_timing_safe_comparison() -> None:
-    from proxypool.api.security import is_request_authorized
     import inspect
+
+    from proxypool.api.security import is_request_authorized
+
     src = inspect.getsource(is_request_authorized)
     assert "hmac.compare_digest" in src
     assert "== expected" not in src

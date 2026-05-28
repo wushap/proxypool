@@ -1,13 +1,13 @@
 """Proxy chain service coordinating node pools, routing, and health."""
+
 from __future__ import annotations
 
 import itertools
 import logging
 import random
 import threading
-from datetime import datetime, timedelta, timezone
-from typing import NamedTuple
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, NamedTuple
 
 from proxypool.pool.chain_builder import ChainBuilder
 from proxypool.pool.health_manager import HealthConfig, HealthManager
@@ -33,7 +33,7 @@ class MultiHopLease(NamedTuple):
 
 class ProxyChainService:
     """High-level service for proxy chain management."""
-    
+
     def __init__(
         self,
         storage: SQLiteProxyStorage,
@@ -45,7 +45,7 @@ class ProxyChainService:
         self.storage = storage
         self.singbox_binary = singbox_binary
         self.test_url = test_url
-        
+
         # Initialize components
         self.front_pool = NodePool("front", "front", [])
         self.exit_pool = NodePool("exit", "exit", [])
@@ -99,9 +99,13 @@ class ProxyChainService:
             for pool_config in pools
         }
         self.front_pool.regex_filters = pool_filters.get("front", [])
-        self.front_pool._compiled_filters = self.front_pool.compile_filters(self.front_pool.regex_filters)
+        self.front_pool._compiled_filters = self.front_pool.compile_filters(
+            self.front_pool.regex_filters
+        )
         self.exit_pool.regex_filters = pool_filters.get("exit", [])
-        self.exit_pool._compiled_filters = self.exit_pool.compile_filters(self.exit_pool.regex_filters)
+        self.exit_pool._compiled_filters = self.exit_pool.compile_filters(
+            self.exit_pool.regex_filters
+        )
 
     def _refresh_pools_locked(self) -> None:
         """Rebuild pools and reapply persisted health state."""
@@ -120,7 +124,9 @@ class ProxyChainService:
                     continue
                 endpoint_id = int(item.get("endpoint_id") or 0)
                 if endpoint_id > 0:
-                    hop_node_keys = self._load_endpoint_hop_node_keys(endpoint_id, str(item.get("exit_node_key") or ""))
+                    hop_node_keys = self._load_endpoint_hop_node_keys(
+                        endpoint_id, str(item.get("exit_node_key") or "")
+                    )
                     lease = MultiHopLease(
                         session_id=str(item.get("session_id") or ""),
                         pool_id=int(item.get("pool_id") or 0),
@@ -132,7 +138,9 @@ class ProxyChainService:
                         expires_at=expires_at,
                         last_accessed=last_accessed,
                     )
-                    self._multi_hop_leases[(lease.session_id, lease.pool_id, lease.endpoint_id)] = lease
+                    self._multi_hop_leases[(lease.session_id, lease.pool_id, lease.endpoint_id)] = (
+                        lease
+                    )
                     continue
                 lease = Lease(
                     session_id=str(item.get("session_id") or ""),
@@ -146,7 +154,9 @@ class ProxyChainService:
                 key = (lease.session_id, lease.pool_id)
                 self.sticky_router._leases[key] = lease
                 if lease.egress_ip:
-                    self.sticky_router._ip_load[lease.egress_ip] = self.sticky_router._ip_load.get(lease.egress_ip, 0) + 1
+                    self.sticky_router._ip_load[lease.egress_ip] = (
+                        self.sticky_router._ip_load.get(lease.egress_ip, 0) + 1
+                    )
 
     def _load_failed_routes(self) -> None:
         """Load persisted failed routes and nodes from database into memory."""
@@ -208,12 +218,12 @@ class ProxyChainService:
                     "name": proxy.get("name", ""),
                     "tags": [proxy.get("name", ""), proxy.get("source", "")],
                 }
-        
+
         front_matched = self.front_pool.rebuild(nodes_dict)
         exit_matched = self.exit_pool.rebuild(nodes_dict)
         self._apply_probe_status(self.front_pool, proxy_status)
         self._apply_probe_status(self.exit_pool, proxy_status)
-        
+
         logger.info("Pools rebuilt: front=%s, exit=%s", len(front_matched), len(exit_matched))
 
     def _load_health_state(self) -> None:
@@ -221,7 +231,7 @@ class ProxyChainService:
         health_records = self.storage.list_node_health()
         for record in health_records:
             node_key = record.get("node_key", "")
-            
+
             # Update front pool
             front_node = self.front_pool.get_node(node_key)
             if front_node:
@@ -229,7 +239,7 @@ class ProxyChainService:
                 front_node.circuit_open = bool(record.get("circuit_open_since"))
                 front_node.egress_ip = record.get("egress_ip", "")
                 front_node.latency_ms = record.get("latency_avg_ms")
-            
+
             # Update exit pool
             exit_node = self.exit_pool.get_node(node_key)
             if exit_node:
@@ -248,7 +258,9 @@ class ProxyChainService:
             if status.get("egress_ip"):
                 node.egress_ip = str(status["egress_ip"])
 
-    def _probe_exit_chain(self, front_node: NodeEntry, exit_node: NodeEntry) -> tuple[bool, str, int | None]:
+    def _probe_exit_chain(
+        self, front_node: NodeEntry, exit_node: NodeEntry
+    ) -> tuple[bool, str, int | None]:
         """Probe an exit node through a specific front node using sing-box."""
         front_proxy = self.storage.get_proxy_by_key(front_node.key)
         exit_proxy = self.storage.get_proxy_by_key(exit_node.key)
@@ -382,7 +394,10 @@ class ProxyChainService:
         return {
             "front_node": self._node_summary(result.front_node),
             "exit_node": self._node_summary(result.exit_node),
-            "hop_nodes": [self._node_summary(result.front_node), self._node_summary(result.exit_node)],
+            "hop_nodes": [
+                self._node_summary(result.front_node),
+                self._node_summary(result.exit_node),
+            ],
             "hop_node_keys": [result.front_node.key, result.exit_node.key],
             "endpoint_id": 0,
             "route_signature": f"{result.front_node.key}>{result.exit_node.key}",
@@ -462,7 +477,9 @@ class ProxyChainService:
             persisted = self.storage.get_sticky_lease(session_id, entry_pool_id, endpoint_id)
             if persisted is None:
                 return None
-            hop_node_keys = self._load_endpoint_hop_node_keys(endpoint_id, str(persisted.get("exit_node_key") or ""))
+            hop_node_keys = self._load_endpoint_hop_node_keys(
+                endpoint_id, str(persisted.get("exit_node_key") or "")
+            )
             lease = MultiHopLease(
                 session_id=str(session_id or "").strip(),
                 pool_id=entry_pool_id,
@@ -471,8 +488,8 @@ class ProxyChainService:
                 hop_node_keys=hop_node_keys,
                 exit_node_key=str(persisted.get("exit_node_key") or ""),
                 egress_ip=str(persisted.get("egress_ip") or ""),
-                expires_at=_parse_datetime(persisted.get("expires_at")) or datetime.now(timezone.utc),
-                last_accessed=_parse_datetime(persisted.get("last_accessed")) or datetime.now(timezone.utc),
+                expires_at=_parse_datetime(persisted.get("expires_at")) or datetime.now(UTC),
+                last_accessed=_parse_datetime(persisted.get("last_accessed")) or datetime.now(UTC),
             )
         else:
             lease = lease._replace(instance_id=str(instance_id or ""))
@@ -505,17 +522,19 @@ class ProxyChainService:
                         continue
                     if pool_id is not None and int(lease.pool_id) != int(pool_id):
                         continue
-                    items.append({
-                        "session_id": lease.session_id,
-                        "pool_id": lease.pool_id,
-                        "endpoint_id": lease.endpoint_id,
-                        "instance_id": lease.instance_id,
-                        "exit_node_key": lease.exit_node_key,
-                        "hop_node_keys": list(lease.hop_node_keys),
-                        "egress_ip": lease.egress_ip,
-                        "expires_at": lease.expires_at.isoformat(),
-                        "last_accessed": lease.last_accessed.isoformat(),
-                    })
+                    items.append(
+                        {
+                            "session_id": lease.session_id,
+                            "pool_id": lease.pool_id,
+                            "endpoint_id": lease.endpoint_id,
+                            "instance_id": lease.instance_id,
+                            "exit_node_key": lease.exit_node_key,
+                            "hop_node_keys": list(lease.hop_node_keys),
+                            "egress_ip": lease.egress_ip,
+                            "expires_at": lease.expires_at.isoformat(),
+                            "last_accessed": lease.last_accessed.isoformat(),
+                        }
+                    )
             items.sort(key=lambda item: (item["pool_id"], item["session_id"]))
             return items
         return self.sticky_router.get_leases(pool_id)
@@ -523,11 +542,10 @@ class ProxyChainService:
     def cleanup_leases(self) -> int:
         """Cleanup expired leases."""
         removed = self.sticky_router.cleanup_expired_leases()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self._lock:
             expired_multi_keys = [
-                key for key, lease in self._multi_hop_leases.items()
-                if now >= lease.expires_at
+                key for key, lease in self._multi_hop_leases.items() if now >= lease.expires_at
             ]
             for key in expired_multi_keys:
                 self._multi_hop_leases.pop(key, None)
@@ -547,13 +565,15 @@ class ProxyChainService:
         safe_endpoint_id = int(endpoint_id or 0)
         safe_pool_id = int(pool_id or 0)
         safe_session_id = str(session_id or "").strip()
-        keys = tuple(str(item or "").strip() for item in list(hop_node_keys or []) if str(item or "").strip())
+        keys = tuple(
+            str(item or "").strip() for item in list(hop_node_keys or []) if str(item or "").strip()
+        )
         with self._lock:
             if safe_endpoint_id > 0 and safe_pool_id > 0 and safe_session_id:
                 self._multi_hop_leases.pop((safe_session_id, safe_pool_id, safe_endpoint_id), None)
                 self.storage.delete_sticky_lease(safe_session_id, safe_pool_id, safe_endpoint_id)
             if safe_endpoint_id > 0 and keys:
-                expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(1, int(cooldown_sec or 300)))
+                expires_at = datetime.now(UTC) + timedelta(seconds=max(1, int(cooldown_sec or 300)))
                 expires_at_str = expires_at.isoformat()
                 route_signature = ">".join(keys)
 
@@ -564,7 +584,9 @@ class ProxyChainService:
 
                 # Persist to database
                 try:
-                    self.storage.upsert_failed_route(safe_endpoint_id, route_signature, expires_at_str)
+                    self.storage.upsert_failed_route(
+                        safe_endpoint_id, route_signature, expires_at_str
+                    )
                     self.storage.upsert_failed_route_node(safe_endpoint_id, keys[0], expires_at_str)
                 except Exception as e:
                     logger.error(f"Failed to persist failed route: {e}")
@@ -576,7 +598,9 @@ class ProxyChainService:
         ttl_sec: int = 600,
     ) -> None:
         safe_endpoint_id = int(endpoint_id or 0)
-        keys = tuple(str(item or "").strip() for item in list(hop_node_keys or []) if str(item or "").strip())
+        keys = tuple(
+            str(item or "").strip() for item in list(hop_node_keys or []) if str(item or "").strip()
+        )
         if safe_endpoint_id <= 0 or not keys:
             return
 
@@ -587,7 +611,7 @@ class ProxyChainService:
             self._failed_endpoint_routes.pop((safe_endpoint_id, keys), None)
             for node_key in keys:
                 self._failed_endpoint_nodes.pop((safe_endpoint_id, node_key), None)
-            self._healthy_endpoint_routes[(safe_endpoint_id, keys)] = datetime.now(timezone.utc) + timedelta(
+            self._healthy_endpoint_routes[(safe_endpoint_id, keys)] = datetime.now(UTC) + timedelta(
                 seconds=max(1, int(ttl_sec or 600))
             )
 
@@ -628,7 +652,7 @@ class ProxyChainService:
         if entry_pool_id <= 0:
             return None
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         lease_created = False
         instance_reused = False
         bound_instance_id = ""
@@ -649,20 +673,31 @@ class ProxyChainService:
                     egress_ip = lease.egress_ip
                     exit_node_key = lease.exit_node_key
                     bound_instance_id = lease.instance_id
-                    instance_reused = bool(bound_instance_id and bound_instance_id in set(live_instance_ids or set()))
+                    instance_reused = bool(
+                        bound_instance_id and bound_instance_id in set(live_instance_ids or set())
+                    )
                     refreshed_lease = lease._replace(last_accessed=now)
                     with self._lock:
-                        self._multi_hop_leases[(lease.session_id, lease.pool_id, lease.endpoint_id)] = refreshed_lease
+                        self._multi_hop_leases[
+                            (lease.session_id, lease.pool_id, lease.endpoint_id)
+                        ] = refreshed_lease
 
         if not hop_node_keys:
-            selection = self._select_endpoint_hops(endpoint_id=endpoint_id, target_domain=target_domain)
+            selection = self._select_endpoint_hops(
+                endpoint_id=endpoint_id, target_domain=target_domain
+            )
             if selection is None:
                 return None
             hop_node_keys = selection["hop_node_keys"]
             egress_ip = selection["egress_ip"]
             exit_node_key = hop_node_keys[-1]
             if session_id:
-                ttl_sec = max(1, int(endpoint.get("sticky_ttl_sec") or self.sticky_router.sticky_ttl_sec or 3600))
+                ttl_sec = max(
+                    1,
+                    int(
+                        endpoint.get("sticky_ttl_sec") or self.sticky_router.sticky_ttl_sec or 3600
+                    ),
+                )
                 created = MultiHopLease(
                     session_id=str(session_id or "").strip(),
                     pool_id=entry_pool_id,
@@ -675,10 +710,14 @@ class ProxyChainService:
                     last_accessed=now,
                 )
                 with self._lock:
-                    self._multi_hop_leases[(created.session_id, created.pool_id, created.endpoint_id)] = created
+                    self._multi_hop_leases[
+                        (created.session_id, created.pool_id, created.endpoint_id)
+                    ] = created
                 lease_created = True
 
-        hop_nodes = [self._proxy_to_node_summary(self.storage.get_proxy_by_key(key)) for key in hop_node_keys]
+        hop_nodes = [
+            self._proxy_to_node_summary(self.storage.get_proxy_by_key(key)) for key in hop_node_keys
+        ]
         if any(node is None for node in hop_nodes):
             return None
         hop_nodes_clean = [node for node in hop_nodes if node is not None]
@@ -759,12 +798,18 @@ class ProxyChainService:
             if pool_id <= 0:
                 return None
             candidates = [
-                item for item in self.storage.list_proxy_pool_candidates(pool_id, limit=200, exclude_keys=set())
+                item
+                for item in self.storage.list_proxy_pool_candidates(
+                    pool_id, limit=200, exclude_keys=set()
+                )
                 if bool(item.get("available")) and str(item.get("normalized_key") or "").strip()
             ]
             candidates = [
-                item for item in candidates
-                if not self._is_endpoint_node_failed(endpoint_id, str(item.get("normalized_key") or "").strip())
+                item
+                for item in candidates
+                if not self._is_endpoint_node_failed(
+                    endpoint_id, str(item.get("normalized_key") or "").strip()
+                )
             ]
             candidates.sort(key=self._candidate_score)
             if not candidates:
@@ -772,7 +817,13 @@ class ProxyChainService:
             candidate_groups.append(candidates)
 
         checked = 0
-        max_checks = max(1, min(1000, max(100, sum(len(group) for group in candidate_groups) * len(candidate_groups))))
+        max_checks = max(
+            1,
+            min(
+                1000,
+                max(100, sum(len(group) for group in candidate_groups) * len(candidate_groups)),
+            ),
+        )
         for combo in itertools.product(*candidate_groups):
             checked += 1
             if checked > max_checks:
@@ -797,7 +848,10 @@ class ProxyChainService:
     ) -> dict[str, Any] | None:
         del target_domain
         candidates = [
-            item for item in self.storage.list_proxy_pool_candidates(pool_id, limit=200, exclude_keys=exclude_keys)
+            item
+            for item in self.storage.list_proxy_pool_candidates(
+                pool_id, limit=200, exclude_keys=exclude_keys
+            )
             if bool(item.get("available"))
         ]
         if not candidates:
@@ -816,8 +870,10 @@ class ProxyChainService:
         except Exception:
             return float("inf")
 
-    def _pick_healthy_endpoint_route(self, endpoint_id: int, pool_hops: list[dict[str, Any]]) -> list[str] | None:
-        now = datetime.now(timezone.utc)
+    def _pick_healthy_endpoint_route(
+        self, endpoint_id: int, pool_hops: list[dict[str, Any]]
+    ) -> list[str] | None:
+        now = datetime.now(UTC)
         pool_count = len(pool_hops)
         candidates: list[tuple[datetime, list[str]]] = []
         with self._lock:
@@ -842,7 +898,9 @@ class ProxyChainService:
         candidates.sort(key=lambda item: item[0], reverse=True)
         return candidates[0][1]
 
-    def _endpoint_route_matches_pools(self, hop_node_keys: list[str], pool_hops: list[dict[str, Any]]) -> bool:
+    def _endpoint_route_matches_pools(
+        self, hop_node_keys: list[str], pool_hops: list[dict[str, Any]]
+    ) -> bool:
         used: set[str] = set()
         for key, hop in zip(hop_node_keys, pool_hops, strict=False):
             if key in used:
@@ -851,25 +909,32 @@ class ProxyChainService:
             pool_id = int(hop.get("pool_id") or 0)
             if pool_id <= 0:
                 return False
-            candidates = self.storage.list_proxy_pool_candidates(pool_id, limit=500, exclude_keys=set())
+            candidates = self.storage.list_proxy_pool_candidates(
+                pool_id, limit=500, exclude_keys=set()
+            )
             matched = [
-                item for item in candidates
-                if str(item.get("normalized_key") or "") == str(key)
-                and bool(item.get("available"))
+                item
+                for item in candidates
+                if str(item.get("normalized_key") or "") == str(key) and bool(item.get("available"))
             ]
             if not matched:
                 return False
         return True
 
     def _is_endpoint_route_failed(self, endpoint_id: int, hop_node_keys: list[str]) -> bool:
-        route_signature = ">".join(str(item or "").strip() for item in hop_node_keys if str(item or "").strip())
-        key = (int(endpoint_id or 0), tuple(str(item or "").strip() for item in hop_node_keys if str(item or "").strip()))
+        route_signature = ">".join(
+            str(item or "").strip() for item in hop_node_keys if str(item or "").strip()
+        )
+        key = (
+            int(endpoint_id or 0),
+            tuple(str(item or "").strip() for item in hop_node_keys if str(item or "").strip()),
+        )
 
         # Check in-memory cache first
         with self._lock:
             expires_at = self._failed_endpoint_routes.get(key)
             if expires_at is not None:
-                if datetime.now(timezone.utc) >= expires_at:
+                if datetime.now(UTC) >= expires_at:
                     self._failed_endpoint_routes.pop(key, None)
                 else:
                     return True
@@ -894,7 +959,7 @@ class ProxyChainService:
         with self._lock:
             expires_at = self._failed_endpoint_nodes.get(key)
             if expires_at is not None:
-                if datetime.now(timezone.utc) >= expires_at:
+                if datetime.now(UTC) >= expires_at:
                     self._failed_endpoint_nodes.pop(key, None)
                 else:
                     return True
@@ -909,7 +974,9 @@ class ProxyChainService:
         return False
 
     def endpoint_route_health(self, endpoint_id: int, hop_node_keys: list[str]) -> dict[str, Any]:
-        clean_keys = tuple(str(item or "").strip() for item in hop_node_keys if str(item or "").strip())
+        clean_keys = tuple(
+            str(item or "").strip() for item in hop_node_keys if str(item or "").strip()
+        )
         key = (int(endpoint_id or 0), clean_keys)
         failed = self._is_endpoint_route_failed(endpoint_id, list(clean_keys))
         failure_expires_at = ""
@@ -919,7 +986,7 @@ class ProxyChainService:
             failure_expires_at = expires_at.isoformat()
 
         healthy_until = ""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self._lock:
             healthy_exp = self._healthy_endpoint_routes.get(key)
             if healthy_exp is not None:
@@ -967,7 +1034,9 @@ class ProxyChainService:
                 return None
         return list(lease.hop_node_keys)
 
-    def _load_endpoint_hop_node_keys(self, endpoint_id: int, fallback_exit_node_key: str = "") -> list[str]:
+    def _load_endpoint_hop_node_keys(
+        self, endpoint_id: int, fallback_exit_node_key: str = ""
+    ) -> list[str]:
         endpoint = self.storage.get_http_proxy_endpoint(endpoint_id)
         if endpoint is None:
             return [str(fallback_exit_node_key or "").strip()] if fallback_exit_node_key else []
@@ -977,7 +1046,9 @@ class ProxyChainService:
             pool_id = int(hop.get("pool_id") or 0)
             if pool_id <= 0:
                 continue
-            candidate = self._pick_pool_candidate(pool_id=pool_id, exclude_keys=used_keys, target_domain="")
+            candidate = self._pick_pool_candidate(
+                pool_id=pool_id, exclude_keys=used_keys, target_domain=""
+            )
             if candidate is None:
                 continue
             key = str(candidate.get("normalized_key") or "").strip()
@@ -996,7 +1067,11 @@ class ProxyChainService:
     def _build_route_signature(self, endpoint_id: int, hop_node_keys: list[str]) -> str:
         endpoint = self.storage.get_http_proxy_endpoint(endpoint_id) or {}
         pool_hops = list(endpoint.get("hops") or [])
-        pool_parts = [f"pool-{int(item.get('pool_id') or 0)}" for item in pool_hops if int(item.get("pool_id") or 0) > 0]
+        pool_parts = [
+            f"pool-{int(item.get('pool_id') or 0)}"
+            for item in pool_hops
+            if int(item.get("pool_id") or 0) > 0
+        ]
         if pool_parts:
             return ">".join(pool_parts)
         return ">".join(hop_node_keys)

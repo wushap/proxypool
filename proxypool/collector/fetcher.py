@@ -17,7 +17,9 @@ class FetchError(RuntimeError):
     pass
 
 
-def fetch_text(url: str, timeout_sec: float = 12.0, max_content_length: int = 10 * 1024 * 1024) -> str:
+def fetch_text(
+    url: str, timeout_sec: float = 12.0, max_content_length: int = 10 * 1024 * 1024
+) -> str:
     """Fetch text content from URL with size limit.
 
     Args:
@@ -103,7 +105,9 @@ def fetch_text_via_proxy_node(
             stderr=subprocess.DEVNULL,
         )
         try:
-            if not _wait_port("127.0.0.1", local_port, timeout_sec=min(4.0, max(1.5, timeout_sec / 2))):
+            if not _wait_port(
+                "127.0.0.1", local_port, timeout_sec=min(4.0, max(1.5, timeout_sec / 2))
+            ):
                 raise FetchError("subscription proxy startup timeout")
 
             cmd = [

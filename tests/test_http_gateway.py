@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import os
 import socket
-from pathlib import Path
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -36,7 +36,9 @@ class FakeBackend:
             previous.close()
         self.listeners[spec.instance_id] = listener
         self.started.append(spec.instance_id)
-        return StartedInstance(pid=os.getpid(), config_file=Path("/tmp/test.yaml"), log_file=Path("/tmp/test.log"))
+        return StartedInstance(
+            pid=os.getpid(), config_file=Path("/tmp/test.yaml"), log_file=Path("/tmp/test.log")
+        )
 
     def stop(self, instance_id: str) -> None:
         self.stopped.append(instance_id)
@@ -109,7 +111,9 @@ def test_session_extractor_uses_rule_headers_on_longest_prefix_match() -> None:
 
 
 @pytest.mark.anyio
-async def test_unified_gateway_strips_internal_session_header_and_creates_lease(tmp_path: Path) -> None:
+async def test_unified_gateway_strips_internal_session_header_and_creates_lease(
+    tmp_path: Path,
+) -> None:
     from proxypool.gateway.http_gateway import UnifiedHttpGateway
 
     storage = SQLiteProxyStorage(tmp_path / "test.db")
@@ -123,7 +127,9 @@ async def test_unified_gateway_strips_internal_session_header_and_creates_lease(
     )
     pool_id = int(pool["id"])
 
-    front = ProxyNode(protocol="http", host="1.1.1.1", port=80, raw_link="http://1.1.1.1:80", name="front-a")
+    front = ProxyNode(
+        protocol="http", host="1.1.1.1", port=80, raw_link="http://1.1.1.1:80", name="front-a"
+    )
     exit_node = ProxyNode(
         protocol="socks",
         host="2.2.2.2",
@@ -209,7 +215,9 @@ async def test_unified_gateway_strips_internal_session_header_and_creates_lease(
 
 def test_chain_instance_manager_can_ensure_running_instance(tmp_path: Path) -> None:
     storage = SQLiteProxyStorage(tmp_path / "test.db")
-    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
+    front = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1"
+    )
     exit_node = ProxyNode(
         protocol="socks",
         host="2.2.2.2",

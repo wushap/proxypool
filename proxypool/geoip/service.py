@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import inspect
+import json
 import re
 import socket
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Callable
 from urllib.request import Request, urlopen
 
 from proxypool.storage.sqlite import SQLiteProxyStorage
@@ -117,7 +117,15 @@ class GeoIPService:
         updated = 0
         failed = 0
         if progress_cb:
-            progress_cb({"total": len(candidates), "completed": 0, "updated": 0, "failed": 0, "phase": "prepare"})
+            progress_cb(
+                {
+                    "total": len(candidates),
+                    "completed": 0,
+                    "updated": 0,
+                    "failed": 0,
+                    "phase": "prepare",
+                }
+            )
 
         if candidates:
             workers = max(1, min(int(concurrency or 1), len(candidates)))
@@ -185,7 +193,15 @@ class GeoIPService:
         updated = 0
         failed = 0
         if progress_cb:
-            progress_cb({"total": len(candidates), "completed": 0, "updated": 0, "failed": 0, "phase": "prepare"})
+            progress_cb(
+                {
+                    "total": len(candidates),
+                    "completed": 0,
+                    "updated": 0,
+                    "failed": 0,
+                    "phase": "prepare",
+                }
+            )
 
         if candidates:
             workers = max(1, min(int(concurrency or 1), len(candidates)))
@@ -391,7 +407,9 @@ class GeoIPService:
         }
         return _residential_result_from_votes(residential_votes)
 
-    def _try_fetch_json_via_proxy(self, proxy_row: dict, url: str, timeout_sec: float) -> dict | None:
+    def _try_fetch_json_via_proxy(
+        self, proxy_row: dict, url: str, timeout_sec: float
+    ) -> dict | None:
         try:
             return self._fetch_json_via_proxy(proxy_row, url, timeout_sec)
         except Exception:
@@ -412,7 +430,9 @@ class GeoIPService:
 
         for front_proxy in self._get_fallback_front_proxies(proxy_row):
             try:
-                data = self._call_proxy_fetcher(fetcher, proxy_row, url, timeout_sec, front_proxy=front_proxy)
+                data = self._call_proxy_fetcher(
+                    fetcher, proxy_row, url, timeout_sec, front_proxy=front_proxy
+                )
                 if isinstance(data, dict):
                     return data
                 last_error = RuntimeError("invalid json payload from proxy fetch")
@@ -625,11 +645,11 @@ def _parse_residential_from_ip2location(data: object) -> bool | None:
     if not isinstance(data, dict):
         return None
     # Common indicator fields.
-    usage_type = str(
-        data.get("usage_type")
-        or (data.get("data") or {}).get("usage_type")
-        or ""
-    ).strip().upper()
+    usage_type = (
+        str(data.get("usage_type") or (data.get("data") or {}).get("usage_type") or "")
+        .strip()
+        .upper()
+    )
     if usage_type:
         if usage_type in {"RES", "ISP"}:
             return True
@@ -681,15 +701,21 @@ def _parse_residential_from_ipinfo_network(data: object) -> bool | None:
             if bool(privacy.get(k)):
                 return False
 
-    org_text = " ".join(
-        str(x or "")
-        for x in (
-            data.get("org"),
-            data.get("asn"),
-            company.get("name") if isinstance(company, dict) else "",
-            (data.get("carrier") or {}).get("name") if isinstance(data.get("carrier"), dict) else "",
+    org_text = (
+        " ".join(
+            str(x or "")
+            for x in (
+                data.get("org"),
+                data.get("asn"),
+                company.get("name") if isinstance(company, dict) else "",
+                (data.get("carrier") or {}).get("name")
+                if isinstance(data.get("carrier"), dict)
+                else "",
+            )
         )
-    ).strip().lower()
+        .strip()
+        .lower()
+    )
     if org_text:
         if any(s in org_text for s in _DATACENTER_KEYWORDS):
             return False

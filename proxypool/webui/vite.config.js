@@ -6,6 +6,20 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Split Vue core
+          "vue-core": ["vue"],
+          // Split Element Plus
+          "element-plus": ["element-plus"],
+        },
+      },
+    },
+    // Enable CSS code splitting
+    cssCodeSplit: true,
+    // Generate sourcemaps for production debugging
+    sourcemap: false,
   },
   server: {
     proxy: {

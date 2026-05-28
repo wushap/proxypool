@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import json
-import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from proxypool.storage.sqlite import SQLiteProxyStorage
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class ProxyPoolService:
@@ -60,11 +58,15 @@ class ProxyPoolService:
             raise ValueError("proxy pool not found")
         return self._enrich_pool(self.storage.update_proxy_pool(pool_id, **kwargs))
 
-    def upsert_pool_session_rule(self, pool_id: int, url_prefix: str, headers: list[str] | None = None) -> dict[str, Any]:
+    def upsert_pool_session_rule(
+        self, pool_id: int, url_prefix: str, headers: list[str] | None = None
+    ) -> dict[str, Any]:
         pool = self.storage.get_proxy_pool(pool_id)
         if pool is None:
             raise ValueError("proxy pool not found")
-        return self.storage.upsert_pool_session_rule(pool_id=pool_id, url_prefix=url_prefix, headers=headers)
+        return self.storage.upsert_pool_session_rule(
+            pool_id=pool_id, url_prefix=url_prefix, headers=headers
+        )
 
     def list_pool_session_rules(self, pool_id: int) -> list[dict[str, Any]]:
         pool = self.storage.get_proxy_pool(pool_id)
@@ -91,7 +93,9 @@ class ProxyPoolService:
         deleted = self.storage.delete_sticky_lease(session_id, pool_id)
         return deleted > 0
 
-    def inherit_pool_chain_lease(self, pool_id: int, from_session_id: str, to_session_id: str) -> dict[str, Any]:
+    def inherit_pool_chain_lease(
+        self, pool_id: int, from_session_id: str, to_session_id: str
+    ) -> dict[str, Any]:
         pool = self.storage.get_proxy_pool(pool_id)
         if pool is None:
             raise ValueError("proxy pool not found")
@@ -153,7 +157,7 @@ class ProxyPoolService:
                 filters=pool.get("filters") or {},
             )
 
-        base_url = f"http://127.0.0.1:8080"
+        base_url = "http://127.0.0.1:8080"
         pub_sub_url = f"{base_url}/api/published-subscriptions/{pub_sub_id}/subscription"
         self.storage.update_proxy_pool_status(pool_id, "running", last_synced_at=_utc_now())
         latest = self.storage.get_proxy_pool(pool_id) or {}

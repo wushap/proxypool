@@ -8,10 +8,22 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-router = APIRouter(prefix="/api", tags=["backend"])
+from proxypool.api.schemas import (
+    BackendDefaultListenRequest,
+    BackendInstanceCreateRequest,
+    BackendPortRangeRequest,
+    SetSingboxRoutesRequest,
+)
+
+router = APIRouter(prefix="/api", tags=["后端"])
 
 
-@router.get("/backend/status")
+@router.get(
+    "/backend/status",
+    summary="获取后端状态",
+    description="返回sing-box后端进程的运行状态",
+    response_description="后端状态详情",
+)
 async def backend_status(
     request: Request,
 ) -> dict:
@@ -20,7 +32,12 @@ async def backend_status(
     return singbox_manager.status()
 
 
-@router.get("/backend/routes")
+@router.get(
+    "/backend/routes",
+    summary="获取后端路由",
+    description="返回sing-box后端的路由配置",
+    response_description="路由列表",
+)
 async def backend_routes(
     request: Request,
 ) -> dict:
@@ -29,42 +46,62 @@ async def backend_routes(
     return {"routes": singbox_manager.status()["routes"]}
 
 
-@router.get("/backend/default-port-range")
+@router.get(
+    "/backend/default-port-range",
+    summary="获取默认端口范围",
+    description="返回后端实例的默认端口范围配置",
+    response_description="端口范围配置",
+)
 async def backend_default_port_range(request: Request) -> dict:
     """获取默认端口范围"""
     storage = request.app.state.storage
     return storage.get_backend_default_port_range()
 
 
-@router.put("/backend/default-port-range")
+@router.put(
+    "/backend/default-port-range",
+    summary="设置默认端口范围",
+    description="更新后端实例的默认端口范围配置",
+    response_description="更新结果",
+)
 async def backend_set_default_port_range(
-    body: dict,
+    body: BackendPortRangeRequest,
     request: Request,
 ) -> dict:
     """设置默认端口范围"""
     storage = request.app.state.storage
     try:
-        return storage.set_backend_default_port_range(start=body["start"], end=body["end"])
+        return storage.set_backend_default_port_range(start=body.start, end=body.end)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/backend/default-listen")
+@router.get(
+    "/backend/default-listen",
+    summary="获取默认监听配置",
+    description="返回后端实例的默认监听地址和端口",
+    response_description="监听配置",
+)
 async def backend_default_listen(request: Request) -> dict:
     """获取默认监听配置"""
     storage = request.app.state.storage
     return {"listen": storage.get_backend_default_listen()}
 
 
-@router.put("/backend/default-listen")
+@router.put(
+    "/backend/default-listen",
+    summary="设置默认监听配置",
+    description="更新后端实例的默认监听地址和端口",
+    response_description="更新结果",
+)
 async def backend_set_default_listen(
-    body: dict,
+    body: BackendDefaultListenRequest,
     request: Request,
 ) -> dict:
     """设置默认监听配置"""
     storage = request.app.state.storage
     try:
-        return {"listen": storage.set_backend_default_listen(body["listen"])}
+        return {"listen": storage.set_backend_default_listen(body.listen)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -80,13 +117,13 @@ async def backend_instances(
 
 @router.post("/backend/instances")
 async def backend_instance_create(
-    body: dict,
+    body: BackendInstanceCreateRequest,
     request: Request,
 ) -> dict:
     """创建后端实例"""
     singbox_manager = request.app.state.singbox_manager
     try:
-        item = singbox_manager.create_instance(body["instance_id"])
+        item = singbox_manager.create_instance(body.instance_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"item": item, "items": singbox_manager.list_instances()}
@@ -133,29 +170,33 @@ async def backend_instance_routes(
 @router.post("/backend/instances/{instance_id}/routes")
 async def backend_instance_set_routes(
     instance_id: str,
-    body: dict,
+    body: SetSingboxRoutesRequest,
     request: Request,
 ) -> dict:
     """设置实例路由"""
     singbox_manager = request.app.state.singbox_manager
     from proxypool.backend.singbox_manager import SingBoxRoute
+
     routes = [
         SingBoxRoute(
-            inbound_port=item["inbound_port"],
-            proxy_key=item["proxy_key"],
-            front_proxy_key=item.get("front_proxy_key"),
-            middle_proxy_key=item.get("middle_proxy_key"),
-            exit_proxy_key=item.get("exit_proxy_key"),
-            inbound_type=item.get("inbound_type"),
-            listen=item.get("listen"),
+            inbound_port=item.inbound_port,
+            proxy_key=item.proxy_key,
+            front_proxy_key=item.front_proxy_key,
+            middle_proxy_key=item.middle_proxy_key,
+            exit_proxy_key=item.exit_proxy_key,
+            inbound_type=item.inbound_type,
+            listen=item.listen,
         )
-        for item in body["routes"]
+        for item in body.routes
     ]
     try:
-        singbox_manager.set_instance_routes(instance_id, routes, auto_restart=body.get("auto_restart", False))
+        singbox_manager.set_instance_routes(instance_id, routes, auto_restart=body.auto_restart)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"instance_id": instance_id, "routes": [asdict(route) for route in singbox_manager.get_instance_routes(instance_id)]}
+    return {
+        "instance_id": instance_id,
+        "routes": [asdict(route) for route in singbox_manager.get_instance_routes(instance_id)],
+    }
 
 
 @router.delete("/backend/instances/{instance_id}")
@@ -198,26 +239,27 @@ async def backend_process_events(
 
 @router.post("/backend/routes")
 async def backend_set_routes(
-    body: dict,
+    body: SetSingboxRoutesRequest,
     request: Request,
 ) -> dict:
     """设置全局路由"""
     singbox_manager = request.app.state.singbox_manager
     from proxypool.backend.singbox_manager import SingBoxRoute
+
     routes = [
         SingBoxRoute(
-            inbound_port=item["inbound_port"],
-            proxy_key=item["proxy_key"],
-            front_proxy_key=item.get("front_proxy_key"),
-            middle_proxy_key=item.get("middle_proxy_key"),
-            exit_proxy_key=item.get("exit_proxy_key"),
-            inbound_type=item.get("inbound_type"),
-            listen=item.get("listen"),
+            inbound_port=item.inbound_port,
+            proxy_key=item.proxy_key,
+            front_proxy_key=item.front_proxy_key,
+            middle_proxy_key=item.middle_proxy_key,
+            exit_proxy_key=item.exit_proxy_key,
+            inbound_type=item.inbound_type,
+            listen=item.listen,
         )
-        for item in body["routes"]
+        for item in body.routes
     ]
     try:
-        singbox_manager.set_routes(routes, auto_restart=body.get("auto_restart", False))
+        singbox_manager.set_routes(routes, auto_restart=body.auto_restart)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"routes": [asdict(route) for route in singbox_manager.get_routes()]}

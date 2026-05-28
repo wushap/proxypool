@@ -4,7 +4,6 @@ import os
 import socket
 import threading
 import time
-from contextlib import suppress
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,7 +34,9 @@ class FakeBackend:
             previous.close()
         self.listeners[spec.instance_id] = listener
         self.started.append(spec.instance_id)
-        return StartedInstance(pid=os.getpid(), config_file=Path("/tmp/test.yaml"), log_file=Path("/tmp/test.log"))
+        return StartedInstance(
+            pid=os.getpid(), config_file=Path("/tmp/test.yaml"), log_file=Path("/tmp/test.log")
+        )
 
     def stop(self, instance_id):
         self.stopped.append(instance_id)
@@ -70,7 +71,9 @@ class DelayedBackend(FakeBackend):
         thread.start()
         self.threads.append(thread)
         self.started.append(spec.instance_id)
-        return StartedInstance(pid=os.getpid(), config_file=Path("/tmp/test.yaml"), log_file=Path("/tmp/test.log"))
+        return StartedInstance(
+            pid=os.getpid(), config_file=Path("/tmp/test.yaml"), log_file=Path("/tmp/test.log")
+        )
 
     def close(self) -> None:
         for thread in self.threads:
@@ -83,12 +86,16 @@ class ExitingBackend(FakeBackend):
         self.started.append(spec.instance_id)
         log_file = Path("/tmp/test-exit.log")
         log_file.write_text("fatal: parse config error\n", encoding="utf-8")
-        return StartedInstance(pid=99999, config_file=Path("/tmp/test-exit.yaml"), log_file=log_file)
+        return StartedInstance(
+            pid=99999, config_file=Path("/tmp/test-exit.yaml"), log_file=log_file
+        )
 
 
 def test_chain_instance_manager_start_and_stop(tmp_path: Path):
     storage = SQLiteProxyStorage(tmp_path / "test.db")
-    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
+    front = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1"
+    )
     exit_node = ProxyNode(
         protocol="socks",
         host="2.2.2.2",
@@ -126,7 +133,9 @@ def test_chain_instance_manager_start_and_stop(tmp_path: Path):
 
 def test_ensure_instance_restarts_stale_running_record(tmp_path: Path):
     storage = SQLiteProxyStorage(tmp_path / "stale.db")
-    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
+    front = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1"
+    )
     exit_node = ProxyNode(
         protocol="socks",
         host="2.2.2.2",
@@ -224,7 +233,9 @@ def test_allocate_port_ignores_failed_records_with_free_ports(tmp_path: Path):
 
 def test_ensure_instance_reuses_live_running_record_without_reassigning_port(tmp_path: Path):
     storage = SQLiteProxyStorage(tmp_path / "reuse.db")
-    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
+    front = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1"
+    )
     exit_node = ProxyNode(
         protocol="socks",
         host="2.2.2.2",
@@ -292,7 +303,9 @@ def test_list_running_instance_ids_excludes_stale_records(tmp_path: Path):
 def test_ensure_instance_reassigns_port_when_stale_port_is_occupied(tmp_path: Path):
     storage = SQLiteProxyStorage(tmp_path / "reassign-port.db")
     storage.set_backend_default_port_range(start=19081, end=19083)
-    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
+    front = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1"
+    )
     exit_node = ProxyNode(
         protocol="socks",
         host="2.2.2.2",
@@ -350,7 +363,9 @@ def test_ensure_instance_reassigns_port_when_stale_port_is_occupied(tmp_path: Pa
 
 def test_start_instance_waits_for_listener_ready(tmp_path: Path):
     storage = SQLiteProxyStorage(tmp_path / "wait-ready.db")
-    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
+    front = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1"
+    )
     exit_node = ProxyNode(
         protocol="socks",
         host="2.2.2.2",
@@ -386,8 +401,12 @@ def test_start_instance_waits_for_listener_ready(tmp_path: Path):
 
 def test_start_instance_records_backend_log_when_process_exits_before_ready(tmp_path: Path):
     storage = SQLiteProxyStorage(tmp_path / "exit-before-ready.db")
-    front = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1")
-    exit_node = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="exit-1")
+    front = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="front-1"
+    )
+    exit_node = ProxyNode(
+        protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="exit-1"
+    )
     storage.upsert_proxy(front)
     storage.upsert_proxy(exit_node)
     backend = ExitingBackend()
@@ -417,9 +436,20 @@ def test_start_instance_records_backend_log_when_process_exits_before_ready(tmp_
 
 def test_chain_instance_manager_supports_multi_hop_instance(tmp_path: Path):
     storage = SQLiteProxyStorage(tmp_path / "multi-hop.db")
-    hop1 = ProxyNode(protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="hop-1")
-    hop2 = ProxyNode(protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="hop-2")
-    hop3 = ProxyNode(protocol="trojan", host="3.3.3.3", port=443, raw_link="trojan://3.3.3.3:443", name="hop-3", extra={"password": "p"})
+    hop1 = ProxyNode(
+        protocol="http", host="1.1.1.1", port=8080, raw_link="http://1.1.1.1:8080", name="hop-1"
+    )
+    hop2 = ProxyNode(
+        protocol="socks", host="2.2.2.2", port=1080, raw_link="socks://2.2.2.2:1080", name="hop-2"
+    )
+    hop3 = ProxyNode(
+        protocol="trojan",
+        host="3.3.3.3",
+        port=443,
+        raw_link="trojan://3.3.3.3:443",
+        name="hop-3",
+        extra={"password": "p"},
+    )
     storage.upsert_proxy(hop1)
     storage.upsert_proxy(hop2)
     storage.upsert_proxy(hop3)
@@ -441,5 +471,9 @@ def test_chain_instance_manager_supports_multi_hop_instance(tmp_path: Path):
 
     assert item["status"] == "running"
     assert item["endpoint_id"] == 9
-    assert item["hop_node_keys"] == [hop1.normalized_key(), hop2.normalized_key(), hop3.normalized_key()]
+    assert item["hop_node_keys"] == [
+        hop1.normalized_key(),
+        hop2.normalized_key(),
+        hop3.normalized_key(),
+    ]
     assert item["route_signature"] == "pool1>pool3>pool2"

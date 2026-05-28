@@ -1,17 +1,14 @@
 """Builds sing-box configurations for proxy chains."""
+
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from proxypool.pool.node_pool import NodeEntry
 from proxypool.pool.protocol_compat import (
-    SINGBOX_PROTOCOLS,
     check_nodes_compatibility,
     filter_compatible_nodes,
-    get_supported_protocols,
-    supports_protocol,
 )
 from proxypool.tester.singbox import build_singbox_outbound
 
@@ -24,7 +21,7 @@ class ChainBuilder:
     def __init__(self, storage, backend_type: str = "singbox") -> None:
         self.storage = storage
         self.backend_type = backend_type
-    
+
     def build_chain_config(
         self,
         inbound_port: int,
@@ -79,7 +76,7 @@ class ChainBuilder:
                 "final": "direct",
             },
         }
-    
+
     def build_probe_config(
         self,
         front_node: NodeEntry,
@@ -90,15 +87,15 @@ class ChainBuilder:
         inbound_tag = "in-probe"
         front_tag = "out-front"
         exit_tag = "out-exit"
-        
+
         front_outbound = self._build_outbound(front_node, front_tag)
         exit_outbound = self._build_outbound(exit_node, exit_tag)
-        
+
         if front_outbound is None or exit_outbound is None:
             raise RuntimeError("Cannot build outbound for probe")
-        
+
         exit_outbound["detour"] = front_tag
-        
+
         return {
             "log": {"disabled": True},
             "inbounds": [
@@ -115,16 +112,16 @@ class ChainBuilder:
                 "final": "direct",
             },
         }
-    
+
     def _build_outbound(self, node: NodeEntry, tag: str) -> dict[str, Any] | None:
         """Build a sing-box outbound from a node entry."""
         # Get proxy data from storage
         proxy = self.storage.get_proxy_by_key(node.key)
         if proxy is None:
             return None
-        
+
         return build_singbox_outbound(proxy, tag=tag)
-    
+
     def build_chain_proxy_url(
         self,
         front_node: NodeEntry,

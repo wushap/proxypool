@@ -134,7 +134,8 @@ class ForwardProxyGateway:
                 return 1
             try:
                 candidates = [
-                    item for item in self.storage.list_proxy_pool_candidates(pool_id, limit=500)
+                    item
+                    for item in self.storage.list_proxy_pool_candidates(pool_id, limit=500)
                     if bool(item.get("available"))
                 ]
             except Exception:
@@ -190,13 +191,16 @@ class ForwardProxyGateway:
             except Exception as exc:
                 last_error = exc
                 failed_routes.append(route_sig)
-                self.report_route_failure({
-                    "endpoint": endpoint,
-                    "pool": pool,
-                    "session_id": session_id,
-                    "route": route,
-                    "instance": {},
-                }, str(exc) or exc.__class__.__name__)
+                self.report_route_failure(
+                    {
+                        "endpoint": endpoint,
+                        "pool": pool,
+                        "session_id": session_id,
+                        "route": route,
+                        "instance": {},
+                    },
+                    str(exc) or exc.__class__.__name__,
+                )
 
                 # Small cooldown between retries to avoid rapid process spawning
                 if attempt_idx < attempts - 1:
@@ -228,8 +232,14 @@ class ForwardProxyGateway:
         )
 
     def report_route_failure(self, route: dict[str, Any], error: str = "") -> None:
-        endpoint_id = int((route.get("endpoint") or {}).get("id") or (route.get("route") or {}).get("endpoint_id") or 0)
-        pool_id = int((route.get("pool") or {}).get("id") or (route.get("route") or {}).get("pool_id") or 0)
+        endpoint_id = int(
+            (route.get("endpoint") or {}).get("id")
+            or (route.get("route") or {}).get("endpoint_id")
+            or 0
+        )
+        pool_id = int(
+            (route.get("pool") or {}).get("id") or (route.get("route") or {}).get("pool_id") or 0
+        )
         session_id = str(route.get("session_id") or "").strip()
         hop_node_keys = list((route.get("route") or {}).get("hop_node_keys") or [])
         if endpoint_id > 0 and hasattr(self.chain_service, "report_endpoint_route_failure"):
@@ -244,7 +254,11 @@ class ForwardProxyGateway:
             self.chain_instance_manager.mark_instance_failed(instance_id, error)
 
     def report_route_success(self, route: dict[str, Any]) -> None:
-        endpoint_id = int((route.get("endpoint") or {}).get("id") or (route.get("route") or {}).get("endpoint_id") or 0)
+        endpoint_id = int(
+            (route.get("endpoint") or {}).get("id")
+            or (route.get("route") or {}).get("endpoint_id")
+            or 0
+        )
         hop_node_keys = list((route.get("route") or {}).get("hop_node_keys") or [])
         if endpoint_id > 0 and hasattr(self.chain_service, "report_endpoint_route_success"):
             self.chain_service.report_endpoint_route_success(
@@ -281,7 +295,10 @@ class ForwardProxyGateway:
             pool = self._default_pool()
             entry_pool_id = int(pool["id"])
         parsed = urlsplit(str(raw_target or ""))
-        query = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(parsed.query, keep_blank_values=True).items()}
+        query = {
+            k: v[0] if len(v) == 1 else v
+            for k, v in parse_qs(parsed.query, keep_blank_values=True).items()
+        }
         rules = self.storage.list_pool_session_rules(int(pool["id"])) if int(pool["id"]) > 0 else []
         session_id = self.extract_http_session_key(
             headers=headers,
@@ -290,7 +307,11 @@ class ForwardProxyGateway:
             target_path=parsed.path or "/",
             rules=rules,
         )
-        missing_action = str((endpoint or {}).get("session_missing_action") or self.config.session_missing_action or "RANDOM").upper()
+        missing_action = str(
+            (endpoint or {}).get("session_missing_action")
+            or self.config.session_missing_action
+            or "RANDOM"
+        ).upper()
         if not session_id and missing_action == "REJECT":
             raise ValueError("session_id is required")
         route, instance = self._resolve_route_with_instance(
@@ -315,7 +336,9 @@ class ForwardProxyGateway:
             "target": parsed,
         }
 
-    def resolve_route_for_connect(self, target_host: str, headers: Mapping[str, Any], connection_id: str) -> dict[str, Any]:
+    def resolve_route_for_connect(
+        self, target_host: str, headers: Mapping[str, Any], connection_id: str
+    ) -> dict[str, Any]:
         endpoint = None
         pool = None
         try:

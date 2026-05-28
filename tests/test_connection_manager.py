@@ -1,13 +1,12 @@
 """
 Tests for ConnectionManager.
 """
+
 from __future__ import annotations
 
 import tempfile
 import threading
 from pathlib import Path
-
-import pytest
 
 from proxypool.storage.connection import ConnectionManager
 
@@ -119,10 +118,7 @@ class TestConnectionManager:
             def insert_records(thread_id: int):
                 for _ in range(10):
                     with conn_mgr.write_connection():
-                        conn_mgr.execute(
-                            "INSERT INTO test (thread_id) VALUES (?)",
-                            (thread_id,)
-                        )
+                        conn_mgr.execute("INSERT INTO test (thread_id) VALUES (?)", (thread_id,))
 
             # Create threads
             threads = []

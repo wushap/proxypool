@@ -52,9 +52,13 @@ class ForwardProxyGatewayRuntime:
 
     def _matches_socket(self, sock: socket.socket) -> bool:
         host, port = sock.getsockname()[:2]
-        return str(host) == str(self.gateway.config.listen_host) and int(port) == int(self.gateway.config.listen_port)
+        return str(host) == str(self.gateway.config.listen_host) and int(port) == int(
+            self.gateway.config.listen_port
+        )
 
-    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _handle_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
         connection_id = f"{id(writer)}"
         try:
             head = await self._read_until_headers(reader)
@@ -64,7 +68,9 @@ class ForwardProxyGatewayRuntime:
             request_line, headers = self._parse_request(header_block)
             method, target, _ = request_line.split(" ", 2)
             if method.upper() == "CONNECT":
-                await self._handle_connect(target, headers, body_prefix, reader, writer, connection_id)
+                await self._handle_connect(
+                    target, headers, body_prefix, reader, writer, connection_id
+                )
                 return
             await self._handle_http_request(method, target, headers, body_prefix, reader, writer)
         except Exception as exc:
@@ -167,7 +173,9 @@ class ForwardProxyGatewayRuntime:
         attempts = max(1, int(self.CONNECT_ROUTE_ATTEMPTS))
         last_error: Exception | None = None
         for _ in range(attempts):
-            route = self.gateway.resolve_route_for_connect(target, headers=headers, connection_id=connection_id)
+            route = self.gateway.resolve_route_for_connect(
+                target, headers=headers, connection_id=connection_id
+            )
             preflight_url = self._connect_preflight_url(target)
             if not preflight_url:
                 return route
@@ -179,7 +187,9 @@ class ForwardProxyGatewayRuntime:
                 last_error = exc
                 self.gateway.report_route_failure(route, str(exc) or exc.__class__.__name__)
         if last_error is not None:
-            raise RuntimeError(f"no healthy CONNECT route for {target}: {last_error}") from last_error
+            raise RuntimeError(
+                f"no healthy CONNECT route for {target}: {last_error}"
+            ) from last_error
         raise RuntimeError(f"no healthy CONNECT route for {target}")
 
     async def _preflight_instance_http_request(
@@ -192,7 +202,9 @@ class ForwardProxyGatewayRuntime:
         proxy_url = f"http://{route['instance']['listen']}:{int(route['instance']['port'])}"
         proxy = httpx.Proxy(proxy_url)
         timeout = httpx.Timeout(self.CONNECT_PREFLIGHT_TIMEOUT_SEC)
-        async with httpx.AsyncClient(proxy=proxy, timeout=timeout, follow_redirects=False, trust_env=False) as client:
+        async with httpx.AsyncClient(
+            proxy=proxy, timeout=timeout, follow_redirects=False, trust_env=False
+        ) as client:
             await client.get(
                 target_url,
                 headers={
@@ -201,7 +213,9 @@ class ForwardProxyGatewayRuntime:
                 },
             )
 
-    async def _open_instance_connection(self, route: dict) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    async def _open_instance_connection(
+        self, route: dict
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         return await asyncio.open_connection(
             str(route["instance"]["listen"]),
             int(route["instance"]["port"]),
@@ -286,7 +300,9 @@ class ForwardProxyGatewayRuntime:
         except Exception:
             return 0
 
-    async def _pump_stream(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _pump_stream(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
         while True:
             chunk = await reader.read(65536)
             if not chunk:
@@ -364,12 +380,18 @@ class ForwardProxyGatewayRuntimeManager:
                 runtime.last_error = str(exc)
                 errors.append(f"endpoint#{endpoint_id}: {exc}")
 
-        stale_ids = [endpoint_id for endpoint_id in self.endpoint_runtimes if endpoint_id not in active_endpoint_ids]
+        stale_ids = [
+            endpoint_id
+            for endpoint_id in self.endpoint_runtimes
+            if endpoint_id not in active_endpoint_ids
+        ]
         for endpoint_id in stale_ids:
             runtime = self.endpoint_runtimes.pop(endpoint_id)
             await runtime.stop()
 
-        use_legacy_runtime = int(config.endpoint_id or 0) <= 0 and int(config.default_pool_id or 0) > 0
+        use_legacy_runtime = (
+            int(config.endpoint_id or 0) <= 0 and int(config.default_pool_id or 0) > 0
+        )
         if use_legacy_runtime:
             try:
                 await self.legacy_runtime.start()
@@ -391,19 +413,22 @@ class ForwardProxyGatewayRuntimeManager:
     def status(self) -> dict[str, object]:
         items: list[dict[str, object]] = []
         endpoint_map = {
-            int(item.get("id") or 0): item
-            for item in self.storage.list_http_proxy_endpoints()
+            int(item.get("id") or 0): item for item in self.storage.list_http_proxy_endpoints()
         }
-        for endpoint_id, runtime in sorted(self.endpoint_runtimes.items(), key=lambda item: item[0]):
+        for endpoint_id, runtime in sorted(
+            self.endpoint_runtimes.items(), key=lambda item: item[0]
+        ):
             endpoint = endpoint_map.get(int(endpoint_id), {})
-            items.append({
-                "endpoint_id": int(endpoint_id),
-                "name": str(endpoint.get("name") or ""),
-                "listen_host": str(runtime.gateway.config.listen_host),
-                "listen_port": int(runtime.gateway.config.listen_port),
-                "running": runtime.server is not None,
-                "last_error": str(runtime.last_error or ""),
-            })
+            items.append(
+                {
+                    "endpoint_id": int(endpoint_id),
+                    "name": str(endpoint.get("name") or ""),
+                    "listen_host": str(runtime.gateway.config.listen_host),
+                    "listen_port": int(runtime.gateway.config.listen_port),
+                    "running": runtime.server is not None,
+                    "last_error": str(runtime.last_error or ""),
+                }
+            )
         legacy_status = self.legacy_runtime.status()
         return {
             "running": bool(legacy_status.get("running")) or any(item["running"] for item in items),

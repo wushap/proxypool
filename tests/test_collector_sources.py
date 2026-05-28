@@ -1,8 +1,8 @@
 import tempfile
 import unittest
-from urllib.parse import quote
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 from proxypool.collector.fetcher import FetchError
 from proxypool.collector.service import CollectorService
@@ -18,7 +18,11 @@ class TestCollectorSources(unittest.TestCase):
             collector = CollectorService(storage)
 
             text = "\n".join(
-                ["trojan://pwd@example.com:443#t1", "ss://YWVzLTEyOC1nY206cGFzcw==@1.1.1.1:443#ss1", "invalid-line"]
+                [
+                    "trojan://pwd@example.com:443#t1",
+                    "ss://YWVzLTEyOC1nY206cGFzcw==@1.1.1.1:443#ss1",
+                    "invalid-line",
+                ]
             )
             data_url = f"data:text/plain,{quote(text)}"
 
@@ -171,7 +175,9 @@ class TestCollectorSources(unittest.TestCase):
             self.assertEqual(report.total_inserted, 1)
             mocked_proxy_fetch.assert_called_once()
 
-    def test_collect_from_subscription_falls_back_to_direct_fetch_when_update_proxy_fails(self) -> None:
+    def test_collect_from_subscription_falls_back_to_direct_fetch_when_update_proxy_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
@@ -187,25 +193,29 @@ class TestCollectorSources(unittest.TestCase):
             storage.upsert_proxy(node)
             storage.set_subscription_update_proxy_key(node.normalized_key())
 
-            with patch(
-                "proxypool.collector.service.fetch_text_via_proxy_node",
-                side_effect=FetchError("proxy temporary unavailable"),
-            ) as mocked_proxy_fetch:
-                with patch(
+            with (
+                patch(
+                    "proxypool.collector.service.fetch_text_via_proxy_node",
+                    side_effect=FetchError("proxy temporary unavailable"),
+                ) as mocked_proxy_fetch,
+                patch(
                     "proxypool.collector.service.fetch_text",
                     return_value="trojan://pwd@example.com:443#fallback-direct",
-                ) as mocked_direct_fetch:
-                    report = collector.collect_from_subscription(
-                        subscription_id=9,
-                        subscription_name="proxy-fallback",
-                        subscription_url="https://example.com/sub.txt",
-                    )
+                ) as mocked_direct_fetch,
+            ):
+                report = collector.collect_from_subscription(
+                    subscription_id=9,
+                    subscription_name="proxy-fallback",
+                    subscription_url="https://example.com/sub.txt",
+                )
 
             self.assertEqual(report.total_inserted, 1)
             mocked_proxy_fetch.assert_called_once()
             mocked_direct_fetch.assert_called_once()
 
-    def test_collect_from_subscription_falls_back_when_update_proxy_payload_is_invalid(self) -> None:
+    def test_collect_from_subscription_falls_back_when_update_proxy_payload_is_invalid(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as td:
             db = Path(td) / "db.sqlite3"
             storage = SQLiteProxyStorage(db)
@@ -221,19 +231,21 @@ class TestCollectorSources(unittest.TestCase):
             storage.upsert_proxy(node)
             storage.set_subscription_update_proxy_key(node.normalized_key())
 
-            with patch(
-                "proxypool.collector.service.fetch_text_via_proxy_node",
-                return_value="Bad Gateway",
-            ) as mocked_proxy_fetch:
-                with patch(
+            with (
+                patch(
+                    "proxypool.collector.service.fetch_text_via_proxy_node",
+                    return_value="Bad Gateway",
+                ) as mocked_proxy_fetch,
+                patch(
                     "proxypool.collector.service.fetch_text",
                     return_value="trojan://pwd@example.com:443#fallback-direct-2",
-                ) as mocked_direct_fetch:
-                    report = collector.collect_from_subscription(
-                        subscription_id=10,
-                        subscription_name="proxy-invalid",
-                        subscription_url="https://example.com/sub-invalid.txt",
-                    )
+                ) as mocked_direct_fetch,
+            ):
+                report = collector.collect_from_subscription(
+                    subscription_id=10,
+                    subscription_name="proxy-invalid",
+                    subscription_url="https://example.com/sub-invalid.txt",
+                )
 
             self.assertEqual(report.total_inserted, 1)
             mocked_proxy_fetch.assert_called_once()

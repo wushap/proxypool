@@ -9,7 +9,6 @@ from proxypool.api.security import is_request_authorized
 from proxypool.settings import AppSettings, load_settings
 from proxypool.storage.base import BaseStorage
 
-
 # 全局单例 (仅在无 app.state 时使用)
 _settings: AppSettings | None = None
 
@@ -136,12 +135,14 @@ from pydantic import BaseModel
 
 class PaginationParams(BaseModel):
     """分页参数"""
+
     limit: int = 100
     offset: int = 0
 
 
 class FilterParams(BaseModel):
     """过滤参数"""
+
     protocol: str | None = None
     available: bool | None = None
     country: str | None = None

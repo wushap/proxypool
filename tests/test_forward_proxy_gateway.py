@@ -36,7 +36,9 @@ class FakeChainService:
             "instance_reused": False,
         }
 
-    def bind_instance_to_session(self, session_id: str, pool_id: int, instance_id: str, endpoint_id: int = 0):
+    def bind_instance_to_session(
+        self, session_id: str, pool_id: int, instance_id: str, endpoint_id: int = 0
+    ):
         return {
             "session_id": session_id,
             "pool_id": pool_id,
@@ -51,12 +53,14 @@ class FakeChainService:
         session_id: str = "",
         hop_node_keys: list[str] | None = None,
     ) -> None:
-        self.failures.append({
-            "endpoint_id": endpoint_id,
-            "pool_id": pool_id,
-            "session_id": session_id,
-            "hop_node_keys": list(hop_node_keys or []),
-        })
+        self.failures.append(
+            {
+                "endpoint_id": endpoint_id,
+                "pool_id": pool_id,
+                "session_id": session_id,
+                "hop_node_keys": list(hop_node_keys or []),
+            }
+        )
 
 
 class FakeInstanceManager:
@@ -158,7 +162,9 @@ def test_forward_proxy_gateway_parse_proxy_target() -> None:
 
 
 @pytest.mark.anyio
-async def test_forward_proxy_gateway_route_http_request_uses_instance_manager(tmp_path: Path) -> None:
+async def test_forward_proxy_gateway_route_http_request_uses_instance_manager(
+    tmp_path: Path,
+) -> None:
     storage = SQLiteProxyStorage(tmp_path / "gateway.db")
     manager = ForwardingInstanceManager()
     gateway = ForwardProxyGateway(
@@ -179,7 +185,9 @@ async def test_forward_proxy_gateway_route_http_request_uses_instance_manager(tm
 
 
 @pytest.mark.anyio
-async def test_forward_proxy_gateway_retries_endpoint_route_when_instance_start_fails(tmp_path: Path) -> None:
+async def test_forward_proxy_gateway_retries_endpoint_route_when_instance_start_fails(
+    tmp_path: Path,
+) -> None:
     storage = SQLiteProxyStorage(tmp_path / "gateway-retry-endpoint.db")
     endpoint = storage.create_http_proxy_endpoint("ep", listen_host="127.0.0.1", listen_port=18899)
     storage.replace_http_proxy_endpoint_hops(endpoint["id"], [11, 12])
@@ -195,7 +203,9 @@ async def test_forward_proxy_gateway_retries_endpoint_route_when_instance_start_
             super().__init__()
             self.index = 0
 
-        def route_request(self, session_id="", pool_id=0, endpoint_id=0, target_domain="", live_instance_ids=None):
+        def route_request(
+            self, session_id="", pool_id=0, endpoint_id=0, target_domain="", live_instance_ids=None
+        ):
             self.calls.append((session_id, pool_id, endpoint_id, target_domain, live_instance_ids))
             front = "front-bad" if self.index == 0 else "front-good"
             self.index += 1
@@ -232,7 +242,12 @@ async def test_forward_proxy_gateway_retries_endpoint_route_when_instance_start_
             self.ensure_calls.append(front_node_key)
             if front_node_key == "front-bad":
                 raise RuntimeError("chain instance did not become ready on 127.0.0.1:1150")
-            return {"instance_id": "inst-good", "listen": "127.0.0.1", "port": 18080, "status": "running"}
+            return {
+                "instance_id": "inst-good",
+                "listen": "127.0.0.1",
+                "port": 18080,
+                "status": "running",
+            }
 
     chain_service = EndpointChainService()
     manager = EndpointInstanceManager()
@@ -252,16 +267,20 @@ async def test_forward_proxy_gateway_retries_endpoint_route_when_instance_start_
 
     assert route["instance"]["instance_id"] == "inst-good"
     assert manager.ensure_calls == ["front-bad", "front-good"]
-    assert chain_service.failures == [{
-        "endpoint_id": endpoint["id"],
-        "pool_id": 11,
-        "session_id": "sess-1",
-        "hop_node_keys": ["front-bad", "exit-1"],
-    }]
+    assert chain_service.failures == [
+        {
+            "endpoint_id": endpoint["id"],
+            "pool_id": 11,
+            "session_id": "sess-1",
+            "hop_node_keys": ["front-bad", "exit-1"],
+        }
+    ]
 
 
 @pytest.mark.anyio
-async def test_forward_proxy_gateway_route_connect_request_generates_connection_session(tmp_path: Path) -> None:
+async def test_forward_proxy_gateway_route_connect_request_generates_connection_session(
+    tmp_path: Path,
+) -> None:
     storage = SQLiteProxyStorage(tmp_path / "gateway-connect.db")
     gateway = ForwardProxyGateway(
         storage=storage,
@@ -391,9 +410,7 @@ async def test_forward_proxy_gateway_runtime_handles_http_and_connect(tmp_path: 
 
         reader, writer = await asyncio.open_connection("127.0.0.1", listen_port)
         writer.write(
-            b"CONNECT api.example.com:443 HTTP/1.1\r\n"
-            b"Host: api.example.com:443\r\n\r\n"
-            b"early"
+            b"CONNECT api.example.com:443 HTTP/1.1\r\nHost: api.example.com:443\r\n\r\nearly"
         )
         await writer.drain()
         connect_response = await _read_until_headers(reader)
@@ -420,7 +437,9 @@ async def test_forward_proxy_gateway_connect_preflight_retries_failed_route(
     listen_port = _pick_free_port()
     captured: dict[str, object] = {"failures": [], "ensured": []}
 
-    async def good_proxy_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def good_proxy_handler(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
         try:
             head = await _read_until_headers(reader)
             request_line = head.split(b"\r\n", 1)[0]
@@ -479,8 +498,18 @@ async def test_forward_proxy_gateway_connect_preflight_retries_failed_route(
         ):
             captured.setdefault("ensured", []).append(front_node_key)
             if front_node_key == "front-bad":
-                return {"instance_id": "bad-inst", "listen": "127.0.0.1", "port": good_port, "status": "running"}
-            return {"instance_id": "good-inst", "listen": "127.0.0.1", "port": good_port, "status": "running"}
+                return {
+                    "instance_id": "bad-inst",
+                    "listen": "127.0.0.1",
+                    "port": good_port,
+                    "status": "running",
+                }
+            return {
+                "instance_id": "good-inst",
+                "listen": "127.0.0.1",
+                "port": good_port,
+                "status": "running",
+            }
 
         def mark_instance_failed(self, instance_id: str, error: str = "") -> None:
             captured.setdefault("failures", []).append((instance_id, error))

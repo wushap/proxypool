@@ -43,7 +43,11 @@ class SchedulerService:
         try:
             count = self.storage.mark_unavailable_by_fail_count(self.max_failures_threshold)
             if count > 0:
-                logger.info("Marked %d proxies as unavailable (fail_count >= %d)", count, self.max_failures_threshold)
+                logger.info(
+                    "Marked %d proxies as unavailable (fail_count >= %d)",
+                    count,
+                    self.max_failures_threshold,
+                )
         except Exception:
             logger.exception("Scheduled cleanup job failed")
 

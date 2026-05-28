@@ -46,15 +46,24 @@ def load_settings() -> AppSettings:
     local_singbox = project_root / "bin" / "sing-box"
     db_path = Path(os.getenv("PROXYPOOL_DB_PATH", str(project_root / "data" / "proxies.db")))
     output_dir = Path(os.getenv("PROXYPOOL_OUTPUT_DIR", str(project_root / "output")))
-    sources_file = Path(os.getenv("PROXYPOOL_SOURCES_FILE", str(project_root / "configs" / "sources.txt")))
+    sources_file = Path(
+        os.getenv("PROXYPOOL_SOURCES_FILE", str(project_root / "configs" / "sources.txt"))
+    )
     singbox_routes_file = Path(
-        os.getenv("PROXYPOOL_SINGBOX_ROUTES_FILE", str(project_root / "configs" / "singbox-routes.json"))
+        os.getenv(
+            "PROXYPOOL_SINGBOX_ROUTES_FILE", str(project_root / "configs" / "singbox-routes.json")
+        )
     )
     singbox_runtime_config_file = Path(
-        os.getenv("PROXYPOOL_SINGBOX_RUNTIME_CONFIG", str(project_root / "data" / "runtime" / "singbox.json"))
+        os.getenv(
+            "PROXYPOOL_SINGBOX_RUNTIME_CONFIG",
+            str(project_root / "data" / "runtime" / "singbox.json"),
+        )
     )
     singbox_runtime_log_file = Path(
-        os.getenv("PROXYPOOL_SINGBOX_RUNTIME_LOG", str(project_root / "data" / "runtime" / "singbox.log"))
+        os.getenv(
+            "PROXYPOOL_SINGBOX_RUNTIME_LOG", str(project_root / "data" / "runtime" / "singbox.log")
+        )
     )
     singbox_binary = os.getenv(
         "PROXYPOOL_SINGBOX_BINARY",
@@ -62,18 +71,26 @@ def load_settings() -> AppSettings:
     )
     test_url = os.getenv("PROXYPOOL_TEST_URL", "https://www.cloudflare.com/cdn-cgi/trace")
     api_key = os.getenv("PROXYPOOL_API_KEY", "")
-    http_gateway_default_host = os.getenv("PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    http_gateway_default_host = (
+        os.getenv("PROXYPOOL_HTTP_GATEWAY_DEFAULT_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    )
     http_gateway_default_port = _env_int("PROXYPOOL_HTTP_GATEWAY_DEFAULT_PORT", 8899, 1, 65535)
     backend_engine = os.getenv("PROXYPOOL_BACKEND_ENGINE", "singbox").strip().lower() or "singbox"
     backend_health_check_sec = _env_int("PROXYPOOL_BACKEND_HEALTH_CHECK_SEC", 30, 5, 3600)
     backend_auto_restart_max = _env_int("PROXYPOOL_BACKEND_AUTO_RESTART_MAX", 3, 0, 100)
-    mihomo_binary = os.getenv("PROXYPOOL_MIHOMO_BINARY", "").strip() or _default_mihomo_binary(project_root)
+    mihomo_binary = os.getenv("PROXYPOOL_MIHOMO_BINARY", "").strip() or _default_mihomo_binary(
+        project_root
+    )
     mihomo_runtime_dir = Path(
         os.getenv("PROXYPOOL_MIHOMO_RUNTIME_DIR", str(project_root / "data" / "runtime" / "mihomo"))
     )
     max_proxy_count = _env_int("PROXYPOOL_MAX_PROXY_COUNT", 50000, 100, 1000000)
-    fetch_max_content_length = _env_int("PROXYPOOL_FETCH_MAX_CONTENT_LENGTH", 10 * 1024 * 1024, 1024, 100 * 1024 * 1024)
-    log_max_bytes = _env_int("PROXYPOOL_LOG_MAX_BYTES", 50 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024)
+    fetch_max_content_length = _env_int(
+        "PROXYPOOL_FETCH_MAX_CONTENT_LENGTH", 10 * 1024 * 1024, 1024, 100 * 1024 * 1024
+    )
+    log_max_bytes = _env_int(
+        "PROXYPOOL_LOG_MAX_BYTES", 50 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024
+    )
     log_backup_count = _env_int("PROXYPOOL_LOG_BACKUP_COUNT", 5, 0, 100)
     max_failures_threshold = _env_int("PROXYPOOL_MAX_FAILURES_THRESHOLD", 5, 1, 100)
 
