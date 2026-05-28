@@ -1756,6 +1756,20 @@ class SQLiteProxyStorage:
             ).fetchall()
         return [self._pool_row_to_dict(row) for row in rows]
 
+    def get_proxy_pool_by_gateway_prefix(self, path_prefix: str) -> dict[str, Any] | None:
+        """Look up a pool by its gateway_path_prefix."""
+        prefix = str(path_prefix or "").strip()
+        if not prefix:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM proxy_pools WHERE gateway_path_prefix = ? LIMIT 1",
+                (prefix,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._pool_row_to_dict(row)
+
     def list_proxy_pool_candidates(
         self,
         pool_id: int,

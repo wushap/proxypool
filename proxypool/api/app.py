@@ -1213,6 +1213,42 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             status_code=404, detail="WebUI not found. Run `npm run build` in proxypool/webui."
         )
 
+    # --- Unified gateway proxy route ---
+    @app.api_route(
+        "/proxy/{pool_name}/{protocol}/{target_path:path}",
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+    )
+    async def unified_gateway_proxy(pool_name: str, protocol: str, target_path: str, request: Request):
+        storage = request.app.state.storage
+        prefix = f"/proxy/{pool_name}"
+        pool = storage.get_proxy_pool_by_gateway_prefix(prefix)
+        if pool is None:
+            raise HTTPException(status_code=404, detail=f"no pool configured for prefix {prefix}")
+
+        # Check session requirements
+        session_missing_action = str(pool.get("session_missing_action") or "RANDOM").upper()
+        session_header_names = pool.get("session_header_names") or []
+
+        if session_missing_action == "REJECT":
+            # Check if session is provided in headers or query
+            session_id = ""
+            for hdr in session_header_names:
+                session_id = request.headers.get(str(hdr), "")
+                if session_id:
+                    break
+            if not session_id:
+                session_id = request.query_params.get("session_id", "")
+            if not session_id:
+                raise HTTPException(status_code=400, detail="session_id is required")
+
+        target_url = f"{protocol}://{target_path}"
+        return JSONResponse({
+            "pool_id": pool["id"],
+            "pool_name": pool_name,
+            "target_url": target_url,
+            "status": "proxy_not_connected",
+        })
+
     return app
 
 

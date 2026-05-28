@@ -1320,7 +1320,6 @@ async def test_pool_chain_route_test_endpoint_uses_session_id(tmp_path: Path) ->
 
 
 @pytest.mark.anyio
-@pytest.mark.xfail(reason="Unified gateway route not implemented yet")
 async def test_unified_gateway_rejects_missing_session_when_pool_requires_it(
     tmp_path: Path,
 ) -> None:
