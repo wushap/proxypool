@@ -65,5 +65,23 @@
 - `uv run pytest tests/` → 627 passed, 0 failed, 3 skipped, 2 xfailed
 - Zero warnings remaining
 
+### Commit: 226cb28
+
+---
+
+## Round 3: Unified Gateway Proxy Route
+
+**Goal**: Implement unified gateway proxy route with session enforcement
+**Status**: COMPLETED
+**Result**: 628 passed, 0 failed, 3 skipped, 1 xfailed (was: 627 passed, 0 failed, 3 skipped, 2 xfailed)
+
+### Changes
+- `proxypool/api/app.py`: Added catch-all route `/proxy/{pool_name}/{protocol}/{target_path:path}` with session_missing_action REJECT enforcement
+- `proxypool/storage/sqlite.py`: Added `get_proxy_pool_by_gateway_prefix()` method
+- `tests/test_api_pools.py`: Removed xfail from test_unified_gateway_rejects_missing_session_when_pool_requires_it
+
+### Verification
+- `uv run pytest tests/` → 628 passed, 0 failed, 3 skipped, 1 xfailed
+
 ### Commit: (pending)
 

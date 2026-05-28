@@ -47,15 +47,11 @@ git remote add upstream https://github.com/your-org/proxypool.git
 ### 1. Install Dependencies
 
 ```bash
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install Python dependencies
-pip install -e ".[dev]"
+# Install dependencies (uv manages virtualenv automatically)
+uv sync
 
 # Install pre-commit hooks
-pre-commit install
+uv run pre-commit install
 
 # Install WebUI dependencies (optional)
 cd proxypool/webui
@@ -184,7 +180,7 @@ make test
 make test-cov
 
 # Run specific test file
-pytest tests/test_api_pools.py -v
+uv run pytest tests/test_api_pools.py -v
 
 # Run security tests
 make test-security

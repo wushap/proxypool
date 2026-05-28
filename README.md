@@ -63,12 +63,8 @@ make run
 ### Manual Setup
 
 ```bash
-# Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install Python dependencies
-pip install -e ".[dev]"
+# Install dependencies (uv manages virtualenv automatically)
+uv sync
 
 # Install and build WebUI
 cd proxypool/webui
@@ -77,7 +73,7 @@ npm run build
 cd ../..
 
 # Start server
-python -m proxypool.main
+uv run python -m proxypool.main
 ```
 
 ## Documentation

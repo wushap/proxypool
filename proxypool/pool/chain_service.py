@@ -541,7 +541,10 @@ class ProxyChainService:
 
     def delete_lease(self, session_id: str, pool_id: int = 0) -> bool:
         """Delete a sticky lease by session_id."""
-        return self.sticky_router.delete_lease(session_id, pool_id)
+        deleted = self.sticky_router.delete_lease(session_id, pool_id)
+        # Also delete from persistent storage
+        rows = self.storage.delete_sticky_lease(session_id, pool_id)
+        return deleted or rows > 0
 
     def inherit_lease(
         self, pool_id: int, source_session_id: str, target_session_id: str

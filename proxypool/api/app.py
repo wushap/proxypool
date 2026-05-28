@@ -1228,6 +1228,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         # Check session requirements
         session_missing_action = str(pool.get("session_missing_action") or "RANDOM").upper()
         session_header_names = pool.get("session_header_names") or []
+        session_query_param_names = pool.get("session_query_param_names") or ["session_id"]
 
         if session_missing_action == "REJECT":
             # Check if session is provided in headers or query
@@ -1237,7 +1238,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 if session_id:
                     break
             if not session_id:
-                session_id = request.query_params.get("session_id", "")
+                for param in session_query_param_names:
+                    session_id = request.query_params.get(str(param), "")
+                    if session_id:
+                        break
             if not session_id:
                 raise HTTPException(status_code=400, detail="session_id is required")
 
