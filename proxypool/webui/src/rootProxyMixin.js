@@ -8,10 +8,10 @@ const proxiedComputed = {};
 for (const key of [...dataKeys, ...computedKeys]) {
   proxiedComputed[key] = {
     get() {
-      return this.appState[key];
+      return this.appState?.[key];
     },
     set(value) {
-      this.appState[key] = value;
+      if (this.appState) this.appState[key] = value;
     },
   };
 }

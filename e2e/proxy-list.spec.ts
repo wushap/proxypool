@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Proxy List Page', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/webui/');
+    await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to proxies page
     await page.click('text=代理节点');

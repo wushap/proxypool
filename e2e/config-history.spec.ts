@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Config History Page', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/webui/');
+    await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to config history page via sidebar menu
     await page.locator('.el-menu-item').filter({ hasText: '配置历史' }).click();

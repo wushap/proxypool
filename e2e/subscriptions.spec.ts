@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Subscription Management', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/webui/');
+    await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to subscriptions page
     await page.click('text=订阅管理');

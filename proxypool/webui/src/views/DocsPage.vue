@@ -1,5 +1,5 @@
 <template>
-  <div v-show="activePage === 'docs'" class="page-container fade-in">
+  <div class="page-container fade-in">
     <div class="section-header">
       <div>
         <h2 class="section-title">使用指南</h2>

@@ -1,5 +1,5 @@
 <template>
-  <div v-show="activePage === 'system-diagnostics'" class="page-container fade-in">
+  <div class="page-container fade-in">
     <div class="section-header">
       <div>
         <h2 class="section-title">系统诊断</h2>

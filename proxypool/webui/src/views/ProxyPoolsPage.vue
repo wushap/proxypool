@@ -3234,177 +3234,6 @@ export default {
       if (diffMs < 86400000) return Math.floor(diffMs / 3600000) + '小时前';
       return d.toLocaleDateString('zh-CN');
     },
-  },
-  computed: {
-    bestChainScore() {
-      if (!this.chainPerformanceData.length) return null;
-      return Math.max(...this.chainPerformanceData.map(p => p.score));
-    },
-    hasFrontPool() {
-      return !!(this.chainStatus && this.chainStatus.front_pool_id);
-    },
-    hasExitPool() {
-      return !!(this.chainStatus && this.chainStatus.exit_pool_id);
-    },
-    frontPoolName() {
-      if (!this.hasFrontPool) return '';
-      const pool = this.proxyPools.find(p => p.id === this.chainStatus.front_pool_id);
-      return pool ? pool.name : '未知池';
-    },
-    exitPoolName() {
-      if (!this.hasExitPool) return '';
-      const pool = this.proxyPools.find(p => p.id === this.chainStatus.exit_pool_id);
-      return pool ? pool.name : '未知池';
-    },
-    frontPoolHealthy() {
-      if (!this.hasFrontPool) return false;
-      const pool = this.proxyPools.find(p => p.id === this.chainStatus.front_pool_id);
-      return pool && pool.healthy_count > 0;
-    },
-    exitPoolHealthy() {
-      if (!this.hasExitPool) return false;
-      const pool = this.proxyPools.find(p => p.id === this.chainStatus.exit_pool_id);
-      return pool && pool.healthy_count > 0;
-    },
-    frontPoolHealthyCount() {
-      if (!this.hasFrontPool) return 0;
-      const pool = this.proxyPools.find(p => p.id === this.chainStatus.front_pool_id);
-      return pool ? (pool.healthy_count || 0) : 0;
-    },
-    exitPoolHealthyCount() {
-      if (!this.hasExitPool) return 0;
-      const pool = this.proxyPools.find(p => p.id === this.chainStatus.exit_pool_id);
-      return pool ? (pool.healthy_count || 0) : 0;
-    },
-    frontPoolTotalCount() {
-      if (!this.hasFrontPool) return 0;
-      const pool = this.proxyPools.find(p => p.id === this.chainStatus.front_pool_id);
-      return pool ? (pool.total_count || pool.proxy_count || 0) : 0;
-    },
-    exitPoolTotalCount() {
-      if (!this.hasExitPool) return 0;
-      const pool = this.proxyPools.find(p => p.id === this.chainStatus.exit_pool_id);
-      return pool ? (pool.total_count || pool.proxy_count || 0) : 0;
-    },
-    chainProtocol() {
-      return this.chainStatus ? (this.chainStatus.protocol || 'http') : 'http';
-    },
-    frontPoolOptions() {
-      if (!this.proxyPools) return [];
-      return this.proxyPools.filter(p =>
-        p.filters?.route_mode_filter === 'chain' ||
-        (!p.filters?.route_mode_filter && p.status === 'running')
-      ).slice(0, 5);
-    },
-    frontPoolAvgLatency() {
-      if (!this.hasFrontPool || !this.chainStatus?.front_pool?.nodes) return '-';
-      const nodes = this.chainStatus.front_pool.nodes;
-      const healthyNodes = nodes.filter(n => n.healthy && n.latency_ms);
-      if (healthyNodes.length === 0) return '-';
-      const avg = healthyNodes.reduce((sum, n) => sum + n.latency_ms, 0) / healthyNodes.length;
-      return Math.round(avg);
-    },
-    exitPoolAvgLatency() {
-      if (!this.hasExitPool || !this.chainStatus?.exit_pool?.nodes) return '-';
-      const nodes = this.chainStatus.exit_pool.nodes;
-      const healthyNodes = nodes.filter(n => n.healthy && n.latency_ms);
-      if (healthyNodes.length === 0) return '-';
-      const avg = healthyNodes.reduce((sum, n) => sum + n.latency_ms, 0) / healthyNodes.length;
-      return Math.round(avg);
-    },
-    chainEndpoints() {
-      if (!this.gatewayEndpoints || !this.chainStatus) return [];
-      const frontPoolId = this.chainStatus.front_pool_id;
-      const exitPoolId = this.chainStatus.exit_pool_id;
-      return this.gatewayEndpoints.filter(ep => {
-        const hops = ep.hops || [];
-        return hops.some(h => h.pool_id === frontPoolId || h.pool_id === exitPoolId);
-      });
-    },
-    getPoolPerformanceMetrics(poolId) {
-      const history = this.rotationHistory[poolId] || [];
-      if (history.length === 0) {
-        return { avgLatency: null, successRate: null, throughput: null, p95Latency: null };
-      }
-      const last100 = history.slice(0, 100);
-      const latencies = last100.filter(h => h.latency_ms != null).map(h => h.latency_ms);
-      const avgLatency = latencies.length > 0 ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null;
-      const successCount = last100.filter(h => h.success !== false).length;
-      const successRate = last100.length > 0 ? Math.round((successCount / last100.length) * 100) : null;
-      let throughput = null;
-      if (last100.length >= 2) {
-        const timestamps = last100.map(h => new Date(h.timestamp || Date.now()).getTime()).sort((a, b) => b - a);
-        const timeSpan = (timestamps[0] - timestamps[timestamps.length - 1]) / 1000;
-        if (timeSpan > 0) {
-          throughput = Math.round((last100.length / timeSpan) * 10) / 10;
-        }
-      }
-      let p95Latency = null;
-      if (latencies.length >= 5) {
-        const sorted = [...latencies].sort((a, b) => a - b);
-        const p95Index = Math.floor(sorted.length * 0.95);
-        p95Latency = sorted[p95Index];
-      }
-      return { avgLatency, successRate, throughput, p95Latency };
-    },
-    getPoolPerformanceTrend(poolId) {
-      const history = this.rotationHistory[poolId] || [];
-      const latencyPoints = history
-        .filter(h => h.latency_ms != null)
-        .slice(0, 20)
-        .reverse();
-      if (latencyPoints.length < 2) return null;
-      const maxLatency = Math.max(...latencyPoints.map(p => p.latency_ms), 1);
-      const width = 120;
-      const height = 40;
-      const padding = 4;
-      const points = latencyPoints.map((p, i) => ({
-        x: padding + (i / (latencyPoints.length - 1)) * (width - 2 * padding),
-        y: padding + (1 - p.latency_ms / maxLatency) * (height - 2 * padding),
-        latency: p.latency_ms,
-      }));
-      const pathData = points.map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' ');
-      return { pathData, points, maxLatency, width, height };
-    },
-    getPoolComparisonData(poolId) {
-      if (!this.items || this.items.length < 2) return null;
-      const currentMetrics = this.getPoolPerformanceMetrics(poolId);
-      if (!currentMetrics.avgLatency) return null;
-      const allLatencies = this.items
-        .map(item => this.getPoolPerformanceMetrics(item.id).avgLatency)
-        .filter(l => l != null);
-      const allSuccessRates = this.items
-        .map(item => this.getPoolPerformanceMetrics(item.id).successRate)
-        .filter(s => s != null);
-      if (allLatencies.length < 2) return null;
-      const sortedLatencies = [...allLatencies].sort((a, b) => a - b);
-      const sortedSuccessRates = [...allSuccessRates].sort((a, b) => b - a);
-      const latencyRank = sortedLatencies.indexOf(currentMetrics.avgLatency) + 1;
-      const successRateRank = sortedSuccessRates.indexOf(currentMetrics.successRate) + 1;
-      const maxLatency = Math.max(...allLatencies);
-      const latencyPct = maxLatency > 0 ? Math.round((currentMetrics.avgLatency / maxLatency) * 100) : 0;
-      const successRatePct = currentMetrics.successRate || 0;
-      return { latencyRank, successRateRank, latencyPct, successRatePct, totalPools: allLatencies.length };
-    },
-    getLatencyClass(latency) {
-      if (latency == null) return '';
-      if (latency < 100) return 'text-success';
-      if (latency < 300) return 'text-warning';
-      return 'text-danger';
-    },
-    getSuccessRateClass(rate) {
-      if (rate == null) return '';
-      if (rate >= 90) return 'text-success';
-      if (rate >= 70) return 'text-warning';
-      return 'text-danger';
-    },
-    // Pool template library methods
-    get filteredTemplates() {
-      const allTemplates = [...this.presetTemplates, ...this.customTemplates];
-      if (this.selectedTemplateCategory === 'all') return allTemplates;
-      if (this.selectedTemplateCategory === 'custom') return this.customTemplates;
-      return allTemplates.filter(t => t.category === this.selectedTemplateCategory);
-    },
     previewTemplate(template) {
       this.previewingTemplate = template;
       this.templatePreviewVisible = true;
@@ -3648,6 +3477,177 @@ export default {
         text: hasHealthyNodes ? '存在健康可用节点' : '无健康节点，服务不可用',
       });
       return items;
+    },
+  },
+  computed: {
+    bestChainScore() {
+      if (!this.chainPerformanceData.length) return null;
+      return Math.max(...this.chainPerformanceData.map(p => p.score));
+    },
+    hasFrontPool() {
+      return !!(this.chainStatus && this.chainStatus.front_pool_id);
+    },
+    hasExitPool() {
+      return !!(this.chainStatus && this.chainStatus.exit_pool_id);
+    },
+    frontPoolName() {
+      if (!this.hasFrontPool) return '';
+      const pool = this.proxyPools.find(p => p.id === this.chainStatus.front_pool_id);
+      return pool ? pool.name : '未知池';
+    },
+    exitPoolName() {
+      if (!this.hasExitPool) return '';
+      const pool = this.proxyPools.find(p => p.id === this.chainStatus.exit_pool_id);
+      return pool ? pool.name : '未知池';
+    },
+    frontPoolHealthy() {
+      if (!this.hasFrontPool) return false;
+      const pool = this.proxyPools.find(p => p.id === this.chainStatus.front_pool_id);
+      return pool && pool.healthy_count > 0;
+    },
+    exitPoolHealthy() {
+      if (!this.hasExitPool) return false;
+      const pool = this.proxyPools.find(p => p.id === this.chainStatus.exit_pool_id);
+      return pool && pool.healthy_count > 0;
+    },
+    frontPoolHealthyCount() {
+      if (!this.hasFrontPool) return 0;
+      const pool = this.proxyPools.find(p => p.id === this.chainStatus.front_pool_id);
+      return pool ? (pool.healthy_count || 0) : 0;
+    },
+    exitPoolHealthyCount() {
+      if (!this.hasExitPool) return 0;
+      const pool = this.proxyPools.find(p => p.id === this.chainStatus.exit_pool_id);
+      return pool ? (pool.healthy_count || 0) : 0;
+    },
+    frontPoolTotalCount() {
+      if (!this.hasFrontPool) return 0;
+      const pool = this.proxyPools.find(p => p.id === this.chainStatus.front_pool_id);
+      return pool ? (pool.total_count || pool.proxy_count || 0) : 0;
+    },
+    exitPoolTotalCount() {
+      if (!this.hasExitPool) return 0;
+      const pool = this.proxyPools.find(p => p.id === this.chainStatus.exit_pool_id);
+      return pool ? (pool.total_count || pool.proxy_count || 0) : 0;
+    },
+    chainProtocol() {
+      return this.chainStatus ? (this.chainStatus.protocol || 'http') : 'http';
+    },
+    frontPoolOptions() {
+      if (!this.proxyPools) return [];
+      return this.proxyPools.filter(p =>
+        p.filters?.route_mode_filter === 'chain' ||
+        (!p.filters?.route_mode_filter && p.status === 'running')
+      ).slice(0, 5);
+    },
+    frontPoolAvgLatency() {
+      if (!this.hasFrontPool || !this.chainStatus?.front_pool?.nodes) return '-';
+      const nodes = this.chainStatus.front_pool.nodes;
+      const healthyNodes = nodes.filter(n => n.healthy && n.latency_ms);
+      if (healthyNodes.length === 0) return '-';
+      const avg = healthyNodes.reduce((sum, n) => sum + n.latency_ms, 0) / healthyNodes.length;
+      return Math.round(avg);
+    },
+    exitPoolAvgLatency() {
+      if (!this.hasExitPool || !this.chainStatus?.exit_pool?.nodes) return '-';
+      const nodes = this.chainStatus.exit_pool.nodes;
+      const healthyNodes = nodes.filter(n => n.healthy && n.latency_ms);
+      if (healthyNodes.length === 0) return '-';
+      const avg = healthyNodes.reduce((sum, n) => sum + n.latency_ms, 0) / healthyNodes.length;
+      return Math.round(avg);
+    },
+    chainEndpoints() {
+      if (!this.gatewayEndpoints || !this.chainStatus) return [];
+      const frontPoolId = this.chainStatus.front_pool_id;
+      const exitPoolId = this.chainStatus.exit_pool_id;
+      return this.gatewayEndpoints.filter(ep => {
+        const hops = ep.hops || [];
+        return hops.some(h => h.pool_id === frontPoolId || h.pool_id === exitPoolId);
+      });
+    },
+    getPoolPerformanceMetrics(poolId) {
+      const history = this.rotationHistory[poolId] || [];
+      if (history.length === 0) {
+        return { avgLatency: null, successRate: null, throughput: null, p95Latency: null };
+      }
+      const last100 = history.slice(0, 100);
+      const latencies = last100.filter(h => h.latency_ms != null).map(h => h.latency_ms);
+      const avgLatency = latencies.length > 0 ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null;
+      const successCount = last100.filter(h => h.success !== false).length;
+      const successRate = last100.length > 0 ? Math.round((successCount / last100.length) * 100) : null;
+      let throughput = null;
+      if (last100.length >= 2) {
+        const timestamps = last100.map(h => new Date(h.timestamp || Date.now()).getTime()).sort((a, b) => b - a);
+        const timeSpan = (timestamps[0] - timestamps[timestamps.length - 1]) / 1000;
+        if (timeSpan > 0) {
+          throughput = Math.round((last100.length / timeSpan) * 10) / 10;
+        }
+      }
+      let p95Latency = null;
+      if (latencies.length >= 5) {
+        const sorted = [...latencies].sort((a, b) => a - b);
+        const p95Index = Math.floor(sorted.length * 0.95);
+        p95Latency = sorted[p95Index];
+      }
+      return { avgLatency, successRate, throughput, p95Latency };
+    },
+    getPoolPerformanceTrend(poolId) {
+      const history = this.rotationHistory[poolId] || [];
+      const latencyPoints = history
+        .filter(h => h.latency_ms != null)
+        .slice(0, 20)
+        .reverse();
+      if (latencyPoints.length < 2) return null;
+      const maxLatency = Math.max(...latencyPoints.map(p => p.latency_ms), 1);
+      const width = 120;
+      const height = 40;
+      const padding = 4;
+      const points = latencyPoints.map((p, i) => ({
+        x: padding + (i / (latencyPoints.length - 1)) * (width - 2 * padding),
+        y: padding + (1 - p.latency_ms / maxLatency) * (height - 2 * padding),
+        latency: p.latency_ms,
+      }));
+      const pathData = points.map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' ');
+      return { pathData, points, maxLatency, width, height };
+    },
+    getPoolComparisonData(poolId) {
+      if (!this.items || this.items.length < 2) return null;
+      const currentMetrics = this.getPoolPerformanceMetrics(poolId);
+      if (!currentMetrics.avgLatency) return null;
+      const allLatencies = this.items
+        .map(item => this.getPoolPerformanceMetrics(item.id).avgLatency)
+        .filter(l => l != null);
+      const allSuccessRates = this.items
+        .map(item => this.getPoolPerformanceMetrics(item.id).successRate)
+        .filter(s => s != null);
+      if (allLatencies.length < 2) return null;
+      const sortedLatencies = [...allLatencies].sort((a, b) => a - b);
+      const sortedSuccessRates = [...allSuccessRates].sort((a, b) => b - a);
+      const latencyRank = sortedLatencies.indexOf(currentMetrics.avgLatency) + 1;
+      const successRateRank = sortedSuccessRates.indexOf(currentMetrics.successRate) + 1;
+      const maxLatency = Math.max(...allLatencies);
+      const latencyPct = maxLatency > 0 ? Math.round((currentMetrics.avgLatency / maxLatency) * 100) : 0;
+      const successRatePct = currentMetrics.successRate || 0;
+      return { latencyRank, successRateRank, latencyPct, successRatePct, totalPools: allLatencies.length };
+    },
+    getLatencyClass(latency) {
+      if (latency == null) return '';
+      if (latency < 100) return 'text-success';
+      if (latency < 300) return 'text-warning';
+      return 'text-danger';
+    },
+    getSuccessRateClass(rate) {
+      if (rate == null) return '';
+      if (rate >= 90) return 'text-success';
+      if (rate >= 70) return 'text-warning';
+      return 'text-danger';
+    },
+    // Pool template library methods
+    filteredTemplates() {
+      const allTemplates = [...this.presetTemplates, ...this.customTemplates];
+      if (this.selectedTemplateCategory === 'all') return allTemplates;
+      if (this.selectedTemplateCategory === 'custom') return this.customTemplates;
+      return allTemplates.filter(t => t.category === this.selectedTemplateCategory);
     },
   },
 };

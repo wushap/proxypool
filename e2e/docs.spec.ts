@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Docs Page', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/webui/');
+    await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to docs page via sidebar menu
     await page.locator('.el-menu-item').filter({ hasText: '使用指南' }).click();

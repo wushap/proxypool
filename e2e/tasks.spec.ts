@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Task Management', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/webui/');
+    await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to tasks page
     await page.click('text=任务中心');

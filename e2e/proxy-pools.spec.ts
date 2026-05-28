@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Proxy Pools Management', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/webui/');
+    await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to proxy pools page
     await page.click('text=多跳代理池');

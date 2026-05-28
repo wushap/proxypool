@@ -222,9 +222,7 @@
 
             <!-- ==================== 订阅管理 ==================== -->
             <Transition name="page" mode="out-in">
-              <ErrorBoundary v-if="activePage === 'subscriptions'" page-name="订阅管理" :key="'page-subs'">
-                <SubscriptionsPage />
-              </ErrorBoundary>
+              <SubscriptionsPage v-if="activePage === 'subscriptions'" :key="'page-subs'" />
             </Transition>
 
             <!-- ==================== 订阅发布 ==================== -->
@@ -577,8 +575,22 @@ import { appOptions } from "./appOptions";
 import { defineAsyncComponent } from "vue";
 import ErrorBoundary from "./components/common/ErrorBoundary.vue";
 
+// Merge appOptions with App-specific overrides.
+// Vue's Options API merge handles arrays (like mounted hooks) but
+// plain-object spread overwrites data/computed/methods, so we merge manually.
+function mergeData(base, extra) {
+  return function () {
+    return { ...(typeof base === 'function' ? base.call(this) : {}), ...(extra.call(this)) };
+  };
+}
+
+const appData = appOptions.data;
+const appComputed = appOptions.computed || {};
+const appMethods = appOptions.methods || {};
+const appMounted = appOptions.mounted;
+const appBeforeUnmount = appOptions.beforeUnmount;
+
 export default {
-  ...appOptions,
   name: "App",
   components: {
     ErrorBoundary,
@@ -597,11 +609,10 @@ export default {
   provide() {
     return { appState: this };
   },
-  data() {
+  data: mergeData(appData, function () {
     return {
       isOffline: !navigator.onLine,
       connectionRestored: false,
-      // 撤销功能状态
       undoState: {
         visible: false,
         message: '',
@@ -609,12 +620,12 @@ export default {
         countdown: 5,
         timer: null,
       },
-      // 通知中心状态
       notifications: [],
       notificationDropdownVisible: false,
     };
-  },
+  }),
   computed: {
+    ...appComputed,
     isOnline() {
       return !this.isOffline;
     },
@@ -623,19 +634,20 @@ export default {
     },
   },
   mounted() {
+    if (appMounted) appMounted.call(this);
     this.setupKeyboardShortcuts();
     this.setupOfflineDetection();
     this.loadNotifications();
     this.setupNotificationClickOutside();
-    this.initAlertMonitoring();
   },
   beforeUnmount() {
+    if (appBeforeUnmount) appBeforeUnmount.call(this);
     this.removeKeyboardShortcuts();
     this.removeOfflineDetection();
     this.removeNotificationClickOutside();
-    this.stopAlertChecker();
   },
   methods: {
+    ...appMethods,
     setupKeyboardShortcuts() {
       this._handleKeydown = this.handleKeydown.bind(this);
       document.addEventListener('keydown', this._handleKeydown);
@@ -646,61 +658,38 @@ export default {
       }
     },
     setupOfflineDetection() {
-      // 监听在线/离线状态变化
       this._handleOnline = () => {
         const wasOffline = this.isOffline;
         this.isOffline = false;
         this.connectionRestored = wasOffline;
-
-        // 显示"网络连接已恢复"横幅，3秒后自动隐藏
         if (wasOffline) {
-          setTimeout(() => {
-            this.connectionRestored = false;
-          }, 3000);
+          setTimeout(() => { this.connectionRestored = false; }, 3000);
         }
       };
       this._handleOffline = () => {
         this.isOffline = true;
         this.connectionRestored = false;
       };
-
       window.addEventListener('online', this._handleOnline);
       window.addEventListener('offline', this._handleOffline);
 
-      // 监听 API 请求成功/失败事件
       this._handleApiSuccess = () => {
         const wasOffline = this.isOffline;
         this.isOffline = false;
         this.connectionRestored = wasOffline;
-
-        // 显示"网络连接已恢复"横幅，3秒后自动隐藏
         if (wasOffline) {
-          setTimeout(() => {
-            this.connectionRestored = false;
-          }, 3000);
+          setTimeout(() => { this.connectionRestored = false; }, 3000);
         }
       };
-      this._handleApiFailure = () => {
-        // 只有在多次失败后才标记为离线
-        // 这里可以添加更复杂的逻辑
-      };
-
+      this._handleApiFailure = () => {};
       window.addEventListener('api:request-success', this._handleApiSuccess);
       window.addEventListener('api:request-failure', this._handleApiFailure);
     },
     removeOfflineDetection() {
-      if (this._handleOnline) {
-        window.removeEventListener('online', this._handleOnline);
-      }
-      if (this._handleOffline) {
-        window.removeEventListener('offline', this._handleOffline);
-      }
-      if (this._handleApiSuccess) {
-        window.removeEventListener('api:request-success', this._handleApiSuccess);
-      }
-      if (this._handleApiFailure) {
-        window.removeEventListener('api:request-failure', this._handleApiFailure);
-      }
+      if (this._handleOnline) window.removeEventListener('online', this._handleOnline);
+      if (this._handleOffline) window.removeEventListener('offline', this._handleOffline);
+      if (this._handleApiSuccess) window.removeEventListener('api:request-success', this._handleApiSuccess);
+      if (this._handleApiFailure) window.removeEventListener('api:request-failure', this._handleApiFailure);
     },
     setupNotificationClickOutside() {
       this._handleNotificationClickOutside = (e) => {
@@ -719,21 +708,15 @@ export default {
         document.removeEventListener('click', this._handleNotificationClickOutside);
       }
     },
-    // 通知中心方法
     toggleNotificationDropdown() {
       this.notificationDropdownVisible = !this.notificationDropdownVisible;
     },
     addNotification(type, message, source = '') {
       const notification = {
-        id: Date.now(),
-        type,
-        message,
-        source,
-        timestamp: new Date().toISOString(),
-        read: false,
+        id: Date.now(), type, message, source,
+        timestamp: new Date().toISOString(), read: false,
       };
       this.notifications.unshift(notification);
-      // 限制通知数量为 50 条
       if (this.notifications.length > 50) {
         this.notifications = this.notifications.slice(0, 50);
       }
@@ -747,9 +730,7 @@ export default {
       }
     },
     markAllNotificationsRead() {
-      this.notifications.forEach(n => {
-        n.read = true;
-      });
+      this.notifications.forEach(n => { n.read = true; });
       this.saveNotifications();
     },
     clearAllNotifications() {
@@ -757,55 +738,33 @@ export default {
       this.saveNotifications();
     },
     saveNotifications() {
-      try {
-        sessionStorage.setItem('proxypool.notifications', JSON.stringify(this.notifications));
-      } catch {}
+      try { sessionStorage.setItem('proxypool.notifications', JSON.stringify(this.notifications)); } catch {}
     },
     loadNotifications() {
       try {
         const raw = sessionStorage.getItem('proxypool.notifications');
-        if (raw) {
-          this.notifications = JSON.parse(raw) || [];
-        }
+        if (raw) this.notifications = JSON.parse(raw) || [];
       } catch {}
     },
     formatNotificationTime(timestamp) {
       if (!timestamp) return '';
       const date = new Date(timestamp);
-      const now = new Date();
-      const diff = now - date;
+      const diff = Date.now() - date;
       if (diff < 60000) return '刚刚';
       if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`;
       if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`;
       return date.toLocaleDateString();
     },
-    // 撤销功能方法
     showUndoToast(message, action, duration = 5) {
-      // 清除之前的计时器
-      if (this.undoState.timer) {
-        clearInterval(this.undoState.timer);
-      }
-
-      this.undoState = {
-        visible: true,
-        message,
-        action,
-        countdown: duration,
-        timer: null,
-      };
-
-      // 启动倒计时
+      if (this.undoState.timer) clearInterval(this.undoState.timer);
+      this.undoState = { visible: true, message, action, countdown: duration, timer: null };
       this.undoState.timer = setInterval(() => {
         this.undoState.countdown--;
-        if (this.undoState.countdown <= 0) {
-          this.hideUndoToast();
-        }
+        if (this.undoState.countdown <= 0) this.hideUndoToast();
       }, 1000);
     },
     hideUndoToast() {
-      if (this.undoState.timer) {
-        clearInterval(this.undoState.timer);
-      }
+      if (this.undoState.timer) clearInterval(this.undoState.timer);
       this.undoState.visible = false;
       this.undoState.action = null;
     },
@@ -816,56 +775,30 @@ export default {
       this.hideUndoToast();
     },
     handleKeydown(e) {
-      // Escape: Close dialogs
-      if (e.key === 'Escape') {
-        this.closeAllDialogs();
-        return;
-      }
-
-      // Enter: Submit forms (when focused on form elements)
-      if (e.key === 'Enter' && this.isFormElement(e.target)) {
-        this.submitCurrentForm(e.target);
-        return;
-      }
-
-      // Ctrl+K: Open search (if search functionality exists)
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        this.openSearch();
-        return;
-      }
+      if (e.key === 'Escape') { this.closeAllDialogs(); return; }
+      if (e.key === 'Enter' && this.isFormElement(e.target)) { this.submitCurrentForm(e.target); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); this.openSearch(); return; }
     },
     closeAllDialogs() {
-      // Close all open dialogs by clicking outside or pressing Escape
-      const dialogs = document.querySelectorAll('.el-dialog__wrapper');
-      dialogs.forEach(dialog => {
+      document.querySelectorAll('.el-dialog__wrapper').forEach(dialog => {
         const closeBtn = dialog.querySelector('.el-dialog__headerbtn');
-        if (closeBtn) {
-          closeBtn.click();
-        }
+        if (closeBtn) closeBtn.click();
       });
     },
     isFormElement(element) {
-      const formTags = ['INPUT', 'TEXTAREA', 'SELECT'];
-      return formTags.includes(element.tagName) || element.closest('form');
+      return ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName) || element.closest('form');
     },
     submitCurrentForm(element) {
       const form = element.closest('form');
       if (form) {
         const submitBtn = form.querySelector('button[type="submit"]');
-        if (submitBtn) {
-          submitBtn.click();
-        }
+        if (submitBtn) submitBtn.click();
       }
     },
-    openSearch() {
-      this.openGlobalSearch();
-    },
+    openSearch() { this.openGlobalSearch(); },
     debouncedSearch(query) {
       clearTimeout(this._searchTimer);
-      this._searchTimer = setTimeout(() => {
-        this.performGlobalSearch(query);
-      }, 300);
+      this._searchTimer = setTimeout(() => { this.performGlobalSearch(query); }, 300);
     },
   },
 };

@@ -1226,7 +1226,7 @@ export default {
       const reliability = this.getSubscriptionReliability(sub);
       return Math.round((nodeCount * 0.6) + (reliability * 0.4));
     },
-    get bestSubscriptions() {
+    bestSubscriptions() {
       return this.subscriptions
         .filter(s => s.enabled)
         .map(s => ({
@@ -1238,7 +1238,7 @@ export default {
         .sort((a, b) => b.score - a.score)
         .slice(0, 5);
     },
-    get refreshTrendData() {
+    refreshTrendData() {
       const allHistory = [];
       for (const sub of this.subscriptions) {
         const history = this.refreshHistory[sub.id] || [];
@@ -1256,7 +1256,7 @@ export default {
         successRate: Math.round((successCount / recent.length) * 100),
       };
     },
-    get geoCoverageData() {
+    geoCoverageData() {
       const geoCounts = {};
       for (const sub of this.subscriptions) {
         const proxies = this.subscriptionProxies[sub.id] || [];

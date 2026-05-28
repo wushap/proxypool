@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('System Diagnostics Page', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/webui/');
+    await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to system diagnostics page via sidebar menu
     await page.locator('.el-menu-item').filter({ hasText: '系统诊断' }).click();

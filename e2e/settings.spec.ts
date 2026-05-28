@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Settings Page', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/webui/');
+    await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to settings page via sidebar menu
     await page.locator('.el-menu-item').filter({ hasText: '设置' }).click();
