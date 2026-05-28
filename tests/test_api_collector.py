@@ -4,8 +4,8 @@ import httpx
 import pytest
 
 from proxypool.api.app import create_app
-from proxypool.settings import AppSettings
 from proxypool.collector.service import CollectReport, SourceCollectReport
+from proxypool.settings import AppSettings
 
 
 def _make_settings(tmp_path) -> AppSettings:

@@ -552,7 +552,7 @@ class ProxyChainService:
         """Copy a lease's node pair from source session to target session."""
         leases = self.sticky_router.get_leases(pool_id)
         source = next(
-            (l for l in leases if l["session_id"] == source_session_id), None
+            (lease for lease in leases if lease["session_id"] == source_session_id), None
         )
         if source is None:
             raise ValueError(f"source lease not found: {source_session_id}")
@@ -564,7 +564,7 @@ class ProxyChainService:
         )
         target_leases = self.sticky_router.get_leases(pool_id)
         target = next(
-            (l for l in target_leases if l["session_id"] == target_session_id), None
+            (lease for lease in target_leases if lease["session_id"] == target_session_id), None
         )
         if target is None:
             raise ValueError("failed to create inherited lease")

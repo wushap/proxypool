@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
 import httpx
+import pytest
 
 from proxypool.storage.sqlite import SQLiteProxyStorage
 

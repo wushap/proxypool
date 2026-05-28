@@ -129,5 +129,29 @@
 ### Verification
 - `uv run pytest tests/` → 649 passed, 0 failed, 3 skipped, 1 xfailed
 
+### Commit: 4ecf9d9
+
+---
+
+## Round 6: Storage Decomposition & API Test Expansion
+
+**Goal**: Decompose sqlite.py monolith; add settings/tasks/collector/tester API tests
+**Status**: COMPLETED
+**Result**: 678 passed, 0 failed, 3 skipped, 1 xfailed (was: 649 passed, 0 failed, 3 skipped, 1 xfailed)
+
+### Changes
+- `proxypool/storage/sqlite.py`: Decomposed from 3390→~1150 lines via mixin extraction
+- `proxypool/storage/proxy_mixin.py`: New - proxy CRUD methods (~860 lines)
+- `proxypool/storage/pool_mixin.py`: New - pool CRUD methods (~330 lines)
+- `proxypool/storage/subscription_mixin.py`: New - subscription CRUD methods (~350 lines)
+- `proxypool/storage/_helpers.py`: New - shared utility functions (~336 lines)
+- `tests/test_api_settings.py`: New - 10 tests for settings API
+- `tests/test_api_tasks.py`: New - 6 tests for tasks API
+- `tests/test_api_collector.py`: New - 4 tests for collector API
+- `tests/test_api_tester.py`: New - 4 tests for tester API
+
+### Verification
+- `uv run pytest tests/` → 678 passed, 0 failed, 3 skipped, 1 xfailed
+
 ### Commit: (pending)
 
