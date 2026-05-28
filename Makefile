@@ -25,21 +25,21 @@ help:
 
 # Install dependencies
 install:
-	pip install -e ".[dev]"
-	pre-commit install
+	uv pip install -e ".[dev]"
+	uv run pre-commit install
 
 # Testing
 test:
-	python3 -m pytest tests/ -v
+	uv run pytest tests/ -v
 
 test-fast:
-	python3 -m pytest tests/ -v -m "not slow"
+	uv run pytest tests/ -v -m "not slow"
 
 test-security:
-	python3 -m pytest tests/test_security*.py -v
+	uv run pytest tests/test_security*.py -v
 
 test-cov:
-	python3 -m pytest tests/ \
+	uv run pytest tests/ \
 		--cov=proxypool \
 		--cov-report=html \
 		--cov-report=term-missing \
@@ -47,24 +47,24 @@ test-cov:
 	@echo "Coverage report: htmlcov/index.html"
 
 test-parallel:
-	python3 -m pytest tests/ -v -n auto
+	uv run pytest tests/ -v -n auto
 
 test-e2e:
 	npx playwright test
 
 # Linting
 lint:
-	ruff check proxypool/ tests/
+	uv run ruff check proxypool/ tests/
 
 lint-fix:
-	ruff check --fix proxypool/ tests/
+	uv run ruff check --fix proxypool/ tests/
 
 format:
-	ruff format proxypool/ tests/
+	uv run ruff format proxypool/ tests/
 
 # Type checking
 type-check:
-	mypy proxypool/
+	uv run mypy proxypool/
 
 # Complete check
 check: lint type-check test
@@ -78,10 +78,10 @@ clean:
 
 # Development server
 run:
-	python3 -m proxypool.main
+	uv run python -m proxypool.main
 
 run-debug:
-	DEBUG=1 python3 -m proxypool.main
+	DEBUG=1 uv run python -m proxypool.main
 
 # Docker
 build:

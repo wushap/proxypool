@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from hashlib import sha1
 from typing import Any
@@ -61,7 +61,7 @@ class ProxyNode:
     fail_count: int = 0
     last_error: str = ""
     last_checked_at: datetime | None = None
-    last_seen_at: datetime = field(default_factory=datetime.utcnow)
+    last_seen_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     # 地理位置
     resolved_ip: str = ""
@@ -87,8 +87,8 @@ class ProxyNode:
     fallback_front_keys: list[str] = field(default_factory=list)
 
     # 元数据
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def normalized_key(self) -> str:
         """生成节点唯一标识"""
@@ -162,7 +162,7 @@ class CheckResult:
     check_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     node_key: str = ""
     check_type: str = CheckType.ACTIVE
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     # 结果
     success: bool = False
@@ -247,7 +247,7 @@ class EventLog:
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     event_type: str = EventType.NODE_DISCOVERED
     severity: str = EventSeverity.INFO
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     # 关联对象
     node_key: str = ""

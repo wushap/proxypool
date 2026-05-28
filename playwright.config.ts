@@ -19,7 +19,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'cd /home/lan/workspace/a/proxypool && python3 -m proxypool.main',
+    command: 'cd /home/lan/workspace/a/proxypool && uv run python -m proxypool.main',
     url: 'http://127.0.0.1:8080',
     reuseExistingServer: !process.env.CI,
     timeout: 30000,

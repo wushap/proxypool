@@ -4,7 +4,6 @@ Pytest shared configuration and fixtures.
 
 from __future__ import annotations
 
-import asyncio
 import socket
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
@@ -20,14 +19,6 @@ from proxypool.storage.sqlite import SQLiteProxyStorage
 # ============================================================
 # Base Fixtures
 # ============================================================
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create event loop (shared across test session)."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture

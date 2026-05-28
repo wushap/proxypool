@@ -11,6 +11,8 @@ import pytest
 from proxypool.api.app import create_app
 from proxypool.settings import AppSettings
 
+_AUTH_HEADERS = {"X-API-Key": "test-key"}
+
 
 def _make_settings(tmp_path_factory) -> AppSettings:
     """Create minimal test settings"""
@@ -41,7 +43,7 @@ async def test_system_metrics_endpoint(tmp_path_factory):
     app = create_app(settings)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=_AUTH_HEADERS
     ) as client:
         resp = await client.get("/api/system/metrics")
         assert resp.status_code == 200
@@ -78,7 +80,7 @@ async def test_system_metrics_response_model(tmp_path_factory):
     app = create_app(settings)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=_AUTH_HEADERS
     ) as client:
         resp = await client.get("/api/system/metrics")
         assert resp.status_code == 200
@@ -96,7 +98,7 @@ async def test_metrics_export_endpoint(tmp_path_factory):
     app = create_app(settings)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=_AUTH_HEADERS
     ) as client:
         resp = await client.get("/api/system/metrics/export")
         assert resp.status_code == 200
@@ -132,7 +134,7 @@ async def test_metrics_export_response_model(tmp_path_factory):
     app = create_app(settings)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=_AUTH_HEADERS
     ) as client:
         resp = await client.get("/api/system/metrics/export")
         assert resp.status_code == 200
@@ -150,7 +152,7 @@ async def test_pool_metrics_not_found(tmp_path_factory):
     app = create_app(settings)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=_AUTH_HEADERS
     ) as client:
         resp = await client.get("/api/pools/999/metrics")
         assert resp.status_code == 404
@@ -163,7 +165,7 @@ async def test_pool_metrics_endpoint(tmp_path_factory):
     app = create_app(settings)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=_AUTH_HEADERS
     ) as client:
         # First create a pool
         pool_resp = await client.post(
@@ -200,7 +202,7 @@ async def test_pool_metrics_response_model(tmp_path_factory):
     app = create_app(settings)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=_AUTH_HEADERS
     ) as client:
         # Create a pool
         pool_resp = await client.post(
@@ -227,15 +229,16 @@ async def test_metrics_tracking_works(tmp_path_factory):
     app = create_app(settings)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=_AUTH_HEADERS
     ) as client:
-        # Make some requests
+        # Make some requests (these are allowlisted, no auth needed)
         await client.get("/api/health")
         await client.get("/api/stats")
         await client.get("/api/health")
 
         # Check metrics
         resp = await client.get("/api/system/metrics")
+        assert resp.status_code == 200
         data = resp.json()
 
         # Should have at least 3 requests tracked (the 3 calls above)
@@ -250,7 +253,7 @@ async def test_metrics_windows_aggregation(tmp_path_factory):
     app = create_app(settings)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=_AUTH_HEADERS
     ) as client:
         # Make some requests to generate data
         for _ in range(5):
@@ -258,6 +261,7 @@ async def test_metrics_windows_aggregation(tmp_path_factory):
 
         # Get metrics export
         resp = await client.get("/api/system/metrics/export")
+        assert resp.status_code == 200
         data = resp.json()
 
         # Check that windows have data
