@@ -111,5 +111,23 @@
 - `uv run pytest tests/` → 649 passed, 0 failed, 3 skipped, 1 xfailed
 - E2E specs expanded from 7 to 13 files
 
+### Commit: 6fa8aa0
+
+---
+
+## Round 5: Gateway Status Enhancement & Storage Tests
+
+**Goal**: Enhance gateway endpoint status response; add storage tests
+**Status**: COMPLETED
+**Result**: 649 passed, 0 failed, 3 skipped, 1 xfailed
+
+### Changes
+- `proxypool/api/routers/gateway.py`: Enhanced status endpoint with hop pools, transitions, lease info
+- `proxypool/api/gateway_helpers.py`: New helper for building detailed endpoint status
+- `tests/test_gateway_prefix.py`: New - 5 tests for get_proxy_pool_by_gateway_prefix
+
+### Verification
+- `uv run pytest tests/` → 649 passed, 0 failed, 3 skipped, 1 xfailed
+
 ### Commit: (pending)
 
