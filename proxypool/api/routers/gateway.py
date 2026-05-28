@@ -76,6 +76,8 @@ async def get_http_gateway_status(
     endpoint_id: int = Query(default=0, ge=0),
 ) -> dict:
     """获取 HTTP 网关状态"""
+    from proxypool.api.gateway_helpers import build_endpoint_status_response
+
     storage = request.app.state.storage
     gateway_config_service = request.app.state.gateway_config_service
     gateway_runtime = request.app.state.gateway_runtime
@@ -84,11 +86,49 @@ async def get_http_gateway_status(
     endpoint = (
         storage.get_http_proxy_endpoint(resolved_endpoint_id) if resolved_endpoint_id > 0 else None
     )
+    runtime = gateway_runtime.status()
+
+    # Find the specific endpoint runtime from the list
+    endpoint_runtime = None
+    for item in list(runtime.get("items") or []):
+        if int(item.get("endpoint_id") or 0) == resolved_endpoint_id:
+            endpoint_runtime = item
+            break
+
+    # Build detailed status with hop pools and transitions if endpoint exists
+    detail: dict = {}
+    if resolved_endpoint_id > 0 and endpoint is not None:
+        chain_service = request.app.state.chain_service
+        chain_instance_manager = request.app.state.chain_instance_manager
+        detail = build_endpoint_status_response(
+            storage=storage,
+            chain_service=chain_service,
+            chain_instance_manager=chain_instance_manager,
+            endpoint_id=resolved_endpoint_id,
+        )
+
     return {
         "config": asdict(config),
         "endpoint": endpoint,
+        "item": endpoint,
         "endpoint_id": resolved_endpoint_id,
-        "runtime": gateway_runtime.status(),
+        "endpoint_runtime": endpoint_runtime,
+        "runtime": runtime,
+        "leases": detail.get("leases", []),
+        "instances": detail.get("instances", []),
+        "active_hop_node_keys": detail.get("active_hop_node_keys", []),
+        "hop_pools": detail.get("hop_pools", []),
+        "transitions": detail.get("transitions", []),
+        "summary": detail.get("summary", {
+            "endpoint_id": resolved_endpoint_id,
+            "hop_count": 0,
+            "available": bool(endpoint_runtime and endpoint_runtime.get("running")),
+            "degraded": False,
+            "healthy_hop_pools": 0,
+            "total_hop_pools": 0,
+            "healthy_transitions": 0,
+            "total_transitions": 0,
+        }),
     }
 
 

@@ -83,5 +83,33 @@
 ### Verification
 - `uv run pytest tests/` → 628 passed, 0 failed, 3 skipped, 1 xfailed
 
+### Commit: 8c041ef
+
+---
+
+## Round 4: Integration Tests, E2E Expansion, Doc Fixes
+
+**Goal**: Add integration tests for new features; expand E2E coverage; fix docs
+**Status**: COMPLETED
+**Result**: 649 passed, 0 failed, 3 skipped, 1 xfailed (was: 628 passed, 0 failed, 3 skipped, 1 xfailed)
+
+### Changes
+- `tests/test_unified_gateway.py`: New - 8 tests for unified gateway route (session enforcement, header/query param, policy)
+- `tests/test_chain_lease_api.py`: New - 8 tests for chain lease API (CRUD, inherit, delete)
+- `e2e/settings.spec.ts`: New - Settings page E2E tests
+- `e2e/navigation.spec.ts`: New - Navigation E2E tests
+- `e2e/docs.spec.ts`: New - Docs page E2E tests
+- `e2e/config-history.spec.ts`: New - Config history E2E tests
+- `e2e/published-subscriptions.spec.ts`: New - Published subscriptions E2E tests
+- `e2e/system-diagnostics.spec.ts`: New - System diagnostics E2E tests
+- `proxypool/api/app.py`: Fixed unified gateway to check session_query_param_names
+- `proxypool/pool/chain_service.py`: Fixed delete_lease to also clear from storage
+- `README.md`: Updated manual setup to use uv
+- `CONTRIBUTING.md`: Updated dev setup to use uv
+
+### Verification
+- `uv run pytest tests/` → 649 passed, 0 failed, 3 skipped, 1 xfailed
+- E2E specs expanded from 7 to 13 files
+
 ### Commit: (pending)
 
