@@ -63,17 +63,18 @@ test.describe('Published Subscriptions Page', () => {
   });
 
   test('should create a published subscription', async ({ page }) => {
+    const uniqueName = 'e2e-pub-' + Date.now();
     const nameInput = page.locator('input[placeholder="发布订阅名称"]');
-    await nameInput.fill('e2e-test-pub-sub');
+    await nameInput.fill(uniqueName);
 
     // Click create button
     const createButton = page.locator('button:has-text("创建")').last();
     await createButton.click();
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
 
     // Verify success or that item appears in table
     const successMessage = page.locator('.message-success');
-    const tableRow = page.locator('table.data-table tbody tr').filter({ has: page.locator('input[value="e2e-test-pub-sub"]') });
+    const tableRow = page.locator('table.data-table tbody tr').filter({ has: page.locator('input[value="' + uniqueName + '"]') });
 
     const hasSuccess = await successMessage.isVisible().catch(() => false);
     const hasRow = await tableRow.isVisible().catch(() => false);
