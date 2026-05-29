@@ -39,7 +39,7 @@ test.describe('Navigation and Cross-Page Flows', () => {
     await page.waitForLoadState('networkidle');
 
     // Dashboard should be visible
-    const dashboardContent = page.locator('[class*="dashboard"], .section-title, .page-container').first();
+    const dashboardContent = page.locator('.dashboard-page');
     await expect(dashboardContent).toBeVisible();
   });
 
@@ -57,7 +57,7 @@ test.describe('Navigation and Cross-Page Flows', () => {
     await page.waitForLoadState('networkidle');
 
     // Verify proxies page loaded
-    const proxyContent = page.locator('.section-title, .page-container, .card').first();
+    const proxyContent = page.locator('.section-title, .card').first();
     await expect(proxyContent).toBeVisible();
   });
 
@@ -81,11 +81,9 @@ test.describe('Navigation and Cross-Page Flows', () => {
     await page.locator('.el-menu-item').filter({ hasText: '设置' }).click();
     await page.waitForLoadState('networkidle');
 
-    // Verify dark mode is still selected
-    const darkRadioAfter = page.locator('.el-radio-button').filter({ hasText: '深色' });
-    if (await darkRadioAfter.isVisible()) {
-      await expect(darkRadioAfter).toHaveAttribute('aria-pressed', 'true');
-    }
+    // Verify dark mode is still selected by checking the HTML theme class
+    const hasDarkClass = await page.evaluate(() => document.documentElement.classList.contains('dark'));
+    expect(hasDarkClass).toBeTruthy();
   });
 
   test('should handle API error gracefully on diagnostics page', async ({ page }) => {

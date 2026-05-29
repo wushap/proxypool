@@ -8,12 +8,12 @@ test.describe('Dashboard', () => {
 
   test('should display system health cards', async ({ page }) => {
     // Verify dashboard page is loaded
-    const dashboardPage = page.locator('[class*="dashboard"], [class*="page"]').first();
+    const dashboardPage = page.locator('.dashboard-page');
     await expect(dashboardPage).toBeVisible();
 
     // Check for health status cards or indicators
-    const healthCards = page.locator('.health-card, .status-card, [class*="health"], [class*="status"]').first();
-    const statsSection = page.locator('.stats-section, [class*="stats"], [class*="metric"]').first();
+    const healthCards = page.locator('.stat-card').first();
+    const statsSection = page.locator('.stat-grid').first();
 
     const hasHealthCards = await healthCards.isVisible().catch(() => false);
     const hasStatsSection = await statsSection.isVisible().catch(() => false);
@@ -62,8 +62,8 @@ test.describe('Dashboard', () => {
 
   test('should display recent activity or logs', async ({ page }) => {
     // Check for activity feed or recent logs
-    const activityFeed = page.locator('.activity-feed, .recent-activity, [class*="activity"], [class*="log"]').first();
-    const emptyActivity = page.locator('text=暂无活动记录');
+    const activityFeed = page.locator('.activity-feed').first();
+    const emptyActivity = page.locator('.empty-state-title:has-text("暂无活动记录")');
 
     const hasActivity = await activityFeed.isVisible().catch(() => false);
     const hasEmptyActivity = await emptyActivity.isVisible().catch(() => false);

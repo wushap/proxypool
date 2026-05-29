@@ -48,11 +48,12 @@ test.describe('Settings Page', () => {
   });
 
   test('should display about section with version info', async ({ page }) => {
-    await expect(page.locator('text=关于')).toBeVisible();
-    await expect(page.locator('text=应用名称')).toBeVisible();
-    await expect(page.locator('text=Proxy Pool')).toBeVisible();
-    await expect(page.locator('text=版本')).toBeVisible();
-    await expect(page.locator('text=0.2.0')).toBeVisible();
+    const aboutCard = page.locator('.settings-card').filter({ hasText: '关于' });
+    await expect(aboutCard.locator('.settings-title').filter({ hasText: '关于' })).toBeVisible();
+    await expect(aboutCard.locator('.about-label').filter({ hasText: '应用名称' })).toBeVisible();
+    await expect(aboutCard.locator('.about-value').filter({ hasText: 'Proxy Pool' })).toBeVisible();
+    await expect(aboutCard.locator('.about-label').filter({ hasText: '版本' })).toBeVisible();
+    await expect(aboutCard.locator('.about-value').filter({ hasText: '0.2.0' })).toBeVisible();
   });
 
   test('should change theme to dark mode', async ({ page }) => {
@@ -108,8 +109,8 @@ test.describe('Settings Page', () => {
     await expect(page.locator('text=界面语言')).toBeVisible();
     await expect(page.locator('text=目前仅支持中文')).toBeVisible();
 
-    // Language selector should be disabled
-    const langSelect = page.locator('[aria-label="界面语言选择"]');
+    // Language selector should be disabled (target the combobox input, not the listbox)
+    const langSelect = page.getByRole('combobox', { name: '界面语言选择' });
     if (await langSelect.isVisible()) {
       await expect(langSelect).toBeDisabled();
     }

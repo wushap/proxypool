@@ -5,19 +5,16 @@ test.describe('Subscription Management', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to subscriptions page
-    await page.click('text=订阅管理');
+    await page.locator('.el-menu-item').filter({ hasText: '订阅管理' }).click();
     await page.waitForLoadState('networkidle');
   });
 
   test('should display subscriptions list', async ({ page }) => {
-    // Check if subscriptions list or empty state is visible
-    const subscriptionsList = page.locator('.data-table, .el-table').first();
-    const emptyState = page.locator('text=暂无订阅');
+    // Check if subscriptions list or empty state is visible (use or() for auto-waiting)
+    const subscriptionsList = page.locator('table.data-table').first();
+    const emptyState = page.locator('.empty-state-title', { hasText: '暂无订阅' });
 
-    const hasSubscriptions = await subscriptionsList.isVisible().catch(() => false);
-    const hasEmptyState = await emptyState.isVisible().catch(() => false);
-
-    expect(hasSubscriptions || hasEmptyState).toBeTruthy();
+    await expect(subscriptionsList.or(emptyState)).toBeVisible();
   });
 
   test('should add new subscription', async ({ page }) => {
@@ -42,11 +39,11 @@ test.describe('Subscription Management', () => {
       await page.waitForTimeout(1000);
 
       // Verify success message or subscription appears in list
-      const successMessage = page.locator('.el-message--success');
+      const successMessage = page.locator('.message-success');
       const isVisible = await successMessage.isVisible().catch(() => false);
 
-      // Or verify subscription appears in table
-      const subscriptionRow = page.locator('table tbody tr').filter({ hasText: 'test-subscription-e2e' });
+      // Or verify subscription appears in table (name is in an input, not text)
+      const subscriptionRow = page.locator('table.data-table tbody tr').filter({ has: page.locator('input[value="test-subscription-e2e"]') });
       const rowVisible = await subscriptionRow.isVisible().catch(() => false);
 
       expect(isVisible || rowVisible).toBeTruthy();
@@ -91,8 +88,8 @@ test.describe('Subscription Management', () => {
   });
 
   test('should delete subscription', async ({ page }) => {
-    // Find delete button
-    const deleteButton = page.locator('button:has-text("删除")').first();
+    // Find delete button (per-row action, not the header "删除不可用" button)
+    const deleteButton = page.locator('table.data-table .btn-danger:has-text("删除")').first();
     if (await deleteButton.isVisible()) {
       await deleteButton.click();
 

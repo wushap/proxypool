@@ -21,9 +21,9 @@ test.describe('Published Subscriptions Page', () => {
     const nameInput = page.locator('input[placeholder="发布订阅名称"]');
     await expect(nameInput).toBeVisible();
 
-    // Check format selector
-    await expect(page.locator('text=原始链接')).toBeVisible();
-    await expect(page.locator('text=Clash YAML')).toBeVisible();
+    // Check format selector exists with expected options
+    await expect(page.locator('select.select').filter({ hasText: '原始链接' })).toBeVisible();
+    await expect(page.locator('select.select').filter({ hasText: 'Clash YAML' })).toBeVisible();
   });
 
   test('should display connectivity filter options', async ({ page }) => {
@@ -31,9 +31,9 @@ test.describe('Published Subscriptions Page', () => {
     await expect(page.locator('text=直连状态')).toBeVisible();
     await expect(page.locator('text=链路类型')).toBeVisible();
 
-    // Verify filter option values
-    await expect(page.locator('text=仅可直连')).toBeVisible();
-    await expect(page.locator('text=仅不可直连')).toBeVisible();
+    // Verify filter select exists with expected options (options in a closed select are not individually visible)
+    await expect(page.locator('select.select').filter({ hasText: '仅可直连' })).toBeVisible();
+    await expect(page.locator('select.select').filter({ hasText: '仅不可直连' })).toBeVisible();
   });
 
   test('should display service unlock filter options', async ({ page }) => {
@@ -72,8 +72,8 @@ test.describe('Published Subscriptions Page', () => {
     await page.waitForTimeout(1000);
 
     // Verify success or that item appears in table
-    const successMessage = page.locator('.el-message--success');
-    const tableRow = page.locator('table tbody tr').filter({ hasText: 'e2e-test-pub-sub' });
+    const successMessage = page.locator('.message-success');
+    const tableRow = page.locator('table.data-table tbody tr').filter({ has: page.locator('input[value="e2e-test-pub-sub"]') });
 
     const hasSuccess = await successMessage.isVisible().catch(() => false);
     const hasRow = await tableRow.isVisible().catch(() => false);

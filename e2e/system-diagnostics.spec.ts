@@ -26,12 +26,12 @@ test.describe('System Diagnostics Page', () => {
   });
 
   test('should display health alerting rules section', async ({ page }) => {
-    await expect(page.locator('text=健康告警规则')).toBeVisible();
-    await expect(page.locator('text=后端进程停止')).toBeVisible();
-    await expect(page.locator('text=网关服务停止')).toBeVisible();
-    await expect(page.locator('text=健康评分过低')).toBeVisible();
-    await expect(page.locator('text=代理池异常')).toBeVisible();
-    await expect(page.locator('text=代理节点不可用')).toBeVisible();
+    await expect(page.locator('.settings-title').filter({ hasText: '健康告警规则' })).toBeVisible();
+    await expect(page.locator('.rule-name').filter({ hasText: '后端进程停止' })).toBeVisible();
+    await expect(page.locator('.rule-name').filter({ hasText: '网关服务停止' })).toBeVisible();
+    await expect(page.locator('.rule-name').filter({ hasText: '健康评分过低' })).toBeVisible();
+    await expect(page.locator('.rule-name').filter({ hasText: '代理池异常' })).toBeVisible();
+    await expect(page.locator('.rule-name').filter({ hasText: '代理节点不可用' })).toBeVisible();
   });
 
   test('should toggle alerting rule', async ({ page }) => {
@@ -43,8 +43,8 @@ test.describe('System Diagnostics Page', () => {
       const toggle = proxyRule.locator('input[type="checkbox"]');
       const initialState = await toggle.isChecked();
 
-      // Toggle the checkbox
-      await toggle.click();
+      // Toggle by clicking the label (checkbox itself is hidden via CSS)
+      await proxyRule.locator('.toggle-switch').click();
       await page.waitForTimeout(200);
 
       // Verify state changed
@@ -65,11 +65,11 @@ test.describe('System Diagnostics Page', () => {
     await page.waitForTimeout(2000);
 
     // Health summary grid should appear
-    await expect(page.locator('text=系统健康概览')).toBeVisible();
-    await expect(page.locator('text=后端进程')).toBeVisible();
-    await expect(page.locator('text=网关服务')).toBeVisible();
-    await expect(page.locator('text=代理池')).toBeVisible();
-    await expect(page.locator('text=代理节点')).toBeVisible();
+    await expect(page.locator('.health-header .settings-title').filter({ hasText: '系统健康概览' })).toBeVisible();
+    await expect(page.locator('.health-summary-grid .health-label').filter({ hasText: '后端进程' })).toBeVisible();
+    await expect(page.locator('.health-summary-grid .health-label').filter({ hasText: '网关服务' })).toBeVisible();
+    await expect(page.locator('.health-summary-grid .health-label').filter({ hasText: '代理池' })).toBeVisible();
+    await expect(page.locator('.health-summary-grid .health-label').filter({ hasText: '代理节点' })).toBeVisible();
   });
 
   test('should display diagnostic details after running', async ({ page }) => {

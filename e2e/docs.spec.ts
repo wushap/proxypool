@@ -15,14 +15,14 @@ test.describe('Docs Page', () => {
   });
 
   test('should display quick start guide with 5 steps', async ({ page }) => {
-    await expect(page.locator('text=快速开始')).toBeVisible();
+    await expect(page.locator('.settings-title').filter({ hasText: '快速开始' })).toBeVisible();
 
     // Verify all 5 steps
-    await expect(page.locator('text=添加订阅源')).toBeVisible();
-    await expect(page.locator('text=创建代理池')).toBeVisible();
-    await expect(page.locator('text=配置入站端口')).toBeVisible();
-    await expect(page.locator('text=测试代理')).toBeVisible();
-    await expect(page.locator('text=开始使用')).toBeVisible();
+    await expect(page.locator('.step-title:has-text("添加订阅源")')).toBeVisible();
+    await expect(page.locator('.step-title:has-text("创建代理池")')).toBeVisible();
+    await expect(page.locator('.step-title:has-text("配置入站端口")')).toBeVisible();
+    await expect(page.locator('.step-title:has-text("测试代理")')).toBeVisible();
+    await expect(page.locator('.step-title:has-text("开始使用")')).toBeVisible();
 
     // Verify step numbers
     const steps = page.locator('.step-number');
@@ -72,18 +72,18 @@ test.describe('Docs Page', () => {
   });
 
   test('should display API reference section', async ({ page }) => {
-    await expect(page.locator('text=API 参考')).toBeVisible();
-    await expect(page.locator('text=FastAPI 自动生成文档')).toBeVisible();
-    await expect(page.locator('code:has-text("/api/docs")')).toBeVisible();
+    await expect(page.locator('.settings-title').filter({ hasText: 'API 参考' })).toBeVisible();
+    await expect(page.locator('.api-title:has-text("FastAPI 自动生成文档")')).toBeVisible();
+    await expect(page.locator('.api-url:has-text("/api/docs")')).toBeVisible();
 
     // Verify API docs link
-    const apiLink = page.locator('a:has-text("打开 API 文档")');
+    const apiLink = page.locator('.api-reference a:has-text("打开 API 文档")');
     await expect(apiLink).toBeVisible();
     await expect(apiLink).toHaveAttribute('href', '/api/docs');
   });
 
   test('should display API docs link in header', async ({ page }) => {
-    const apiDocsLink = page.locator('a:has-text("API 文档")');
+    const apiDocsLink = page.locator('.section-header a:has-text("API 文档")');
     await expect(apiDocsLink.first()).toBeVisible();
   });
 });

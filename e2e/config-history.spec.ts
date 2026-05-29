@@ -22,7 +22,7 @@ test.describe('Config History Page', () => {
 
   test('should display empty state initially', async ({ page }) => {
     // On a fresh browser, there should be no snapshots
-    const emptyState = page.locator('text=暂无配置快照');
+    const emptyState = page.locator('.empty-state-title:has-text("暂无配置快照")');
     const snapshotList = page.locator('.config-snapshot-list');
 
     const hasEmpty = await emptyState.isVisible().catch(() => false);

@@ -5,14 +5,14 @@ test.describe('Task Management', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to tasks page
-    await page.click('text=任务中心');
+    await page.locator('.el-menu-item').filter({ hasText: '任务中心' }).click();
     await page.waitForLoadState('networkidle');
   });
 
   test('should display task list', async ({ page }) => {
     // Check if task list or empty state is visible
-    const taskList = page.locator('.task-item, .el-table').first();
-    const emptyState = page.locator('text=暂无任务');
+    const taskList = page.locator('.task-item').first();
+    const emptyState = page.locator('.empty-state-title:has-text("暂无任务")');
 
     const hasTasks = await taskList.isVisible().catch(() => false);
     const hasEmptyState = await emptyState.isVisible().catch(() => false);

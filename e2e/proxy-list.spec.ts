@@ -5,19 +5,20 @@ test.describe('Proxy List Page', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to proxies page
-    await page.click('text=代理节点');
+    await page.locator('.el-menu-item').filter({ hasText: '代理节点' }).click();
     await page.waitForLoadState('networkidle');
+    await page.locator('section.card, .empty-state').first().waitFor({ state: 'visible', timeout: 10000 });
   });
 
   test('should display proxy list table', async ({ page }) => {
     // Check if proxy table is visible
-    const table = page.locator('table').first();
+    const table = page.locator('table.data-table').first();
     await expect(table).toBeVisible();
 
     // Check table headers
     await expect(page.locator('th:has-text("协议")')).toBeVisible();
     await expect(page.locator('th:has-text("地址")')).toBeVisible();
-    await expect(page.locator('th:has-text("端口")')).toBeVisible();
+    await expect(page.locator('th:has-text("延迟")')).toBeVisible();
     await expect(page.locator('th:has-text("状态")')).toBeVisible();
   });
 
@@ -53,14 +54,14 @@ test.describe('Proxy List Page', () => {
   });
 
   test('should search proxies by keyword', async ({ page }) => {
-    // Find search input
-    const searchInput = page.locator('input[placeholder*="搜索"]');
+    // Find search input scoped to the main content (not the sidebar global search)
+    const searchInput = page.locator('#main-content input[placeholder*="搜索"]');
     if (await searchInput.isVisible()) {
       await searchInput.fill('example.com');
       await page.waitForTimeout(500);
 
       // Verify search results contain keyword
-      const rows = page.locator('table tbody tr');
+      const rows = page.locator('table.data-table tbody tr');
       const count = await rows.count();
       for (let i = 0; i < count; i++) {
         const rowText = await rows.nth(i).textContent();
@@ -72,14 +73,14 @@ test.describe('Proxy List Page', () => {
   test('should handle empty proxy list', async ({ page }) => {
     // This test verifies the empty state UI
     // In a real scenario, you might need to mock the API or use a clean database
-    const emptyState = page.locator('text=暂无数据');
-    const table = page.locator('table tbody tr');
+    const emptyState = page.locator('.empty-state');
+    const table = page.locator('.table-wrap table');
 
-    // Either empty state or table rows should be visible
+    // Either empty state or table should be visible
     const hasEmptyState = await emptyState.isVisible().catch(() => false);
-    const hasRows = (await table.count()) > 0;
+    const hasTable = await table.isVisible().catch(() => false);
 
-    expect(hasEmptyState || hasRows).toBeTruthy();
+    expect(hasEmptyState || hasTable).toBeTruthy();
   });
 
   test('should select and deselect proxies', async ({ page }) => {

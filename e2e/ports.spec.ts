@@ -7,12 +7,13 @@ test.describe('Port Management', () => {
     // Navigate to ports page
     await page.click('text=入站端口');
     await page.waitForLoadState('networkidle');
+    await page.locator('.data-table, .empty-state').first().waitFor({ state: 'visible', timeout: 10000 });
   });
 
   test('should display ports list', async ({ page }) => {
     // Check if ports list or empty state is visible
-    const portsList = page.locator('.port-row-expandable, .el-table').first();
-    const emptyState = page.locator('text=暂无入站端口');
+    const portsList = page.locator('.port-row-expandable, .data-table').first();
+    const emptyState = page.locator('.empty-state');
 
     const hasPorts = await portsList.isVisible().catch(() => false);
     const hasEmptyState = await emptyState.isVisible().catch(() => false);

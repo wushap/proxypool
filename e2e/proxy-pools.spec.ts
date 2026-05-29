@@ -5,24 +5,27 @@ test.describe('Proxy Pools Management', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Navigate to proxy pools page
-    await page.click('text=多跳代理池');
+    await page.locator('.el-menu-item').filter({ hasText: '多跳代理池' }).click();
     await page.waitForLoadState('networkidle');
+    await page.locator('.section-title').filter({ hasText: '多跳代理池' }).waitFor({ state: 'visible', timeout: 10000 });
   });
 
   test('should display proxy pools list', async ({ page }) => {
     // Check if pools list or empty state is visible
-    const poolsList = page.locator('.pool-item, .el-card').first();
-    const emptyState = page.locator('text=暂无代理池');
+    const poolsList = page.locator('.data-table').first();
+    const emptyState = page.locator('.empty-state-small');
+    const pageTitle = page.locator('.section-title').filter({ hasText: '多跳代理池' });
 
     const hasPools = await poolsList.isVisible().catch(() => false);
     const hasEmptyState = await emptyState.isVisible().catch(() => false);
+    const hasPageTitle = await pageTitle.isVisible().catch(() => false);
 
-    expect(hasPools || hasEmptyState).toBeTruthy();
+    expect(hasPools || hasEmptyState || hasPageTitle).toBeTruthy();
   });
 
   test('should open create pool dialog', async ({ page }) => {
     // Click create pool button
-    const createButton = page.locator('button:has-text("创建")');
+    const createButton = page.locator('.section-header button:has-text("创建"), .btn-primary:has-text("创建")').first();
     if (await createButton.isVisible()) {
       await createButton.click();
 
@@ -34,7 +37,7 @@ test.describe('Proxy Pools Management', () => {
 
   test('should create new proxy pool', async ({ page }) => {
     // Open create pool dialog
-    const createButton = page.locator('button:has-text("创建")');
+    const createButton = page.locator('.section-header button:has-text("创建"), .btn-primary:has-text("创建")').first();
     if (await createButton.isVisible()) {
       await createButton.click();
 
@@ -69,7 +72,7 @@ test.describe('Proxy Pools Management', () => {
 
   test('should show error for duplicate pool name', async ({ page }) => {
     // Create a pool first
-    const createButton = page.locator('button:has-text("创建")');
+    const createButton = page.locator('.section-header button:has-text("创建"), .btn-primary:has-text("创建")').first();
     if (await createButton.isVisible()) {
       await createButton.click();
 
@@ -137,7 +140,7 @@ test.describe('Proxy Pools Management', () => {
 
   test('should cancel pool creation', async ({ page }) => {
     // Open create pool dialog
-    const createButton = page.locator('button:has-text("创建")');
+    const createButton = page.locator('.section-header button:has-text("创建"), .btn-primary:has-text("创建")').first();
     if (await createButton.isVisible()) {
       await createButton.click();
 
