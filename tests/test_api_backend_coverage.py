@@ -321,3 +321,185 @@ async def test_backend_set_routes_with_items(tmp_path: Path) -> None:
         assert "routes" in data
         assert len(data["routes"]) == 1
         assert data["routes"][0]["inbound_port"] == 11001
+
+
+# ---- POST /api/backend/routes - error path ----
+
+
+@pytest.mark.anyio
+async def test_backend_set_routes_validation_error(tmp_path: Path) -> None:
+    """Routes with no proxy_key trigger RuntimeError -> 400."""
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/backend/routes",
+            json={
+                "routes": [
+                    {"inbound_port": 11002, "proxy_key": "", "inbound_type": "http"}
+                ],
+                "auto_restart": False,
+            },
+        )
+        assert resp.status_code == 400
+
+
+# ---- POST /api/backend/instances/{instance_id}/start ----
+
+
+@pytest.mark.anyio
+async def test_backend_instance_start(tmp_path: Path) -> None:
+    """Start tries to launch binary; raises RuntimeError -> 400."""
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/api/backend/instances/nonexistent/start")
+        assert resp.status_code == 400
+
+
+# ---- POST /api/backend/instances/{instance_id}/stop ----
+
+
+@pytest.mark.anyio
+async def test_backend_instance_stop(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/api/backend/instances/nonexistent/stop")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "running" in data
+
+
+# ---- GET /api/backend/instances/{instance_id}/routes ----
+
+
+@pytest.mark.anyio
+async def test_backend_instance_routes(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/backend/instances/default/routes")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "routes" in data
+        assert data["instance_id"] == "default"
+
+
+# ---- POST /api/backend/instances/{instance_id}/routes ----
+
+
+@pytest.mark.anyio
+async def test_backend_instance_set_routes(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/backend/instances/default/routes",
+            json={
+                "routes": [
+                    {
+                        "inbound_port": 12001,
+                        "proxy_key": "test-key",
+                        "inbound_type": "socks5",
+                        "listen": "0.0.0.0",
+                    }
+                ],
+                "auto_restart": False,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["instance_id"] == "default"
+        assert len(data["routes"]) == 1
+
+
+# ---- DELETE /api/backend/instances/{instance_id} ----
+
+
+@pytest.mark.anyio
+async def test_backend_instance_delete(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create an instance first, then delete it
+        await client.post(
+            "/api/backend/instances",
+            json={"instance_id": "to-delete"},
+        )
+        resp = await client.delete("/api/backend/instances/to-delete")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "deleted" in data
+        assert "items" in data
+
+
+@pytest.mark.anyio
+async def test_backend_instance_delete_nonexistent(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.delete("/api/backend/instances/no-such-inst")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["deleted"] is False
+
+
+# ---- POST /api/backend/start ----
+
+
+@pytest.mark.anyio
+async def test_backend_start(tmp_path: Path) -> None:
+    """Start tries to launch binary; raises RuntimeError -> 400."""
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/api/backend/start")
+        assert resp.status_code == 400
+
+
+# ---- POST /api/backend/stop ----
+
+
+@pytest.mark.anyio
+async def test_backend_stop(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/api/backend/stop")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "running" in data
+
+
+# ---- POST /api/backend/restart ----
+
+
+@pytest.mark.anyio
+async def test_backend_restart(tmp_path: Path) -> None:
+    """Restart calls stop then start; start raises RuntimeError -> 400."""
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/api/backend/restart")
+        assert resp.status_code == 400
