@@ -197,7 +197,7 @@ async def run_http_gateway_test(
         headers["X-ProxyPool-Session"] = body.session_id
     else:
         configured_endpoint_id = int(
-            body.get("endpoint_id") or forward_gateway.config.endpoint_id or 0
+            body.endpoint_id or forward_gateway.config.endpoint_id or 0
         )
         endpoint_for_policy = (
             storage.get_http_proxy_endpoint(configured_endpoint_id)
