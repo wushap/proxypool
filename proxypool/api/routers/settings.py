@@ -108,7 +108,7 @@ async def export_config(
         ep_id = int(ep.get("id") or 0)
         ep_config = storage.get_http_proxy_endpoint(ep_id)
         if ep_config:
-            hops = storage.get_http_proxy_endpoint_hops(ep_id)
+            hops = storage.list_http_proxy_endpoint_hops(ep_id)
             endpoints_data.append(
                 {
                     "id": ep_id,
@@ -342,7 +342,9 @@ async def rollback_config(
             # In a real implementation, we would restore the previous config
             # For now, we'll just record the rollback event
             storage.record_backend_process_event(
+                backend="system",
                 action="rollback",
+                pid=0,
                 result="success",
                 detail=f"配置回滚完成，目标版本: {body.target_version or '上一个版本'}",
             )
@@ -369,7 +371,9 @@ async def rollback_config(
 
     except Exception as exc:
         storage.record_backend_process_event(
+            backend="system",
             action="rollback",
+            pid=0,
             result="error",
             detail=str(exc),
         )
