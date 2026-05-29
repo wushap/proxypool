@@ -208,6 +208,21 @@ def test_cleanup_unavailable_noop_without_storage(caplog: pytest.LogCaptureFixtu
     assert "cleanup" not in caplog.text.lower()
 
 
+def test_cleanup_unavailable_no_proxies_marked(caplog: pytest.LogCaptureFixture) -> None:
+    """When mark_unavailable_by_fail_count returns 0, no info log is emitted."""
+    storage = FakeStorage()
+    storage._mark_count = 0
+    svc = SchedulerService(
+        collector=FakeCollector(),  # type: ignore[arg-type]
+        tester=FakeTester(),  # type: ignore[arg-type]
+        storage=storage,  # type: ignore[arg-type]
+        max_failures_threshold=5,
+    )
+    with caplog.at_level(logging.INFO, logger="proxypool.scheduler.jobs"):
+        svc._safe_cleanup_unavailable()
+    assert "Marked" not in caplog.text
+
+
 def test_cleanup_unavailable_swallows_exceptions(caplog: pytest.LogCaptureFixture) -> None:
     storage = FakeStorage()
     storage.mark_unavailable_by_fail_count = MagicMock(side_effect=RuntimeError("db error"))  # type: ignore[method-assign]
