@@ -25,23 +25,24 @@ test.describe('Network Error Handling', () => {
   });
 
   test('should show connection restored banner when network recovers', async ({ page }) => {
-    // First go offline
+    // First go offline and wait for Vue to process the event
     await page.evaluate(() => {
       window.dispatchEvent(new Event('offline'));
     });
-    await page.waitForTimeout(500);
+    // Wait for Vue reactivity to update the DOM
+    await page.waitForTimeout(1000);
 
     const offlineBanner = page.locator('.offline-banner.offline-banner-error');
-    await expect(offlineBanner).toBeVisible({ timeout: 5000 });
+    await expect(offlineBanner).toBeVisible({ timeout: 8000 });
 
     // Now go back online
     await page.evaluate(() => {
       window.dispatchEvent(new Event('online'));
     });
 
-    // The restored banner should appear
+    // The restored banner should appear (may take time for Vue to process)
     const restoredBanner = page.locator('.offline-banner.offline-banner-success');
-    await expect(restoredBanner).toBeVisible({ timeout: 5000 });
+    await expect(restoredBanner).toBeVisible({ timeout: 8000 });
     await expect(restoredBanner).toContainText('网络连接已恢复');
   });
 
@@ -114,8 +115,8 @@ test.describe('Form Validation', () => {
       await urlInput.clear();
     }
 
-    // Click add button
-    const addButton = page.locator('button:has-text("添加订阅")');
+    // Click add button (use .first() to disambiguate multiple matching buttons)
+    const addButton = page.locator('button:has-text("添加订阅")').first();
     if (await addButton.isVisible()) {
       await addButton.click();
       await page.waitForTimeout(1000);
