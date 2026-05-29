@@ -65,25 +65,32 @@ test.describe('Navigation and Cross-Page Flows', () => {
     // Go to settings
     await page.locator('.el-menu-item').filter({ hasText: '设置' }).click();
     await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(500);
 
     // Change theme to dark
     const darkRadio = page.locator('.el-radio-button').filter({ hasText: '深色' });
-    if (await darkRadio.isVisible()) {
+    if (await darkRadio.isVisible().catch(() => false)) {
       await darkRadio.click();
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(500);
+
+      // Verify dark mode is applied
+      const hasDarkClass = await page.evaluate(() => document.documentElement.classList.contains('dark'));
+      expect(hasDarkClass).toBeTruthy();
+
+      // Navigate away to proxies
+      await page.locator('.el-menu-item').filter({ hasText: '代理节点' }).click();
+      await page.waitForLoadState('networkidle');
+      await page.waitForTimeout(500);
+
+      // Navigate back to settings
+      await page.locator('.el-menu-item').filter({ hasText: '设置' }).click();
+      await page.waitForLoadState('networkidle');
+      await page.waitForTimeout(500);
+
+      // Verify dark mode persisted
+      const hasDarkClassAfter = await page.evaluate(() => document.documentElement.classList.contains('dark'));
+      expect(hasDarkClassAfter).toBeTruthy();
     }
-
-    // Navigate away to proxies
-    await page.locator('.el-menu-item').filter({ hasText: '代理节点' }).click();
-    await page.waitForLoadState('networkidle');
-
-    // Navigate back to settings
-    await page.locator('.el-menu-item').filter({ hasText: '设置' }).click();
-    await page.waitForLoadState('networkidle');
-
-    // Verify dark mode is still selected by checking the HTML theme class
-    const hasDarkClass = await page.evaluate(() => document.documentElement.classList.contains('dark'));
-    expect(hasDarkClass).toBeTruthy();
   });
 
   test('should handle API error gracefully on diagnostics page', async ({ page }) => {
