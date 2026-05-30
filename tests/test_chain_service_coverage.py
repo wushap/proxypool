@@ -473,6 +473,35 @@ class TestBindEndpointInstance:
         result = service.bind_endpoint_instance_to_session("no-such", int(ep["id"]), "inst-1")
         assert result is None
 
+    def test_bind_with_persisted_lease_after_init(self, storage):
+        """Lease inserted AFTER initialization hits the persisted path (lines 480-483)."""
+        h1 = _add_available_proxy(storage, "http", "1.1.1.1", 8080, "bpi-h1")
+        h2 = _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "bpi-h2")
+        pool1 = storage.create_proxy_pool(name="p-bpi", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="p-bpi2", filters={"protocol": "socks"})
+        ep = storage.create_http_proxy_endpoint(name="ep-bpi", listen_port=19090)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"]), int(pool2["id"])])
+        service = _make_service(storage)
+        service.initialize()  # Initialize first - loads existing leases
+        # Insert lease AFTER initialization - won't be in memory
+        storage.upsert_sticky_lease(
+            session_id="s-bpi",
+            pool_id=int(pool1["id"]),
+            endpoint_id=int(ep["id"]),
+            instance_id="old-inst",
+            exit_node_key=h2,
+            egress_ip="1.2.3.4",
+            expires_at="2099-01-01T00:00:00+00:00",
+            last_accessed="2026-01-01T00:00:00+00:00",
+        )
+        # Verify it's NOT in memory
+        key = ("s-bpi", int(pool1["id"]), int(ep["id"]))
+        with service._lock:
+            assert key not in service._multi_hop_leases
+        result = service.bind_endpoint_instance_to_session("s-bpi", int(ep["id"]), "new-inst")
+        assert result is not None
+        assert result["instance_id"] == "new-inst"
+
 
 # ---------------------------------------------------------------------------
 # Get leases
@@ -1576,6 +1605,27 @@ class TestBindInstanceLeaseBecomesNone:
         # After mock bind removes lease, it falls back to storage
         assert result is not None
 
+    def test_bind_persisted_lease_loaded_after_init(self, storage):
+        """Lease inserted after initialization is NOT in memory -> hits lines 428-438."""
+        service = _make_service(storage)
+        service.initialize()  # Initialize first
+        # Now insert a lease AFTER initialization - it won't be in memory
+        storage.upsert_sticky_lease(
+            session_id="s-after-init",
+            pool_id=7,
+            endpoint_id=0,
+            instance_id="old-inst",
+            exit_node_key="exit-x",
+            egress_ip="1.2.3.4",
+            expires_at="2099-01-01T00:00:00+00:00",
+            last_accessed="2026-01-01T00:00:00+00:00",
+        )
+        # Verify it's NOT in memory
+        assert ("s-after-init", 7) not in service.sticky_router._leases
+        bound = service.bind_instance_to_session("s-after-init", 7, "inst-new")
+        assert bound is not None
+        assert bound["instance_id"] == "inst-new"
+
 
 # ---------------------------------------------------------------------------
 # bind_endpoint_instance_to_session: entry_pool_id=0 (line 471)
@@ -1585,7 +1635,16 @@ class TestBindEndpointInstanceZeroPool:
     def test_endpoint_hops_zero_pool_id(self, storage):
         """Endpoint with hops[0].pool_id=0 returns None at line 471."""
         ep = storage.create_http_proxy_endpoint(name="ep-bz", listen_port=19060)
-        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [0])
+        # Insert hop with pool_id=0 directly (replace_http_proxy_endpoint_hops filters out 0)
+        now = datetime.now(UTC).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                """INSERT INTO http_proxy_endpoint_hops
+                   (endpoint_id, hop_index, pool_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (int(ep["id"]), 0, 0, now, now),
+            )
+            conn.commit()
         service = _make_service(storage)
         result = service.bind_endpoint_instance_to_session("s1", int(ep["id"]), "inst-1")
         assert result is None
@@ -1616,8 +1675,29 @@ class TestGetLeasesPoolFilter:
         # Matching pool_id
         leases = service.get_leases(pool_id=int(pool1["id"]), endpoint_id=int(ep["id"]))
         assert len(leases) >= 1
-        # Non-matching pool_id filters out the lease (line 522 continue)
+        # Non-matching pool_id filters out the lease (line 523-524 continue)
         leases = service.get_leases(pool_id=99999, endpoint_id=int(ep["id"]))
+        assert len(leases) == 0
+
+    def test_endpoint_leases_non_matching_endpoint_id(self, storage):
+        """Multi-hop leases filtered by endpoint_id: non-matching endpoint skipped (line 522)."""
+        pool1 = storage.create_proxy_pool(name="p-gl-eid", filters={})
+        ep = storage.create_http_proxy_endpoint(name="ep-gl-eid", listen_port=19087)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"])])
+        # Insert lease with endpoint_id matching ep
+        storage.upsert_sticky_lease(
+            session_id="s-gl-eid",
+            pool_id=int(pool1["id"]),
+            endpoint_id=int(ep["id"]),
+            instance_id="i1",
+            exit_node_key="ek",
+            egress_ip="1.2.3.4",
+            expires_at="2099-01-01T00:00:00+00:00",
+            last_accessed="2026-01-01T00:00:00+00:00",
+        )
+        service = _make_service(storage)
+        # Query with a different endpoint_id - the lease's endpoint_id doesn't match
+        leases = service.get_leases(pool_id=int(pool1["id"]), endpoint_id=99999)
         assert len(leases) == 0
 
 
@@ -1629,7 +1709,16 @@ class TestRouteEndpointRequestZeroPool:
     def test_endpoint_first_hop_zero_pool(self, storage):
         """Endpoint with first hop pool_id=0 returns None at line 684."""
         ep = storage.create_http_proxy_endpoint(name="ep-rz", listen_port=19062)
-        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [0])
+        # Insert hop with pool_id=0 directly
+        now = datetime.now(UTC).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                """INSERT INTO http_proxy_endpoint_hops
+                   (endpoint_id, hop_index, pool_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (int(ep["id"]), 0, 0, now, now),
+            )
+            conn.commit()
         service = _make_service(storage)
         result = service._route_endpoint_request("s1", int(ep["id"]), "")
         assert result is None
@@ -1650,6 +1739,23 @@ class TestRouteEndpointHopNodesNone:
         storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"]), int(pool2["id"])])
         service = _make_service(storage)
         # This will fail because exit pool has no candidates
+        result = service._route_endpoint_request("", int(ep["id"]), "")
+        assert result is None
+
+    def test_hop_key_not_in_db_returns_none(self, storage):
+        """When _select_endpoint_hops returns a key with no proxy in DB -> line 753."""
+        pool1 = storage.create_proxy_pool(name="p-hn-db", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="p-hn-db2", filters={"protocol": "socks"})
+        _add_available_proxy(storage, "http", "1.1.1.1", 8080, "hn-db-f")
+        _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "hn-db-e")
+        ep = storage.create_http_proxy_endpoint(name="ep-hn-db", listen_port=19088)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"]), int(pool2["id"])])
+        service = _make_service(storage)
+        # Mock _select_endpoint_hops to return a key that doesn't exist in DB
+        service._select_endpoint_hops = Mock(return_value={
+            "hop_node_keys": ["valid-key", "nonexistent-key"],
+            "egress_ip": "1.2.3.4",
+        })
         result = service._route_endpoint_request("", int(ep["id"]), "")
         assert result is None
 
@@ -1738,6 +1844,29 @@ class TestSearchEndpointHopCandidatesDeep:
         result = service._search_endpoint_hop_candidates(int(ep["id"]), pool_hops, "")
         assert result is not None
         assert result["hop_node_keys"] == [k1]
+
+    def test_first_combo_failed_second_succeeds(self, storage):
+        """First combo is failed route, second combo succeeds (line 866)."""
+        pool1 = storage.create_proxy_pool(name="p-fc1", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="p-fc2", filters={"protocol": "socks"})
+        k1 = _add_available_proxy(storage, "http", "1.1.1.1", 80, "fc-f1")
+        k2 = _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "fc-e1")
+        k3 = _add_available_proxy(storage, "http", "3.3.3.3", 80, "fc-f2")
+        k4 = _add_available_proxy(storage, "socks", "4.4.4.4", 1080, "fc-e2")
+        ep = storage.create_http_proxy_endpoint(name="ep-fc", listen_port=19089)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"]), int(pool2["id"])])
+        service = _make_service(storage)
+        # Mark first combo as failed
+        service.report_endpoint_route_failure(
+            endpoint_id=int(ep["id"]),
+            pool_id=int(pool1["id"]),
+            hop_node_keys=[k1, k2],
+        )
+        pool_hops = [{"pool_id": int(pool1["id"])}, {"pool_id": int(pool2["id"])}]
+        result = service._search_endpoint_hop_candidates(int(ep["id"]), pool_hops, "")
+        # The failed combo is skipped, and a different combo is found
+        assert result is not None
+        assert result["hop_node_keys"] != [k1, k2]
 
 
 # ---------------------------------------------------------------------------
@@ -1885,7 +2014,16 @@ class TestLoadEndpointHopNodeKeysAdvanced:
     def test_hop_with_zero_pool_id_skipped(self, storage):
         """Hop with pool_id=0 is skipped via continue (line 1079)."""
         ep = storage.create_http_proxy_endpoint(name="ep-lhk-z", listen_port=19075)
-        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [0])
+        # Insert hop with pool_id=0 directly (API filters out 0)
+        now = datetime.now(UTC).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                """INSERT INTO http_proxy_endpoint_hops
+                   (endpoint_id, hop_index, pool_id, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (int(ep["id"]), 0, 0, now, now),
+            )
+            conn.commit()
         service = _make_service(storage)
         keys = service._load_endpoint_hop_node_keys(int(ep["id"]))
         assert keys == []
