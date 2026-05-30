@@ -53,3 +53,7 @@ configs/singbox-routes*.json
 # internal planning docs
 docs/superpowers/
 uv.lock
+
+# test/QA reports
+*REPORT*.md
+test_report.md
