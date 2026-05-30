@@ -38,7 +38,7 @@ from proxypool.pool.scoring import (
     ScoreGrade,
     WindowManager,
 )
-from proxypool.pool.sticky_router import StickyRouter
+from proxypool.pool.sticky_router import Lease, StickyRouter
 from proxypool.storage.health_storage import HealthStorage
 from proxypool.storage.sqlite import SQLiteProxyStorage
 
@@ -1049,3 +1049,97 @@ class TestProtocolCompatConstants:
     def test_snell_singbox_only(self) -> None:
         assert "snell" in SINGBOX_PROTOCOLS
         assert "snell" not in COMMON_PROTOCOLS
+
+
+# ===========================================================================
+# Sticky Router – remaining uncovered lines
+# ===========================================================================
+
+
+class TestStickyRouterRemainingCoverage:
+    """Cover sticky_router.py lines 92, 152, 181, 190."""
+
+    # -- line 92: route() returns None when _select_distinct_pair yields (None, None) --
+
+    def test_route_returns_none_when_no_distinct_pair(self, tmp_path: Path) -> None:
+        """front and exit pools each have one node with the same key,
+        so _select_distinct_pair cannot find a distinct pair."""
+        shared = _make_node(key="shared", egress_ip="1.1.1.1")
+        front = [_make_node(key="shared", egress_ip="1.1.1.1")]
+        exits = [_make_node(key="shared", host="5.6.7.8", egress_ip="5.6.7.8")]
+        router = StickyRouter(
+            _make_pool("f", "front", front),
+            _make_pool("e", "exit", exits),
+        )
+        # route() checks healthy nodes (both present), then _select_distinct_pair
+        # picks the exit but _select_front_for_exit returns None (same key),
+        # remaining_exits is empty -> returns (None, None) -> route returns None
+        result = router.route("s1", pool_id=1)
+        assert result is None
+
+    # -- line 152: _try_reuse_lease returns None when front selection fails --
+
+    def test_try_reuse_lease_returns_none_no_front(self, tmp_path: Path) -> None:
+        """Lease exists for exit node 'e1', but the only front node has the
+        same key, so _select_front_for_exit returns None."""
+        f1 = _make_node(key="e1", egress_ip="10.0.0.1")  # same key as exit
+        e1 = _make_node(key="e1", host="5.6.7.8", egress_ip="5.6.7.8")
+        front_pool = _make_pool("f", "front", [f1])
+        exit_pool = _make_pool("e", "exit", [e1])
+        router = StickyRouter(front_pool, exit_pool)
+
+        # Create lease directly to control the scenario
+        now = datetime.now(UTC)
+        router._leases[("s1", 1)] = Lease(
+            session_id="s1",
+            pool_id=1,
+            exit_node_key="e1",
+            egress_ip="5.6.7.8",
+            expires_at=now + timedelta(hours=1),
+            last_accessed=now,
+        )
+
+        # route with session -> _try_reuse_lease finds exit node 'e1'
+        # but _select_front_for_exit filters out front nodes with key=="e1" -> None
+        # _try_reuse_lease returns None -> falls through to P2C
+        # P2C also fails because exit and front share the same single key
+        result = router.route("s1", pool_id=1)
+        assert result is None
+
+    # -- line 181: _select_distinct_pair returns (None, None) with empty exits --
+
+    def test_select_distinct_pair_empty_exits(self, tmp_path: Path) -> None:
+        f1 = _make_node(key="f1", egress_ip="10.0.0.1")
+        router = StickyRouter(
+            _make_pool("f", "front", [f1]),
+            _make_pool("e", "exit"),
+        )
+        f, e = router._select_distinct_pair([f1], [], "")
+        assert f is None
+        assert e is None
+
+    # -- line 190: _select_distinct_pair fallback path --
+
+    def test_select_distinct_pair_fallback_second_exit(self, tmp_path: Path) -> None:
+        """First selected exit's key matches all front nodes (front returns None),
+        fallback selects a different exit with a matching front."""
+        from unittest.mock import patch
+
+        f1 = _make_node(key="e1", egress_ip="10.0.0.1")  # key matches first exit
+        e1 = _make_node(key="e1", host="5.6.7.8", egress_ip="5.6.7.8")
+        e2 = _make_node(key="e2", host="9.10.11.12", egress_ip="9.10.11.12")
+        front = [f1]
+        exits = [e1, e2]
+        router = StickyRouter(
+            _make_pool("f", "front", front),
+            _make_pool("e", "exit", exits),
+        )
+        # Force P2C to always pick e1 first
+        with patch("proxypool.pool.sticky_router.random.sample", return_value=[e1, e1]):
+            f, e = router._select_distinct_pair(front, exits, "")
+        # First: exit_node=e1, front selection fails (f1.key == e1.key)
+        # Fallback: remaining_exits=[e2], P2C returns e2, front selection finds f1
+        assert f is not None
+        assert f.key == "e1"
+        assert e is not None
+        assert e.key == "e2"
