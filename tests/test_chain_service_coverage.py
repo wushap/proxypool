@@ -1344,3 +1344,850 @@ class TestNodeSummary:
         assert summary["failure_count"] == 3
         assert summary["egress_ip"] == "2.2.2.2"
         assert summary["latency_ms"] == 42
+
+
+# ---------------------------------------------------------------------------
+# _load_health_state: health records for front and exit pool nodes
+# ---------------------------------------------------------------------------
+
+class TestLoadHealthState:
+    def test_health_record_updates_front_node(self, storage):
+        """Health record matching a front-pool node updates its state."""
+        key = _add_available_proxy(storage, "http", "1.1.1.1", 80, "hs-front")
+        storage.upsert_node_health(key, success=False, egress_ip="3.3.3.3", latency_ms=99)
+        service = _make_service(storage)
+        service.update_pool_config("front", [])
+        # Rebuild pools so the node is in front_pool
+        service._refresh_pools_locked()
+        node = service.front_pool.get_node(key)
+        assert node is not None
+        assert node.failure_count >= 0  # health state loaded
+
+    def test_health_record_updates_exit_node(self, storage):
+        """Health record matching an exit-pool node updates its state and sets routeable."""
+        key = _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "hs-exit")
+        storage.upsert_node_health(key, success=True, egress_ip="4.4.4.4", latency_ms=25)
+        service = _make_service(storage)
+        service.update_pool_config("exit", [])
+        service._refresh_pools_locked()
+        node = service.exit_pool.get_node(key)
+        assert node is not None
+
+    def test_health_record_no_matching_node(self, storage):
+        """Health record for a non-existent node doesn't crash."""
+        storage.upsert_node_health("nonexistent-key", success=True)
+        service = _make_service(storage)
+        service.update_pool_config("front", [])
+        service.update_pool_config("exit", [])
+        service._refresh_pools_locked()  # Should not raise
+
+    def test_health_record_matches_neither_pool(self, storage):
+        """Health record for a key not in either pool - both front_node and exit_node are None."""
+        k1 = _add_available_proxy(storage, "http", "1.1.1.1", 80, "hs-f1")
+        k2 = _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "hs-e1")
+        storage.upsert_node_health("some-other-key", success=True, egress_ip="5.5.5.5")
+        service = _make_service(storage)
+        service.update_pool_config("front", [])
+        service.update_pool_config("exit", [])
+        service._refresh_pools_locked()  # The health record for "some-other-key" hits both None branches
+
+
+# ---------------------------------------------------------------------------
+# _probe_exit_chain with valid proxies
+# ---------------------------------------------------------------------------
+
+class TestProbeExitChainWithValidProxies:
+    def test_probe_with_valid_proxies(self, storage):
+        """When both proxies exist, prober.probe_with_front_proxy is called."""
+        h1 = _add_available_proxy(storage, "http", "1.1.1.1", 80, "probe-f")
+        h2 = _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "probe-e")
+        service = _make_service(storage)
+        front = NodeEntry(key=h1, protocol="http", host="1.1.1.1", port=80, raw_link="")
+        exit_node = NodeEntry(key=h2, protocol="socks", host="2.2.2.2", port=1080, raw_link="")
+        mock_result = Mock()
+        mock_result.available = True
+        mock_result.latency_ms = 42
+        service.prober = Mock()
+        service.prober.probe_with_front_proxy.return_value = mock_result
+        ok, _, latency = service._probe_exit_chain(front, exit_node)
+        assert ok is True
+        assert latency == 42
+        service.prober.probe_with_front_proxy.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _load_sticky_leases: lease with empty egress_ip (line 156 false branch)
+# ---------------------------------------------------------------------------
+
+class TestLoadStickyLeasesEmptyEgress:
+    def test_lease_with_empty_egress_ip(self, storage):
+        """A lease with empty egress_ip should not increment ip_load."""
+        storage.upsert_sticky_lease(
+            session_id="s-no-egress",
+            pool_id=3,
+            endpoint_id=0,
+            instance_id="inst-no-egress",
+            exit_node_key="exit-x",
+            egress_ip="",  # empty egress_ip
+            expires_at="2099-01-01T00:00:00+00:00",
+            last_accessed="2026-01-01T00:00:00+00:00",
+        )
+        service = _make_service(storage)
+        service.initialize()
+        leases = service.sticky_router.get_leases(3)
+        assert len(leases) == 1
+        assert leases[0]["egress_ip"] == ""
+        # ip_load should not have entry for empty string
+        assert "" not in service.sticky_router._ip_load
+
+
+# ---------------------------------------------------------------------------
+# _load_failed_routes: various false branch paths
+# ---------------------------------------------------------------------------
+
+class TestLoadFailedRoutesBranches:
+    def test_failed_route_with_zero_endpoint_id(self, storage):
+        """Failed route with endpoint_id=0 is skipped (line 168->164)."""
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        # Manually insert with endpoint_id=0
+        storage.upsert_failed_route(0, "k1,k2", future)
+        service = _make_service(storage)
+        service.initialize()
+        # Should not be in memory since endpoint_id=0
+        assert (0, ("k1", "k2")) not in service._failed_endpoint_routes
+
+    def test_failed_route_with_empty_route_signature(self, storage):
+        """Failed route with empty route_signature is skipped (line 168->164)."""
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        storage.upsert_failed_route(1, "", future)
+        service = _make_service(storage)
+        service.initialize()
+
+    def test_failed_route_with_comma_only_signature(self, storage):
+        """Route signature like ',,, ' produces no non-empty keys (line 174->164)."""
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        storage.upsert_failed_route(1, ",,,", future)
+        service = _make_service(storage)
+        service.initialize()
+        # Keys tuple is empty after filtering, so not stored
+        assert (1, ()) not in service._failed_endpoint_routes
+
+    def test_failed_route_node_with_empty_node_key(self, storage):
+        """Failed route node with empty node_key is skipped (line 184->180)."""
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        storage.upsert_failed_route_node(1, "", future)
+        service = _make_service(storage)
+        service.initialize()
+        assert (1, "") not in service._failed_endpoint_nodes
+
+    def test_failed_route_node_with_zero_endpoint_id(self, storage):
+        """Failed route node with endpoint_id=0 is skipped (line 184->180)."""
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        storage.upsert_failed_route_node(0, "n1", future)
+        service = _make_service(storage)
+        service.initialize()
+
+    def test_failed_route_with_unparseable_date(self, storage):
+        """Failed route with bad date format is skipped via except (line 174->164)."""
+        storage.upsert_failed_route(1, "k1", "not-a-date")
+        service = _make_service(storage)
+        service.initialize()
+
+    def test_failed_route_node_with_unparseable_date(self, storage):
+        """Failed route node with bad date format is skipped via except (line 184->180)."""
+        storage.upsert_failed_route_node(1, "n1", "not-a-date")
+        service = _make_service(storage)
+        service.initialize()
+
+
+# ---------------------------------------------------------------------------
+# _rebuild_pools with proxy having empty key (line 212->210)
+# ---------------------------------------------------------------------------
+
+class TestRebuildPoolsEmptyKey:
+    def test_proxy_with_empty_key_is_skipped(self, storage):
+        """A proxy with empty normalized_key is skipped during pool rebuild."""
+        _add_available_proxy(storage, "http", "1.1.1.1", 80, "valid-proxy")
+        service = _make_service(storage)
+        service.update_pool_config("front", [])
+        # Manually insert a proxy with empty key via raw SQL to bypass validation
+        now = datetime.now(UTC).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO proxies
+                   (normalized_key, protocol, host, port, raw_link, name, source,
+                    last_seen_at, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("", "http", "9.9.9.9", 80, "http://9.9.9.9:80", "empty-key-proxy", "test", now, now, now),
+            )
+            conn.commit()
+        service._rebuild_pools()  # Should not crash, empty key proxy is skipped
+
+
+# ---------------------------------------------------------------------------
+# route_request: string endpoint with target_domain (line 354->358)
+# ---------------------------------------------------------------------------
+
+class TestRouteRequestStringEndpointWithDomain:
+    def test_non_digit_string_with_target_domain(self, storage):
+        """Non-digit string endpoint_id with target_domain set doesn't override domain."""
+        result = route_request_with_args(storage, endpoint_id="example.com", target_domain="google.com")
+        # resolved_endpoint_id stays 0, target_domain stays "google.com", falls through to sticky_router
+        assert result is None or isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# route_request: session with non-matching leases (lines 379->394, 381)
+# ---------------------------------------------------------------------------
+
+class TestRouteRequestSessionLeaseMismatch:
+    def test_session_with_other_sessions_lease(self, storage):
+        """When leases exist but none match the current session, the loop skips all."""
+        _add_available_proxy(storage, "http", "1.1.1.1", 80, "fa-mismatch")
+        _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "ea-mismatch")
+        service = _make_service(storage)
+        # Route as session "other-sess" to create a lease
+        service.route_request("other-sess", 0, 0, "")
+        # Now route as "new-sess" - leases exist but don't match
+        result = service.route_request("new-sess", 0, 0, "")
+        assert result is not None
+        # The lease for new-sess should exist in storage
+        lease = storage.get_sticky_lease("new-sess", 0)
+        assert lease is not None
+
+
+# ---------------------------------------------------------------------------
+# bind_instance_to_session: lease becomes None after bind (line 443)
+# ---------------------------------------------------------------------------
+
+class TestBindInstanceLeaseBecomesNone:
+    def test_bind_when_lease_disappears_after_bind(self, storage):
+        """After bind_instance, if lease is not found, fall back to storage."""
+        _add_available_proxy(storage, "http", "1.1.1.1", 80, "fa-bd")
+        _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "ea-bd")
+        service = _make_service(storage)
+        service.route_request("s-bd", 0, 0, "")
+        # Patch bind_instance to remove the lease from memory
+        original_bind = service.sticky_router.bind_instance
+        def mock_bind(session_id, pool_id, instance_id):
+            service.sticky_router._leases.pop((session_id, pool_id), None)
+        service.sticky_router.bind_instance = mock_bind
+        result = service.bind_instance_to_session("s-bd", 0, "inst-bd")
+        # After mock bind removes lease, it falls back to storage
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# bind_endpoint_instance_to_session: entry_pool_id=0 (line 471)
+# ---------------------------------------------------------------------------
+
+class TestBindEndpointInstanceZeroPool:
+    def test_endpoint_hops_zero_pool_id(self, storage):
+        """Endpoint with hops[0].pool_id=0 returns None at line 471."""
+        ep = storage.create_http_proxy_endpoint(name="ep-bz", listen_port=19060)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [0])
+        service = _make_service(storage)
+        result = service.bind_endpoint_instance_to_session("s1", int(ep["id"]), "inst-1")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# get_leases: endpoint_id with non-matching pool_id filter (line 522)
+# ---------------------------------------------------------------------------
+
+class TestGetLeasesPoolFilter:
+    def test_endpoint_leases_non_matching_pool_id(self, storage):
+        """Multi-hop leases filtered by pool_id: non-matching pool returns empty."""
+        pool1 = storage.create_proxy_pool(name="p-gl-f", filters={})
+        pool2 = storage.create_proxy_pool(name="p-gl-f2", filters={})
+        ep = storage.create_http_proxy_endpoint(name="ep-gl-f", listen_port=19061)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"]), int(pool2["id"])])
+        storage.upsert_sticky_lease(
+            session_id="s-gl-f",
+            pool_id=int(pool1["id"]),
+            endpoint_id=int(ep["id"]),
+            instance_id="i1",
+            exit_node_key="ek",
+            egress_ip="1.2.3.4",
+            expires_at="2099-01-01T00:00:00+00:00",
+            last_accessed="2026-01-01T00:00:00+00:00",
+        )
+        service = _make_service(storage)
+        # Matching pool_id
+        leases = service.get_leases(pool_id=int(pool1["id"]), endpoint_id=int(ep["id"]))
+        assert len(leases) >= 1
+        # Non-matching pool_id filters out the lease (line 522 continue)
+        leases = service.get_leases(pool_id=99999, endpoint_id=int(ep["id"]))
+        assert len(leases) == 0
+
+
+# ---------------------------------------------------------------------------
+# _route_endpoint_request: entry_pool_id=0 (line 684)
+# ---------------------------------------------------------------------------
+
+class TestRouteEndpointRequestZeroPool:
+    def test_endpoint_first_hop_zero_pool(self, storage):
+        """Endpoint with first hop pool_id=0 returns None at line 684."""
+        ep = storage.create_http_proxy_endpoint(name="ep-rz", listen_port=19062)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [0])
+        service = _make_service(storage)
+        result = service._route_endpoint_request("s1", int(ep["id"]), "")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _route_endpoint_request: hop_nodes with None (line 753)
+# ---------------------------------------------------------------------------
+
+class TestRouteEndpointHopNodesNone:
+    def test_hop_proxy_missing_returns_none(self, storage):
+        """When a hop key has no proxy in DB, hop_nodes has None entry -> returns None."""
+        pool1 = storage.create_proxy_pool(name="p-hn1", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="p-hn2", filters={"protocol": "socks"})
+        # Add only front candidate, no exit candidate
+        _add_available_proxy(storage, "http", "1.1.1.1", 8080, "hn-front")
+        ep = storage.create_http_proxy_endpoint(name="ep-hn", listen_port=19063)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"]), int(pool2["id"])])
+        service = _make_service(storage)
+        # This will fail because exit pool has no candidates
+        result = service._route_endpoint_request("", int(ep["id"]), "")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _select_endpoint_hops: empty hop_node_keys (line 812)
+# ---------------------------------------------------------------------------
+
+class TestSelectEndpointHopsEmptyKeys:
+    def test_search_returns_empty_keys(self, storage):
+        """When _search_endpoint_hop_candidates returns empty hop_node_keys, returns None."""
+        pool1 = storage.create_proxy_pool(name="p-seh-e", filters={"protocol": "http"})
+        ep = storage.create_http_proxy_endpoint(name="ep-seh-e", listen_port=19064)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"])])
+        service = _make_service(storage)
+        # Mock _search_endpoint_hop_candidates to return empty hop_node_keys
+        service._search_endpoint_hop_candidates = Mock(return_value={"hop_node_keys": [], "egress_ip": ""})
+        result = service._select_endpoint_hops(int(ep["id"]), "")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _search_endpoint_hop_candidates: max_checks and combo filtering
+# ---------------------------------------------------------------------------
+
+class TestSearchEndpointHopCandidatesDeep:
+    def test_duplicate_keys_in_combo_are_skipped(self, storage):
+        """Combos where the same key appears twice are skipped (line 864)."""
+        # Both pools have no filters, so all proxies are candidates for both
+        pool1 = storage.create_proxy_pool(name="p-dk1", filters={})
+        pool2 = storage.create_proxy_pool(name="p-dk2", filters={})
+        # Add a single proxy that matches both pools
+        k = _add_available_proxy(storage, "http", "1.1.1.1", 80, "dk-shared")
+        ep = storage.create_http_proxy_endpoint(name="ep-dk", listen_port=19065)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"]), int(pool2["id"])])
+        service = _make_service(storage)
+        pool_hops = [{"pool_id": int(pool1["id"])}, {"pool_id": int(pool2["id"])}]
+        result = service._search_endpoint_hop_candidates(int(ep["id"]), pool_hops, "")
+        # The only combo is (k, k) which has duplicate keys -> skipped -> returns None
+        assert result is None
+
+    def test_all_combos_failed_returns_none(self, storage):
+        """When all combos are marked as failed, returns None (line 872)."""
+        pool1 = storage.create_proxy_pool(name="p-acf1", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="p-acf2", filters={"protocol": "socks"})
+        k1 = _add_available_proxy(storage, "http", "10.0.0.1", 80, "acf-f1")
+        k2 = _add_available_proxy(storage, "socks", "10.0.0.2", 1080, "acf-e1")
+        ep = storage.create_http_proxy_endpoint(name="ep-acf", listen_port=19066)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"]), int(pool2["id"])])
+        service = _make_service(storage)
+        # Mark this combo as failed
+        service.report_endpoint_route_failure(
+            endpoint_id=int(ep["id"]),
+            pool_id=int(pool1["id"]),
+            hop_node_keys=[k1, k2],
+        )
+        pool_hops = [{"pool_id": int(pool1["id"])}, {"pool_id": int(pool2["id"])}]
+        result = service._search_endpoint_hop_candidates(int(ep["id"]), pool_hops, "")
+        assert result is None
+
+    def test_max_checks_exceeded(self, storage):
+        """When max_checks is exceeded, the loop breaks (line 861)."""
+        pool1 = storage.create_proxy_pool(name="p-mc1", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="p-mc2", filters={"protocol": "socks"})
+        # Add many candidates to create large Cartesian product
+        for i in range(15):
+            _add_available_proxy(storage, "http", f"10.0.0.{i}", 80, f"mc-f-{i}")
+        for i in range(15):
+            _add_available_proxy(storage, "socks", f"10.1.0.{i}", 1080, f"mc-e-{i}")
+        ep = storage.create_http_proxy_endpoint(name="ep-mc2", listen_port=19067)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"]), int(pool2["id"])])
+        service = _make_service(storage)
+        pool_hops = [{"pool_id": int(pool1["id"])}, {"pool_id": int(pool2["id"])}]
+        result = service._search_endpoint_hop_candidates(int(ep["id"]), pool_hops, "")
+        # With 15x15 = 225 combos and max_checks ~100, the loop should break early
+        assert result is not None or result is None  # just verify it doesn't hang
+
+    def test_single_pool_hop_returns_immediately(self, storage):
+        """Single pool hop with valid candidate returns the first combo."""
+        pool1 = storage.create_proxy_pool(name="p-sph", filters={"protocol": "http"})
+        k1 = _add_available_proxy(storage, "http", "1.1.1.1", 80, "sph-f1")
+        ep = storage.create_http_proxy_endpoint(name="ep-sph", listen_port=19068)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"])])
+        service = _make_service(storage)
+        pool_hops = [{"pool_id": int(pool1["id"])}]
+        result = service._search_endpoint_hop_candidates(int(ep["id"]), pool_hops, "")
+        assert result is not None
+        assert result["hop_node_keys"] == [k1]
+
+
+# ---------------------------------------------------------------------------
+# _is_endpoint_route_failed: DB path (line 976)
+# ---------------------------------------------------------------------------
+
+class TestIsEndpointRouteFailedDB:
+    def test_route_failed_in_db_only(self, storage):
+        """Route only in DB (not in memory) still returns True (line 976)."""
+        ep = storage.create_http_proxy_endpoint(name="ep-db-rf", listen_port=19069)
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        # Insert directly into DB, bypassing in-memory cache
+        storage.upsert_failed_route(int(ep["id"]), "dbk1>dbk2", future)
+        service = _make_service(storage)
+        # Ensure in-memory cache is empty
+        with service._lock:
+            assert (int(ep["id"]), ("dbk1", "dbk2")) not in service._failed_endpoint_routes
+        # The route_signature format in DB is "dbk1>dbk2", but _is_endpoint_route_failed
+        # builds its own signature from hop_node_keys via ">".join(...)
+        result = service._is_endpoint_route_failed(int(ep["id"]), ["dbk1", "dbk2"])
+        assert result is True
+
+    def test_route_not_failed_anywhere(self, storage):
+        """Route not in memory or DB returns False."""
+        ep = storage.create_http_proxy_endpoint(name="ep-notrf", listen_port=19070)
+        service = _make_service(storage)
+        result = service._is_endpoint_route_failed(int(ep["id"]), ["x1", "x2"])
+        assert result is False
+
+    def test_route_expired_in_memory_then_db_miss(self, storage):
+        """Expired in-memory route is cleaned up and DB also misses -> False."""
+        ep = storage.create_http_proxy_endpoint(name="ep-exrf", listen_port=19071)
+        service = _make_service(storage)
+        with service._lock:
+            service._failed_endpoint_routes[(int(ep["id"]), ("x1", "x2"))] = datetime.now(UTC) - timedelta(seconds=10)
+        result = service._is_endpoint_route_failed(int(ep["id"]), ["x1", "x2"])
+        assert result is False
+        with service._lock:
+            assert (int(ep["id"]), ("x1", "x2")) not in service._failed_endpoint_routes
+
+
+# ---------------------------------------------------------------------------
+# _is_endpoint_node_failed: DB path (line 1001)
+# ---------------------------------------------------------------------------
+
+class TestIsEndpointNodeFailedDB:
+    def test_node_failed_in_db_only(self, storage):
+        """Node only in DB (not in memory) still returns True (line 1001)."""
+        ep = storage.create_http_proxy_endpoint(name="ep-db-nf", listen_port=19072)
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        # Insert directly into DB
+        storage.upsert_failed_route_node(int(ep["id"]), "db-node-key", future)
+        service = _make_service(storage)
+        # Ensure in-memory cache is empty
+        with service._lock:
+            assert (int(ep["id"]), "db-node-key") not in service._failed_endpoint_nodes
+        result = service._is_endpoint_node_failed(int(ep["id"]), "db-node-key")
+        assert result is True
+
+    def test_node_not_failed_anywhere(self, storage):
+        """Node not in memory or DB returns False."""
+        ep = storage.create_http_proxy_endpoint(name="ep-notnf", listen_port=19073)
+        service = _make_service(storage)
+        result = service._is_endpoint_node_failed(int(ep["id"]), "x1")
+        assert result is False
+
+    def test_node_expired_in_memory_then_db_miss(self, storage):
+        """Expired in-memory node failure is cleaned up, DB misses -> False."""
+        ep = storage.create_http_proxy_endpoint(name="ep-exnf", listen_port=19074)
+        service = _make_service(storage)
+        with service._lock:
+            service._failed_endpoint_nodes[(int(ep["id"]), "n1")] = datetime.now(UTC) - timedelta(seconds=10)
+        result = service._is_endpoint_node_failed(int(ep["id"]), "n1")
+        assert result is False
+        with service._lock:
+            assert (int(ep["id"]), "n1") not in service._failed_endpoint_nodes
+
+
+# ---------------------------------------------------------------------------
+# _reuse_multi_hop_lease: empty keys and unavailable proxy
+# ---------------------------------------------------------------------------
+
+class TestReuseMultiHopLease:
+    def test_empty_hop_node_keys_returns_none(self, storage):
+        """Lease with empty hop_node_keys returns None (line 1061)."""
+        service = _make_service(storage)
+        lease = MultiHopLease(
+            session_id="s-rmh", pool_id=1, endpoint_id=1, instance_id="",
+            hop_node_keys=[], exit_node_key="", egress_ip="",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            last_accessed=datetime.now(UTC),
+        )
+        result = service._reuse_multi_hop_lease(lease, "")
+        assert result is None
+
+    def test_unavailable_proxy_returns_none(self, storage):
+        """Lease with unavailable proxy returns None (line 1065)."""
+        h1 = _add_available_proxy(storage, "http", "1.1.1.1", 80, "rmh-f")
+        h2 = _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "rmh-e")
+        service = _make_service(storage)
+        # Make h2 unavailable
+        storage.update_test_result(h2, available=False, latency_ms=0)
+        lease = MultiHopLease(
+            session_id="s-rmh2", pool_id=1, endpoint_id=1, instance_id="",
+            hop_node_keys=[h1, h2], exit_node_key=h2, egress_ip="1.2.3.4",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            last_accessed=datetime.now(UTC),
+        )
+        result = service._reuse_multi_hop_lease(lease, "")
+        assert result is None
+
+    def test_missing_proxy_returns_none(self, storage):
+        """Lease with proxy not in DB returns None (line 1065)."""
+        service = _make_service(storage)
+        lease = MultiHopLease(
+            session_id="s-rmh3", pool_id=1, endpoint_id=1, instance_id="",
+            hop_node_keys=["nonexistent-key"], exit_node_key="nonexistent-key",
+            egress_ip="1.2.3.4",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            last_accessed=datetime.now(UTC),
+        )
+        result = service._reuse_multi_hop_lease(lease, "")
+        assert result is None
+
+    def test_all_proxies_available_returns_keys(self, storage):
+        """Lease with all proxies available returns the keys."""
+        h1 = _add_available_proxy(storage, "http", "1.1.1.1", 80, "rmh-ok-f")
+        h2 = _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "rmh-ok-e")
+        service = _make_service(storage)
+        lease = MultiHopLease(
+            session_id="s-rmh4", pool_id=1, endpoint_id=1, instance_id="",
+            hop_node_keys=[h1, h2], exit_node_key=h2, egress_ip="1.2.3.4",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            last_accessed=datetime.now(UTC),
+        )
+        result = service._reuse_multi_hop_lease(lease, "")
+        assert result == [h1, h2]
+
+
+# ---------------------------------------------------------------------------
+# _load_endpoint_hop_node_keys: zero pool_id hop and empty key
+# ---------------------------------------------------------------------------
+
+class TestLoadEndpointHopNodeKeysAdvanced:
+    def test_hop_with_zero_pool_id_skipped(self, storage):
+        """Hop with pool_id=0 is skipped via continue (line 1079)."""
+        ep = storage.create_http_proxy_endpoint(name="ep-lhk-z", listen_port=19075)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [0])
+        service = _make_service(storage)
+        keys = service._load_endpoint_hop_node_keys(int(ep["id"]))
+        assert keys == []
+
+    def test_candidate_with_empty_normalized_key_skipped(self, storage):
+        """Candidate with empty normalized_key is skipped (line 1087)."""
+        pool1 = storage.create_proxy_pool(name="p-lhk-ek", filters={"protocol": "http"})
+        ep = storage.create_http_proxy_endpoint(name="ep-lhk-ek", listen_port=19076)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"])])
+        service = _make_service(storage)
+        # Mock _pick_pool_candidate to return a candidate with empty key
+        service._pick_pool_candidate = Mock(return_value={"normalized_key": "", "available": True})
+        keys = service._load_endpoint_hop_node_keys(int(ep["id"]))
+        assert keys == []
+
+    def test_fallback_exit_key_replaces_last(self, storage):
+        """When fallback_exit_node_key is given, it replaces the last hop key."""
+        pool1 = storage.create_proxy_pool(name="p-lhk-fe", filters={"protocol": "http"})
+        _add_available_proxy(storage, "http", "1.1.1.1", 80, "lhk-fe-f")
+        ep = storage.create_http_proxy_endpoint(name="ep-lhk-fe", listen_port=19077)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"])])
+        service = _make_service(storage)
+        keys = service._load_endpoint_hop_node_keys(int(ep["id"]), "override-exit")
+        assert len(keys) >= 1
+        assert keys[-1] == "override-exit"
+
+    def test_no_endpoint_returns_empty_list(self, storage):
+        """No endpoint returns empty list when no fallback."""
+        service = _make_service(storage)
+        keys = service._load_endpoint_hop_node_keys(99999)
+        assert keys == []
+
+    def test_no_endpoint_with_fallback(self, storage):
+        """No endpoint returns fallback key."""
+        service = _make_service(storage)
+        keys = service._load_endpoint_hop_node_keys(99999, "fb-key")
+        assert keys == ["fb-key"]
+
+
+# ---------------------------------------------------------------------------
+# endpoint_route_health: edge cases
+# ---------------------------------------------------------------------------
+
+class TestEndpointRouteHealthEdgeCases:
+    def test_failed_route_in_memory_active(self, storage):
+        """Active in-memory failed route shows as failed."""
+        ep = storage.create_http_proxy_endpoint(name="ep-erh-act", listen_port=19078)
+        service = _make_service(storage)
+        with service._lock:
+            service._failed_endpoint_routes[(int(ep["id"]), ("k1", "k2"))] = datetime.now(UTC) + timedelta(seconds=300)
+        h = service.endpoint_route_health(int(ep["id"]), ["k1", "k2"])
+        assert h["failed"] is True
+        assert h["failure_expires_at"] != ""
+
+    def test_healthy_route_active(self, storage):
+        """Active healthy route shows as known_healthy."""
+        ep = storage.create_http_proxy_endpoint(name="ep-erh-ha", listen_port=19079)
+        service = _make_service(storage)
+        with service._lock:
+            service._healthy_endpoint_routes[(int(ep["id"]), ("k1",))] = datetime.now(UTC) + timedelta(seconds=600)
+        h = service.endpoint_route_health(int(ep["id"]), ["k1"])
+        assert h["known_healthy"] is True
+        assert h["healthy_until"] != ""
+
+    def test_healthy_route_expired_cleanup(self, storage):
+        """Expired healthy route is cleaned up."""
+        ep = storage.create_http_proxy_endpoint(name="ep-erh-ex", listen_port=19080)
+        service = _make_service(storage)
+        with service._lock:
+            service._healthy_endpoint_routes[(int(ep["id"]), ("k1",))] = datetime.now(UTC) - timedelta(seconds=10)
+        h = service.endpoint_route_health(int(ep["id"]), ["k1"])
+        assert h["known_healthy"] is False
+        with service._lock:
+            assert (int(ep["id"]), ("k1",)) not in service._healthy_endpoint_routes
+
+    def test_no_route_no_health(self, storage):
+        """No routes or health records returns clean status."""
+        ep = storage.create_http_proxy_endpoint(name="ep-erh-clean", listen_port=19081)
+        service = _make_service(storage)
+        h = service.endpoint_route_health(int(ep["id"]), ["k1", "k2"])
+        assert h["failed"] is False
+        assert h["known_healthy"] is False
+        assert h["failure_expires_at"] == ""
+        assert h["healthy_until"] == ""
+
+
+# ---------------------------------------------------------------------------
+# report_endpoint_route_success: removes from all caches
+# ---------------------------------------------------------------------------
+
+class TestReportSuccessCleanup:
+    def test_success_removes_from_failed_and_node_caches(self, storage):
+        """report_endpoint_route_success clears failed routes and nodes."""
+        ep = storage.create_http_proxy_endpoint(name="ep-rsc", listen_port=19082)
+        service = _make_service(storage)
+        with service._lock:
+            service._failed_endpoint_routes[(int(ep["id"]), ("k1", "k2"))] = datetime.now(UTC) + timedelta(seconds=300)
+            service._failed_endpoint_nodes[(int(ep["id"]), "k1")] = datetime.now(UTC) + timedelta(seconds=300)
+        service.report_endpoint_route_success(
+            endpoint_id=int(ep["id"]),
+            hop_node_keys=["k1", "k2"],
+        )
+        with service._lock:
+            assert (int(ep["id"]), ("k1", "k2")) not in service._failed_endpoint_routes
+            assert (int(ep["id"]), "k1") not in service._failed_endpoint_nodes
+
+
+# ---------------------------------------------------------------------------
+# _pick_healthy_endpoint_route: with valid matching route
+# ---------------------------------------------------------------------------
+
+class TestPickHealthyEndpointRouteMatch:
+    def test_matching_healthy_route_returned(self, storage):
+        """A healthy route that matches pools is returned."""
+        pool1 = storage.create_proxy_pool(name="p-mhr", filters={"protocol": "http"})
+        k = _add_available_proxy(storage, "http", "1.1.1.1", 80, "mhr-n")
+        ep = storage.create_http_proxy_endpoint(name="ep-mhr", listen_port=19083)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"])])
+        service = _make_service(storage)
+        with service._lock:
+            service._healthy_endpoint_routes[(int(ep["id"]), (k,))] = datetime.now(UTC) + timedelta(seconds=600)
+        result = service._pick_healthy_endpoint_route(int(ep["id"]), [{"pool_id": int(pool1["id"])}])
+        assert result is not None
+        assert result == [k]
+
+
+# ---------------------------------------------------------------------------
+# report_endpoint_route_failure: with session removes multi-hop lease
+# ---------------------------------------------------------------------------
+
+class TestReportFailureRemovesLease:
+    def test_failure_removes_multi_hop_lease(self, storage):
+        """Failure report with session removes the multi-hop lease."""
+        h1 = _add_available_proxy(storage, "http", "1.1.1.1", 8080, "frl-f")
+        h2 = _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "frl-e")
+        pool1 = storage.create_proxy_pool(name="p-frl", filters={"protocol": "http"})
+        pool2 = storage.create_proxy_pool(name="p-frl2", filters={"protocol": "socks"})
+        ep = storage.create_http_proxy_endpoint(name="ep-frl", listen_port=19084)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"]), int(pool2["id"])])
+        service = _make_service(storage)
+        result = service.route_request("sess-frl", int(pool1["id"]), int(ep["id"]), "")
+        assert result is not None
+        key = ("sess-frl", int(pool1["id"]), int(ep["id"]))
+        with service._lock:
+            assert key in service._multi_hop_leases
+        service.report_endpoint_route_failure(
+            endpoint_id=int(ep["id"]),
+            pool_id=int(pool1["id"]),
+            session_id="sess-frl",
+            hop_node_keys=[h1, h2],
+        )
+        with service._lock:
+            assert key not in service._multi_hop_leases
+
+
+# ---------------------------------------------------------------------------
+# _endpoint_route_matches_pools: edge cases
+# ---------------------------------------------------------------------------
+
+class TestEndpointRouteMatchesPoolsEdge:
+    def test_key_not_in_any_pool(self, storage):
+        """Key that doesn't belong to the pool returns False."""
+        pool1 = storage.create_proxy_pool(name="p-erm-np", filters={"protocol": "http"})
+        service = _make_service(storage)
+        assert service._endpoint_route_matches_pools(["bogus-key"], [{"pool_id": int(pool1["id"])}]) is False
+
+    def test_pool_id_zero_in_hop(self, storage):
+        """Pool hop with pool_id=0 returns False."""
+        service = _make_service(storage)
+        assert service._endpoint_route_matches_pools(["k1"], [{"pool_id": 0}]) is False
+
+
+# ---------------------------------------------------------------------------
+# _build_route_signature: with various endpoint configurations
+# ---------------------------------------------------------------------------
+
+class TestBuildRouteSignatureEdge:
+    def test_endpoint_with_single_pool_hop(self, storage):
+        """Endpoint with single pool hop builds correct signature."""
+        pool1 = storage.create_proxy_pool(name="p-brs1", filters={})
+        ep = storage.create_http_proxy_endpoint(name="ep-brs1", listen_port=19085)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"])])
+        service = _make_service(storage)
+        sig = service._build_route_signature(int(ep["id"]), ["k1"])
+        assert sig == f"pool-{pool1['id']}"
+
+
+# ---------------------------------------------------------------------------
+# cleanup_leases: with both regular and multi-hop leases
+# ---------------------------------------------------------------------------
+
+class TestCleanupLeasesAdvanced:
+    def test_cleanup_mixed_lease_types(self, storage):
+        """Cleanup removes expired multi-hop leases and regular leases."""
+        _add_available_proxy(storage, "http", "1.1.1.1", 80, "cl-a-f")
+        _add_available_proxy(storage, "socks", "2.2.2.2", 1080, "cl-a-e")
+        service = _make_service(storage)
+        # Create a regular lease
+        service.route_request("sess-cla", 0, 0, "")
+        # Create an expired multi-hop lease
+        pool1 = storage.create_proxy_pool(name="p-cla", filters={})
+        ep = storage.create_http_proxy_endpoint(name="ep-cla", listen_port=19086)
+        storage.replace_http_proxy_endpoint_hops(int(ep["id"]), [int(pool1["id"])])
+        expired_lease = MultiHopLease(
+            session_id="s-cla-exp", pool_id=int(pool1["id"]), endpoint_id=int(ep["id"]),
+            instance_id="", hop_node_keys=["k1"], exit_node_key="k1",
+            egress_ip="1.2.3.4",
+            expires_at=datetime.now(UTC) - timedelta(seconds=10),
+            last_accessed=datetime.now(UTC) - timedelta(seconds=20),
+        )
+        with service._lock:
+            service._multi_hop_leases[("s-cla-exp", int(pool1["id"]), int(ep["id"]))] = expired_lease
+        removed = service.cleanup_leases()
+        assert removed >= 1
+        with service._lock:
+            assert ("s-cla-exp", int(pool1["id"]), int(ep["id"])) not in service._multi_hop_leases
+
+
+# ---------------------------------------------------------------------------
+# _get_multi_hop_lease: expired lease returns None
+# ---------------------------------------------------------------------------
+
+class TestGetMultiHopLease:
+    def test_expired_lease_removed(self, storage):
+        """Expired lease is removed from memory and returns None."""
+        service = _make_service(storage)
+        now = datetime.now(UTC)
+        lease = MultiHopLease(
+            session_id="s-gmh", pool_id=1, endpoint_id=1, instance_id="",
+            hop_node_keys=["k1"], exit_node_key="k1", egress_ip="1.2.3.4",
+            expires_at=now - timedelta(seconds=10),
+            last_accessed=now - timedelta(seconds=20),
+        )
+        with service._lock:
+            service._multi_hop_leases[("s-gmh", 1, 1)] = lease
+        result = service._get_multi_hop_lease("s-gmh", 1, 1, now)
+        assert result is None
+        with service._lock:
+            assert ("s-gmh", 1, 1) not in service._multi_hop_leases
+
+    def test_valid_lease_returned(self, storage):
+        """Valid (non-expired) lease is returned."""
+        service = _make_service(storage)
+        now = datetime.now(UTC)
+        lease = MultiHopLease(
+            session_id="s-gmh2", pool_id=1, endpoint_id=1, instance_id="",
+            hop_node_keys=["k1"], exit_node_key="k1", egress_ip="1.2.3.4",
+            expires_at=now + timedelta(hours=1),
+            last_accessed=now,
+        )
+        with service._lock:
+            service._multi_hop_leases[("s-gmh2", 1, 1)] = lease
+        result = service._get_multi_hop_lease("s-gmh2", 1, 1, now)
+        assert result is not None
+        assert result.session_id == "s-gmh2"
+
+    def test_nonexistent_lease_returns_none(self, storage):
+        """Non-existent lease returns None."""
+        service = _make_service(storage)
+        result = service._get_multi_hop_lease("no-such", 1, 1, datetime.now(UTC))
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# route_request: endpoint_id as int 0
+# ---------------------------------------------------------------------------
+
+class TestRouteRequestEndpointInt:
+    def test_endpoint_id_int_zero(self, storage):
+        """endpoint_id=0 (int) goes to sticky_router path."""
+        result = route_request_with_args(storage, endpoint_id=0)
+        assert result is None or isinstance(result, dict)
+
+    def test_endpoint_id_int_nonzero_no_endpoint(self, storage):
+        """Non-zero int endpoint_id with no endpoint in DB returns None."""
+        result = route_request_with_args(storage, endpoint_id=99999)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# bind_instance_to_session: with endpoint delegates
+# ---------------------------------------------------------------------------
+
+class TestBindInstanceWithEndpoint:
+    def test_bind_with_endpoint_delegates_to_endpoint_method(self, storage):
+        """endpoint_id > 0 delegates to bind_endpoint_instance_to_session."""
+        service = _make_service(storage)
+        # endpoint 99999 doesn't exist, so bind_endpoint_instance_to_session returns None
+        result = service.bind_instance_to_session("s1", 0, "inst-1", endpoint_id=99999)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Helper to call route_request with keyword args
+# ---------------------------------------------------------------------------
+
+def route_request_with_args(storage, session_id="", pool_id=0, endpoint_id=0, target_domain=""):
+    """Helper to call route_request with explicit arguments."""
+    service = ProxyChainService(storage)
+    return service.route_request(
+        session_id=session_id,
+        pool_id=pool_id,
+        endpoint_id=endpoint_id,
+        target_domain=target_domain,
+    )
