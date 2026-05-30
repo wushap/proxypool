@@ -83,7 +83,7 @@ test.describe('Batch Operations (Round 38)', () => {
     const urlInput = page.locator('input[placeholder*="订阅链接"]');
     await expect(urlInput).toBeVisible();
 
-    const addBtn = page.locator('button').filter({ hasText: '添加订阅' });
+    const addBtn = page.locator('button').filter({ hasText: '添加订阅' }).first();
     await expect(addBtn).toBeVisible();
   });
 

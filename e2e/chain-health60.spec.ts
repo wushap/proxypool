@@ -77,8 +77,22 @@ test.describe('Chain Health Check (Round 60)', () => {
   });
 
   test('dashboard has quick actions', async ({ page }) => {
-    const hasQuickActions = await page.locator('text=快速操作').first().isVisible({ timeout: 10000 }).catch(() => false);
-    expect(hasQuickActions).toBeTruthy();
+    const quickActionsTitle = page.locator('h3.card-title').filter({ hasText: /^快速操作$/ }).first();
+    await quickActionsTitle.scrollIntoViewIfNeeded();
+    await expect(quickActionsTitle).toBeVisible({ timeout: 10000 });
+
+    const quickActionsCard = quickActionsTitle.locator('..').first();
+    const actionBar = quickActionsCard.locator('.action-bar');
+    await expect(actionBar).toBeVisible({ timeout: 10000 });
+
+    const buttons = actionBar.locator('button, a');
+    const btnCount = await buttons.count();
+    expect(btnCount).toBeGreaterThanOrEqual(3);
+
+    const actionText = await actionBar.textContent();
+    expect(actionText).toContain('任务中心');
+    expect(actionText).toContain('订阅管理');
+    expect(actionText).toContain('代理节点');
   });
 });
 
@@ -120,8 +134,16 @@ test.describe('Batch Operations (Round 60)', () => {
   });
 
   test('pool page has filter section', async ({ page }) => {
-    const hasFilter = await page.locator('text=过滤条件').first().isVisible({ timeout: 10000 }).catch(() => false);
-    expect(hasFilter).toBeTruthy();
+    const filterToggle = page.locator('.form-section-header').filter({ hasText: '过滤条件' }).first();
+    await filterToggle.scrollIntoViewIfNeeded();
+    await expect(filterToggle).toBeVisible({ timeout: 10000 });
+    await filterToggle.click();
+
+    const advancedFilters = page.locator('.advanced-filters').first();
+    await expect(advancedFilters).toBeVisible({ timeout: 10000 });
+
+    const filterText = await advancedFilters.textContent();
+    expect(filterText).toContain('ChatGPT');
   });
 });
 

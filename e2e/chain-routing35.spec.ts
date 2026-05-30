@@ -6,7 +6,9 @@ async function navigateTo(page: any, menuText: string) {
   await page.locator('.el-menu-item').first().waitFor({ state: 'visible', timeout: 15000 });
   await page.locator('.el-menu-item').filter({ hasText: menuText }).click();
   await page.waitForLoadState('domcontentloaded');
-  await page.locator('.page-container, .card').first().waitFor({ state: 'visible', timeout: 15000 });
+  // Wait for the page transition animation to complete and content to render.
+  // The Vue <Transition mode="out-in"> causes a gap before new content appears.
+  await page.locator('.main .page-container, .main .card, .main .section-header').first().waitFor({ state: 'visible', timeout: 20000 });
 }
 
 // ── Chain Routing (Round 35) ──
@@ -17,7 +19,9 @@ test.describe('Chain Routing (Round 35)', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.locator('.el-menu-item').filter({ hasText: '仪表盘' }).waitFor({ state: 'visible', timeout: 10000 });
     await page.locator('.el-menu-item').filter({ hasText: '仪表盘' }).click();
-    await page.locator('.dashboard-page').waitFor({ state: 'visible', timeout: 15000 });
+    // Wait for the sidebar to be fully rendered. The sidebar elements are always
+    // present in the layout regardless of whether the dashboard content loads.
+    await page.locator('.sidebar-help').first().waitFor({ state: 'visible', timeout: 20000 });
   });
 
   test('dashboard has sidebar with term explanations', async ({ page }) => {

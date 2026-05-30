@@ -90,9 +90,17 @@ test.describe('Chain Routing (Round 43)', () => {
   });
 
   test('dashboard has quick actions', async ({ page }) => {
-    const buttons = page.locator('button:has-text("任务中心"), button:has-text("创建代理池"), button:has-text("导入节点")');
+    // The quick actions are inside v-else, only rendered after data loads
+    await page.locator('.stat-grid.dashboard-stat-grid').first().waitFor({ state: 'visible', timeout: 30000 });
+
+    // Match the card whose title is exactly "快速操作" (not "快速操作历史")
+    const quickActionsCard = page.locator('.card').filter({ has: page.locator('.card-title:text-is("快速操作")') }).first();
+    await quickActionsCard.scrollIntoViewIfNeeded();
+    await expect(quickActionsCard).toBeVisible({ timeout: 10000 });
+
+    const buttons = quickActionsCard.locator('button');
     const btnCount = await buttons.count();
-    expect(btnCount).toBeGreaterThanOrEqual(2);
+    expect(btnCount).toBeGreaterThanOrEqual(5);
   });
 });
 

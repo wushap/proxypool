@@ -50,13 +50,31 @@ test.describe('Chain Routing (Round 31)', () => {
   });
 
   test('dashboard has top 10 fastest nodes section', async ({ page }) => {
-    const hasFastest = await page.locator('text=最快节点').first().isVisible({ timeout: 10000 }).catch(() => false);
-    expect(hasFastest).toBeTruthy();
+    // The top 10 fastest card is titled "Top 10 最快节点"
+    const fastestCard = page.locator('.card-title').filter({ hasText: 'Top 10 最快节点' });
+    await expect(fastestCard).toBeVisible({ timeout: 10000 });
+
+    // Scroll to load lazy content, then verify the card has items or empty state
+    await fastestCard.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(500);
+    const card = fastestCard.locator('xpath=ancestor::div[contains(@class,"card")]');
+    const itemCount = await card.locator('.dashboard-top-proxy-item').count();
+    const hasEmpty = await card.locator('.empty-state').count();
+    expect(itemCount > 0 || hasEmpty > 0).toBeTruthy();
   });
 
   test('dashboard has top 10 slowest nodes section', async ({ page }) => {
-    const hasSlowest = await page.locator('text=最慢节点').first().isVisible({ timeout: 10000 }).catch(() => false);
-    expect(hasSlowest).toBeTruthy();
+    // The top 10 slowest card is titled "Top 10 最慢节点"
+    const slowestCard = page.locator('.card-title').filter({ hasText: 'Top 10 最慢节点' });
+    await expect(slowestCard).toBeVisible({ timeout: 10000 });
+
+    // Scroll to load lazy content, then verify the card has items or empty state
+    await slowestCard.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(500);
+    const card = slowestCard.locator('xpath=ancestor::div[contains(@class,"card")]');
+    const itemCount = await card.locator('.dashboard-top-proxy-item').count();
+    const hasEmpty = await card.locator('.empty-state').count();
+    expect(itemCount > 0 || hasEmpty > 0).toBeTruthy();
   });
 
   test('dashboard has geographic distribution section', async ({ page }) => {

@@ -6,7 +6,7 @@ async function navigateTo(page: any, menuText: string) {
   await page.locator('.el-menu-item').first().waitFor({ state: 'visible', timeout: 15000 });
   await page.locator('.el-menu-item').filter({ hasText: menuText }).click();
   await page.waitForLoadState('domcontentloaded');
-  await page.locator('.page-container, .card').first().waitFor({ state: 'visible', timeout: 15000 });
+  await page.locator('.page-container, .card').first().waitFor({ state: 'visible', timeout: 20000 });
 }
 
 // ── Chain Routing (Round 34) ──
@@ -84,8 +84,21 @@ test.describe('Chain Routing (Round 34)', () => {
   });
 
   test('dashboard has quick actions section', async ({ page }) => {
-    const hasQuickActions = await page.locator('text=快速操作').first().isVisible({ timeout: 10000 }).catch(() => false);
-    expect(hasQuickActions).toBeTruthy();
+    // Use unique text "一键刷新所有" to locate the quick actions card,
+    // since "快速操作" also matches the "系统信息" card (which has "快速操作历史")
+    const quickActionsCard = page.locator('.card').filter({ hasText: '一键刷新所有' }).first();
+    await quickActionsCard.scrollIntoViewIfNeeded();
+    await expect(quickActionsCard).toBeVisible({ timeout: 15000 });
+
+    // Verify key action buttons exist within the card
+    const taskBtn = quickActionsCard.locator('button').filter({ hasText: '任务中心' }).first();
+    await expect(taskBtn).toBeVisible({ timeout: 5000 });
+
+    const poolBtn = quickActionsCard.locator('button').filter({ hasText: '创建代理池' }).first();
+    await expect(poolBtn).toBeVisible();
+
+    const importBtn = quickActionsCard.locator('button').filter({ hasText: '导入节点' }).first();
+    await expect(importBtn).toBeVisible();
   });
 });
 

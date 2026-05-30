@@ -8,7 +8,9 @@ test.describe('Chain Health Check (Round 34)', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.locator('.el-menu-item').filter({ hasText: '仪表盘' }).waitFor({ state: 'visible', timeout: 10000 });
     await page.locator('.el-menu-item').filter({ hasText: '仪表盘' }).click();
-    await page.locator('.page-container, .card').first().waitFor({ state: 'visible', timeout: 15000 });
+    // Wait for loading to finish and dashboard content to appear
+    await page.locator('.dashboard-page').waitFor({ state: 'visible', timeout: 10000 });
+    await page.locator('.dashboard-stat-grid, .stat-grid').first().waitFor({ state: 'visible', timeout: 20000 });
   });
 
   test('dashboard has sidebar navigation', async ({ page }) => {
@@ -78,7 +80,8 @@ test.describe('Batch Operations (Round 34)', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.locator('.el-menu-item').filter({ hasText: '多跳代理池' }).waitFor({ state: 'visible', timeout: 10000 });
     await page.locator('.el-menu-item').filter({ hasText: '多跳代理池' }).click();
-    await page.locator('.page-container, .card').first().waitFor({ state: 'visible', timeout: 15000 });
+    // Wait for pool page content to appear
+    await page.locator('.section-title').filter({ hasText: '多跳代理池' }).waitFor({ state: 'visible', timeout: 20000 });
   });
 
   test('pool page has creation form', async ({ page }) => {
@@ -123,7 +126,8 @@ test.describe('System Diagnostics Export (Round 34)', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.locator('.el-menu-item').filter({ hasText: '订阅管理' }).waitFor({ state: 'visible', timeout: 10000 });
     await page.locator('.el-menu-item').filter({ hasText: '订阅管理' }).click();
-    await page.locator('.page-container, .card').first().waitFor({ state: 'visible', timeout: 15000 });
+    // Wait for subscription page content to appear
+    await page.locator('.section-title').filter({ hasText: '订阅管理' }).waitFor({ state: 'visible', timeout: 20000 });
   });
 
   test('subscription page has table or empty state', async ({ page }) => {

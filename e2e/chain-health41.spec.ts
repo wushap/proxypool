@@ -62,13 +62,31 @@ test.describe('Chain Health Check (Round 41)', () => {
   });
 
   test('dashboard has real-time monitoring', async ({ page }) => {
-    const hasMonitoring = await page.locator('text=实时监控').first().isVisible({ timeout: 10000 }).catch(() => false);
-    expect(hasMonitoring).toBeTruthy();
+    const monitoringTitle = page.locator('.card-title').filter({ hasText: '实时监控' });
+    await monitoringTitle.scrollIntoViewIfNeeded();
+    await expect(monitoringTitle).toBeVisible({ timeout: 10000 });
+
+    const monitoringCard = monitoringTitle.locator('..').first();
+    const statGrid = monitoringCard.locator('.stat-grid');
+    await expect(statGrid.first()).toBeVisible({ timeout: 10000 });
+
+    const statCards = monitoringCard.locator('.stat-card');
+    const count = await statCards.count();
+    expect(count).toBeGreaterThanOrEqual(4);
   });
 
   test('dashboard has quick actions', async ({ page }) => {
-    const hasQuickActions = await page.locator('text=快速操作').first().isVisible({ timeout: 10000 }).catch(() => false);
-    expect(hasQuickActions).toBeTruthy();
+    const quickActionsTitle = page.locator('h3.card-title').filter({ hasText: '快速操作' }).filter({ hasNotText: '历史' });
+    await quickActionsTitle.scrollIntoViewIfNeeded();
+    await expect(quickActionsTitle).toBeVisible({ timeout: 10000 });
+
+    const quickActionsCard = quickActionsTitle.locator('..').first();
+    const actionBar = quickActionsCard.locator('.action-bar');
+    await expect(actionBar).toBeVisible({ timeout: 10000 });
+
+    const buttons = actionBar.locator('button, a');
+    const btnCount = await buttons.count();
+    expect(btnCount).toBeGreaterThanOrEqual(3);
   });
 });
 

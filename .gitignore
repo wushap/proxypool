@@ -6,6 +6,7 @@ __pycache__/
 .cache/
 .mypy_cache/
 .codex/
+.claude/
 .worktrees/
 .playwright-cli
 .agent/
@@ -28,6 +29,10 @@ package-lock.json
 playwright-report/
 test-results/
 
+# coverage report
+htmlcov/
+.coverage
+
 # local import/export artifacts
 output/
 
@@ -47,3 +52,4 @@ configs/singbox-routes*.json
 
 # internal planning docs
 docs/superpowers/
+uv.lock
