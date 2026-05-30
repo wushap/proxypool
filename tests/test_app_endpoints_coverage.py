@@ -858,3 +858,199 @@ def test_default_auto_task_config_is_callable() -> None:
     result = _default_auto_task_config()
     assert isinstance(result, dict)
     assert "enabled" in result
+
+
+# ===== Rate limiting 429 path (lines 988-1006) =====
+
+
+@pytest.mark.anyio
+async def test_rate_limiting_triggers_429(tmp_path: Path) -> None:
+    """Rapid requests trigger rate limiting with 429 response."""
+    from proxypool.api.app import create_app
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Make many requests to exhaust the rate limit (60/minute default)
+        # Use a non-read-only endpoint to use the write rate limit
+        limited = False
+        for _ in range(100):
+            resp = await client.post("/api/settings", json={"test_url": "https://example.com"})
+            if resp.status_code == 429:
+                limited = True
+                assert "Rate limit exceeded" in resp.json()["detail"]
+                assert "retry-after" in resp.json() or "Retry-After" in resp.headers
+                break
+        # The rate limit should have been triggered within 100 requests
+        assert limited, "Rate limiting was not triggered after 100 requests"
+
+
+# ===== Request size validation path (lines 1024-1037) =====
+
+
+@pytest.mark.anyio
+async def test_request_size_validation_large_body(tmp_path: Path) -> None:
+    """Request with oversized body returns 413."""
+    from proxypool.api.app import create_app
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Send request with Content-Length exceeding max size (10MB for non-batch)
+        resp = await client.post(
+            "/api/settings",
+            headers={"Content-Length": str(20 * 1024 * 1024)},  # 20MB
+            content=b"x" * 100,  # Actual body is small but header says 20MB
+        )
+        assert resp.status_code == 413
+
+
+@pytest.mark.anyio
+async def test_invalid_content_length_header(tmp_path: Path) -> None:
+    """Request with invalid Content-Length header is handled gracefully."""
+    from proxypool.api.app import create_app
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Send request with non-numeric Content-Length (ValueError path)
+        resp = await client.get(
+            "/api/health",
+            headers={"Content-Length": "not-a-number"},
+        )
+        # Should not crash - invalid content-length is silently ignored
+        assert resp.status_code == 200
+
+
+# ===== Non-GET request skips ETag path =====
+
+
+@pytest.mark.anyio
+async def test_post_request_skips_etag_generation(tmp_path: Path) -> None:
+    """Non-GET requests do not go through ETag generation."""
+    from proxypool.api.app import create_app
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.put("/api/settings", json={"test_url": "https://example.com"})
+        assert resp.status_code == 200
+        # PUT responses should NOT have ETag header
+        assert "etag" not in resp.headers and "ETag" not in resp.headers
+
+
+# ===== Non-200 response skips ETag path =====
+
+
+@pytest.mark.anyio
+async def test_404_response_skips_etag_generation(tmp_path: Path) -> None:
+    """404 responses do not go through ETag generation."""
+    from proxypool.api.app import create_app
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/nonexistent-endpoint")
+        assert resp.status_code == 404
+        # 404 responses should NOT have ETag header
+        assert "etag" not in resp.headers and "ETag" not in resp.headers
+
+
+# ===== Gateway proxy with session REJECT action =====
+
+
+@pytest.mark.anyio
+async def test_gateway_proxy_session_reject_no_session(tmp_path: Path) -> None:
+    """Gateway proxy with session_missing_action=REJECT returns 400 without session."""
+    from proxypool.api.app import create_app
+    from proxypool.storage.sqlite import SQLiteProxyStorage
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage: SQLiteProxyStorage = app.state.storage
+
+    # Insert a pool with session_missing_action=REJECT
+    pool = storage.create_proxy_pool(
+        name="test-pool",
+        gateway_path_prefix="/proxy/test-pool",
+    )
+    pool_id = int(pool.get("id") or 0)
+    storage.update_proxy_pool(
+        pool_id=pool_id,
+        session_missing_action="REJECT",
+        session_header_names=["X-Session-ID"],
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/proxy/test-pool/https/example.com/path")
+        assert resp.status_code == 400
+        assert "session_id is required" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_gateway_proxy_session_reject_with_session_header(tmp_path: Path) -> None:
+    """Gateway proxy with session_missing_action=REJECT accepts session in header."""
+    from proxypool.api.app import create_app
+    from proxypool.storage.sqlite import SQLiteProxyStorage
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage: SQLiteProxyStorage = app.state.storage
+
+    pool = storage.create_proxy_pool(
+        name="test-pool-2",
+        gateway_path_prefix="/proxy/test-pool-2",
+    )
+    pool_id = int(pool.get("id") or 0)
+    storage.update_proxy_pool(
+        pool_id=pool_id,
+        session_missing_action="REJECT",
+        session_header_names=["X-Session-ID"],
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/proxy/test-pool-2/https/example.com/path",
+            headers={"X-Session-ID": "my-session"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["pool_name"] == "test-pool-2"
+
+
+@pytest.mark.anyio
+async def test_gateway_proxy_session_reject_with_session_query(tmp_path: Path) -> None:
+    """Gateway proxy with session_missing_action=REJECT accepts session in query param."""
+    from proxypool.api.app import create_app
+    from proxypool.storage.sqlite import SQLiteProxyStorage
+
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    storage: SQLiteProxyStorage = app.state.storage
+
+    pool = storage.create_proxy_pool(
+        name="test-pool-3",
+        gateway_path_prefix="/proxy/test-pool-3",
+    )
+    pool_id = int(pool.get("id") or 0)
+    storage.update_proxy_pool(
+        pool_id=pool_id,
+        session_missing_action="REJECT",
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/proxy/test-pool-3/https/example.com/path",
+            params={"session_id": "my-session"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["pool_name"] == "test-pool-3"

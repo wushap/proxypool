@@ -814,6 +814,164 @@ class TestLifespan:
             app.state.auto_task_runner.cancel()
             app.state.gateway_health_task.cancel()
 
+    @pytest.mark.anyio
+    async def test_lifespan_shutdown_with_none_task(self, tmp_path: Path) -> None:
+        """Test lifespan shutdown when one task is already None (hits continue path)."""
+        settings = _make_settings(tmp_path)
+        app = create_app(settings)
+
+        async with app.router.lifespan_context(app):
+            # Set one task to None before shutdown to trigger the continue branch
+            app.state.backend_health_task = None
+            app.state.auto_task_runner.cancel()
+            app.state.gateway_health_task.cancel()
+        # Should not raise - the None task is skipped via continue
+
+
+# ---------------------------------------------------------------------------
+# 26. Auto task loop triggers task starters (lines 911-956, 741-906)
+# ---------------------------------------------------------------------------
+
+class TestAutoTaskLoop:
+    @pytest.mark.anyio
+    async def test_auto_task_loop_triggers_subscription_refresh(self, tmp_path: Path) -> None:
+        """Enable auto tasks and wait for the loop to trigger subscription refresh."""
+        settings = _make_settings(tmp_path)
+        app = create_app(settings)
+
+        async with app.router.lifespan_context(app):
+            # Enable auto task with subscription refresh
+            app.state.auto_task_config = {
+                "enabled": True,
+                "subscription_refresh_enabled": True,
+                "subscription_refresh_minutes": 0,  # trigger immediately
+                "tester_enabled": False,
+                "tester_minutes": 60,
+                "tester_limit": 0,
+                "tester_concurrency": 50,
+                "speed_test_enabled": False,
+                "speed_test_minutes": 120,
+                "speed_test_url": "https://speed.cloudflare.com/__down?bytes=10000000",
+                "speed_test_limit": 0,
+                "speed_test_timeout_sec": 30.0,
+            }
+            # Wait for the auto_task_loop to execute at least once (sleep(5) + execution)
+            import asyncio
+            await asyncio.sleep(7)
+
+            # Check that a subscription refresh task was started
+            tasks = app.state.task_manager.list_tasks(limit=10)
+            task_kinds = [t.get("kind", "") for t in tasks]
+            assert any("subscription" in k for k in task_kinds), (
+                f"Expected subscription task, got kinds: {task_kinds}"
+            )
+
+            # Cancel background tasks
+            app.state.backend_health_task.cancel()
+            app.state.auto_task_runner.cancel()
+            app.state.gateway_health_task.cancel()
+
+    @pytest.mark.anyio
+    async def test_auto_task_loop_triggers_tester(self, tmp_path: Path) -> None:
+        """Enable auto tasks with tester and wait for the loop to trigger."""
+        settings = _make_settings(tmp_path)
+        app = create_app(settings)
+
+        async with app.router.lifespan_context(app):
+            app.state.auto_task_config = {
+                "enabled": True,
+                "subscription_refresh_enabled": False,
+                "subscription_refresh_minutes": 60,
+                "tester_enabled": True,
+                "tester_minutes": 0,
+                "tester_limit": 0,
+                "tester_concurrency": 50,
+                "speed_test_enabled": False,
+                "speed_test_minutes": 120,
+                "speed_test_url": "https://speed.cloudflare.com/__down?bytes=10000000",
+                "speed_test_limit": 0,
+                "speed_test_timeout_sec": 30.0,
+            }
+            import asyncio
+            await asyncio.sleep(7)
+
+            tasks = app.state.task_manager.list_tasks(limit=10)
+            task_kinds = [t.get("kind", "") for t in tasks]
+            assert any("tester" in k for k in task_kinds), (
+                f"Expected tester task, got kinds: {task_kinds}"
+            )
+
+            app.state.backend_health_task.cancel()
+            app.state.auto_task_runner.cancel()
+            app.state.gateway_health_task.cancel()
+
+    @pytest.mark.anyio
+    async def test_auto_task_loop_triggers_speed_test(self, tmp_path: Path) -> None:
+        """Enable auto tasks with speed test and wait for the loop to trigger."""
+        settings = _make_settings(tmp_path)
+        app = create_app(settings)
+
+        async with app.router.lifespan_context(app):
+            app.state.auto_task_config = {
+                "enabled": True,
+                "subscription_refresh_enabled": False,
+                "subscription_refresh_minutes": 60,
+                "tester_enabled": False,
+                "tester_minutes": 60,
+                "tester_limit": 0,
+                "tester_concurrency": 50,
+                "speed_test_enabled": True,
+                "speed_test_minutes": 0,
+                "speed_test_url": "https://speed.cloudflare.com/__down?bytes=10000000",
+                "speed_test_limit": 0,
+                "speed_test_timeout_sec": 30.0,
+            }
+            import asyncio
+            await asyncio.sleep(7)
+
+            tasks = app.state.task_manager.list_tasks(limit=10)
+            task_kinds = [t.get("kind", "") for t in tasks]
+            assert any("speed" in k for k in task_kinds), (
+                f"Expected speed test task, got kinds: {task_kinds}"
+            )
+
+            app.state.backend_health_task.cancel()
+            app.state.auto_task_runner.cancel()
+            app.state.gateway_health_task.cancel()
+
+
+# ---------------------------------------------------------------------------
+# 27. Gateway health loop (lines 613-729)
+# ---------------------------------------------------------------------------
+
+class TestGatewayHealthLoop:
+    @pytest.mark.anyio
+    async def test_gateway_health_loop_runs(self, tmp_path: Path) -> None:
+        """Enable gateway health check and verify it executes."""
+        settings = _make_settings(tmp_path)
+        app = create_app(settings)
+
+        async with app.router.lifespan_context(app):
+            # Enable gateway with health check
+            app.state.gateway_config_service.update_config(
+                enabled=True,
+                health_check_enabled=True,
+                health_check_interval_sec=5,
+            )
+            # Wait for the health loop to execute (first iteration runs immediately)
+            import asyncio
+            await asyncio.sleep(3)
+
+            # Check that the health snapshot was updated
+            snapshot = app.state.gateway_health_snapshot
+            assert snapshot.get("enabled") is True
+            assert snapshot.get("running") is False  # should have finished
+            assert snapshot.get("last_finished_at") != ""
+
+            app.state.backend_health_task.cancel()
+            app.state.auto_task_runner.cancel()
+            app.state.gateway_health_task.cancel()
+
 
 # ---------------------------------------------------------------------------
 # 25. Concurrent limiter path (line 1016)
